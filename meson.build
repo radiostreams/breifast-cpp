@@ -6,8 +6,6 @@ project('breifast-helpers-cpp', 'cpp',
 py = import('python').find_installation()
 
 pybind11_dep = dependency('pybind11')
-# xtensor.pc has no Requires: on xtl, even though xtensor headers include
-# xtl ones directly, so xtl's include dir must be added explicitly
 xtl_dep = dependency('xtl')
 xtensor_dep = dependency('xtensor')
 xtensor_python_dep = dependency('xtensor-python')
@@ -47,6 +45,36 @@ tbb_dep = declare_dependency(
                '-Wl,-rpath,$ORIGIN', '-ltbb'],
 )
 
+catch2_version = '3.7.1'
+catch2_tarball_sha256 = 'c991b247a1a0d7bb9c39aa35faf0fe9e19764213f28ffba3109388e62ee0269c'
+catch2_tarball_url = 'https://github.com/catchorg/Catch2/archive/refs/tags/v' + catch2_version + '.tar.gz'
+
+catch2_build = custom_target('catch2-build',
+  output : ['catch2-install'],
+  command : ['sh', '-c',
+    'set -eu; ' +
+    'PATH=/usr/bin:/bin:$PATH; ' +
+    'src=@PRIVATE_DIR@/src; build=@PRIVATE_DIR@/build; ' +
+    'mkdir -p "$src"; ' +
+    'if [ ! -f "$src/catch2.tar.gz" ]; then curl -sL "' + catch2_tarball_url + '" -o "$src/catch2.tar.gz"; fi; ' +
+    'echo "' + catch2_tarball_sha256 + '  $src/catch2.tar.gz" | sha256sum -c -; ' +
+    'tar -xzf "$src/catch2.tar.gz" -C "$src" --strip-components=1; ' +
+    'CC=/usr/bin/gcc CXX=/usr/bin/g++ cmake -S "$src" -B "$build" ' +
+    '-DCMAKE_INSTALL_PREFIX=@OUTPUT0@ -DCMAKE_BUILD_TYPE=Release ' +
+    '-DBUILD_TESTING=OFF -DCATCH_INSTALL_DOCS=OFF ' +
+    '-DCMAKE_CXX_COMPILER=/usr/bin/g++ -DCMAKE_C_COMPILER=/usr/bin/gcc; ' +
+    'cmake --build "$build" -j$(nproc); ' +
+    'cmake --install "$build"'],
+)
+
+catch2_install_dir = catch2_build[0].full_path()
+
+catch2_dep = declare_dependency(
+  compile_args : ['-I' + catch2_install_dir / 'include'],
+  link_args : ['-L' + catch2_install_dir / 'lib64', '-L' + catch2_install_dir / 'lib',
+               '-lCatch2Main', '-lCatch2'],
+)
+
 ext_module = py.extension_module(
   'breifast_helpers',
   ['src/breifast_helpers.cpp', tbb_build],
@@ -69,6 +97,14 @@ bench_process_band_slice = executable(
   dependencies : [xtl_dep, xtensor_dep, tbb_dep],
   link_args : ['-static-libstdc++', '-static-libgcc'],
 )
+
+test_breifast_core = executable(
+  'test_breifast_core',
+  ['tests/cpp/test_breifast_core.cpp', tbb_build, catch2_build],
+  dependencies : [xtl_dep, xtensor_dep, tbb_dep, catch2_dep],
+  link_args : ['-static-libstdc++', '-static-libgcc'],
+)
+test('breifast_core', test_breifast_core)
 
 uv = find_program('uv', required : true)
 devshell_python = find_program('python3', required : true)

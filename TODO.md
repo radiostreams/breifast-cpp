@@ -1,14 +1,15 @@
 # TODO
 
-## 1. Unit tests for the individual C++ functions
-Currently only `tests/test_process_band_slice_fixtures.py` exists, which tests
-`process_band_slice` end-to-end against real captured pipeline data. Nothing
-tests the smaller pieces in `src/breifast_core.hpp` in isolation:
-`compute_integral_image`, `box_sum`, `make_noise_map` (both `Accum` variants),
-`histogram_counts`, `estimate_noise_and_snr`, `apply_rejection_cutoffs`.
-Decide: pybind11-expose them for Python-side unit tests, or a small C++-native
-test executable (same pattern as `bench_process_band_slice.cpp`, no pybind11
-needed since `breifast_core.hpp` is already Python-independent)?
+## 1. ~~Unit tests for the individual C++ functions~~ (done)
+`tests/cpp/test_breifast_core.cpp` now covers `compute_integral_image`,
+`box_sum`, `make_noise_map` (both `Accum` variants), `histogram_counts`,
+`estimate_noise_and_snr`, and `apply_rejection_cutoffs` in isolation, using
+Catch2 -- a standalone C++-native test executable (same pattern as
+`bench_process_band_slice.cpp`, no pybind11 needed) rather than exposing them
+to Python. Catch2 is built from source by meson (`catch2_build` in
+meson.build), not pulled from nixpkgs -- the prebuilt nixpkgs binary needs a
+newer glibc than the system one this project links against (see the comment
+above `catch2_build`), the same reason TBB is also built from source.
 
 ## 2. Unit benchmarks (per-function, not just end-to-end)
 `bench_process_band_slice.cpp` currently only times the full
@@ -51,7 +52,7 @@ to pull them down (see `README.md`).
 
 ## Checklist
 
-- [ ] Unit tests for the individual C++ functions
+- [x] Unit tests for the individual C++ functions
 - [ ] Unit benchmarks (per-function, not just end-to-end)
 - [ ] Xtensor performance bottlenecks
 - [ ] Manual (non-xtensor) implementation, for comparison
