@@ -3,6 +3,5 @@ dist
 Testing
 __pycache__
 
-# real fixture data lives on Nextcloud (see tests/fixtures/manifest.txt + scripts/fetch_fixtures.sh);
-# too large to commit directly
 tests/fixtures/*.npz
+profiling

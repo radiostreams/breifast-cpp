@@ -1,9 +1,24 @@
+// Catch2 unit tests for breifast_core.hpp: both the per-band-slice pieces (compute_integral_image,
+// box_sum, make_noise_map, histogram_counts, estimate_noise_and_snr, apply_rejection_cutoffs) and
+// the whole-plane pieces built on top of them (island detection, per-island statistics, optional
+// beam fitting, spectral variance stats, process_plane_core/process_plane_batch_core). Hand-computed
+// small cases for logic-heavy pieces, independent brute-force references cross-checked on random
+// inputs for the numerically-heavy ones.
+//
+// No real scipy/numpy fixtures are available in this environment (neither system Python nor this
+// repo's .venv has scipy installed), so label_islands()'s exact numbering agreement with
+// scipy.ndimage.label is checked by construction (row-major first-encountered-pixel order) and by a
+// dedicated regression case (see "label order"), not by direct comparison against real scipy output.
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <catch2/matchers/catch_matchers_range_equals.hpp>
+#include <algorithm>
 #include <array>
 #include <cmath>
+#include <functional>
+#include <numeric>
 #include <random>
+#include <unordered_map>
 
 #include "../../src/breifast_core.hpp"
 
@@ -28,6 +43,13 @@ namespace
 auto AllClose(const xt::xarray<float> &expected, float atol = 1e-4f, float rtol = 1e-4f)
 {
   return RangeEquals(expected, [atol, rtol](float a, float b) { return std::abs(a - b) <= atol + rtol * std::abs(b); });
+}
+
+// Same as AllClose(), but for xt::xarray<double> (used by the double-precision spectral-variance
+// and Gaussian-kernel results).
+auto AllCloseD(const xt::xarray<double> &expected, double atol = 1e-6, double rtol = 1e-6)
+{
+  return RangeEquals(expected, [atol, rtol](double a, double b) { return std::abs(a - b) <= atol + rtol * std::abs(b); });
 }
 
 /**
@@ -135,6 +157,117 @@ xt::xarray<float> constant_array(const std::vector<size_t> &shape, float value)
   xt::xarray<float> arr(shape);
   arr.fill(value);
   return arr;
+}
+
+// Sorts islands by (r0, c0) for order-independent comparison -- label_islands()'s row-major
+// first-encountered-pixel label order is checked separately (see "label order" below); this
+// canonicalization lets the fuzz test compare island *sets* against a differently-implemented
+// reference without also asserting that reference's internal labeling convention matches.
+std::vector<Island> sorted_by_bbox(std::vector<Island> islands)
+{
+  std::sort(islands.begin(), islands.end(), [](const Island &a, const Island &b) {
+    return std::tie(a.r0, a.c0) < std::tie(b.r0, b.c0);
+  });
+  return islands;
+}
+
+// Union-find-based connected-component reference, deliberately structured differently from
+// label_islands()'s single-pass flood fill (two-pass: union provisional labels via up/left
+// neighbors, then resolve canonical roots and build final label image), to cross-check without
+// relying on the same algorithm being tested.
+std::vector<Island> brute_force_label_islands(const xt::xarray<bool> &mask)
+{
+  const long h = static_cast<long>(mask.shape(0));
+  const long w = static_cast<long>(mask.shape(1));
+  std::vector<long> parent(static_cast<size_t>(h * w));
+  std::iota(parent.begin(), parent.end(), 0L);
+  std::function<long(long)> find = [&](long x) {
+    while (parent[static_cast<size_t>(x)] != x)
+    {
+      x = parent[static_cast<size_t>(x)] = parent[static_cast<size_t>(parent[static_cast<size_t>(x)])];
+    }
+    return x;
+  };
+  auto unite = [&](long a, long b) {
+    a = find(a);
+    b = find(b);
+    if (a != b)
+    {
+      parent[static_cast<size_t>(std::max(a, b))] = std::min(a, b);
+    }
+  };
+  auto idx = [&](long i, long j) { return i * w + j; };
+
+  for (long i = 0; i < h; ++i)
+  {
+    for (long j = 0; j < w; ++j)
+    {
+      if (!mask(i, j))
+        continue;
+      if (i > 0 && mask(i - 1, j))
+        unite(idx(i, j), idx(i - 1, j));
+      if (j > 0 && mask(i, j - 1))
+        unite(idx(i, j), idx(i, j - 1));
+    }
+  }
+
+  xt::xarray<int> labels = xt::zeros<int>({static_cast<size_t>(h), static_cast<size_t>(w)});
+  std::unordered_map<long, int> root_to_label;
+  std::vector<Island> islands;
+  for (long i = 0; i < h; ++i)
+  {
+    for (long j = 0; j < w; ++j)
+    {
+      if (!mask(i, j))
+        continue;
+      const long root = find(idx(i, j));
+      auto it = root_to_label.find(root);
+      int label_id;
+      if (it == root_to_label.end())
+      {
+        label_id = static_cast<int>(islands.size()) + 1;
+        root_to_label[root] = label_id;
+        islands.push_back(Island{i, i + 1, j, j + 1, xt::xarray<bool>()});
+      }
+      else
+      {
+        label_id = it->second;
+        Island &isl = islands[static_cast<size_t>(label_id - 1)];
+        isl.r0 = std::min(isl.r0, i);
+        isl.r1 = std::max(isl.r1, i + 1);
+        isl.c0 = std::min(isl.c0, j);
+        isl.c1 = std::max(isl.c1, j + 1);
+      }
+      labels(i, j) = label_id;
+    }
+  }
+
+  for (size_t k = 0; k < islands.size(); ++k)
+  {
+    Island &isl = islands[k];
+    isl.objmask =
+        xt::equal(xt::view(labels, xt::range(isl.r0, isl.r1), xt::range(isl.c0, isl.c1)), static_cast<int>(k) + 1);
+  }
+  return islands;
+}
+
+void require_islands_equal(const Island &a, const Island &b)
+{
+  REQUIRE(a.r0 == b.r0);
+  REQUIRE(a.r1 == b.r1);
+  REQUIRE(a.c0 == b.c0);
+  REQUIRE(a.c1 == b.c1);
+  REQUIRE_THAT(a.objmask, RangeEquals(b.objmask));
+}
+
+// xt::xarray<bool>{{true}} is ambiguous (a degenerate single-element nested initializer list
+// collides with xtensor's other constructor overloads) -- this sidesteps it for the common
+// single-pixel-island test fixture.
+xt::xarray<bool> single_true_mask()
+{
+  xt::xarray<bool> mask(std::vector<size_t>{1, 1});
+  mask(0, 0) = true;
+  return mask;
 }
 
 } // namespace
@@ -492,5 +625,522 @@ TEST_CASE("apply_rejection_cutoffs skips hist1/hist2 depending on histogram_deta
     REQUIRE_FALSE(result.hist2.empty());
     REQUIRE_THAT(result.hist1,
                  RangeEquals(result.hist2)); // no cutoffs ran in between, so both stages see the same mask
+  }
+}
+
+TEST_CASE("label_islands basic shapes", "[label_islands]")
+{
+  SECTION("plus-shaped island")
+  {
+    const xt::xarray<bool> mask{{false, true, false}, {true, true, true}, {false, true, false}};
+    const auto islands = label_islands(mask);
+    REQUIRE(islands.size() == 1);
+    REQUIRE(islands[0].r0 == 0);
+    REQUIRE(islands[0].r1 == 3);
+    REQUIRE(islands[0].c0 == 0);
+    REQUIRE(islands[0].c1 == 3);
+    REQUIRE_THAT(islands[0].objmask, RangeEquals(mask));
+  }
+
+  SECTION("diagonally-adjacent pixels are two separate islands (4-, not 8-connectivity)")
+  {
+    const xt::xarray<bool> mask{{true, false}, {false, true}};
+    const auto islands = label_islands(mask);
+    REQUIRE(islands.size() == 2);
+  }
+
+  SECTION("island touching the border")
+  {
+    const xt::xarray<bool> mask{{true, false, false}, {false, false, false}, {false, false, false}};
+    const auto islands = label_islands(mask);
+    REQUIRE(islands.size() == 1);
+    REQUIRE(islands[0].r0 == 0);
+    REQUIRE(islands[0].r1 == 1);
+    REQUIRE(islands[0].c0 == 0);
+    REQUIRE(islands[0].c1 == 1);
+  }
+
+  SECTION("all-false mask has no islands")
+  {
+    const xt::xarray<bool> mask = xt::xarray<bool>(xt::zeros<bool>({4u, 4u}));
+    REQUIRE(label_islands(mask).empty());
+  }
+
+  SECTION("all-true mask is one island spanning the whole array")
+  {
+    xt::xarray<bool> mask({4u, 4u}, true);
+    const auto islands = label_islands(mask);
+    REQUIRE(islands.size() == 1);
+    REQUIRE(islands[0].r0 == 0);
+    REQUIRE(islands[0].r1 == 4);
+    REQUIRE(islands[0].c0 == 0);
+    REQUIRE(islands[0].c1 == 4);
+  }
+
+  SECTION("concave (U-shaped) island stays a single component with a tight bbox")
+  {
+    const xt::xarray<bool> mask{{true, false, true}, {true, false, true}, {true, true, true}};
+    const auto islands = label_islands(mask);
+    REQUIRE(islands.size() == 1);
+    REQUIRE(islands[0].r0 == 0);
+    REQUIRE(islands[0].r1 == 3);
+    REQUIRE(islands[0].c0 == 0);
+    REQUIRE(islands[0].c1 == 3);
+    long count = 0;
+    for (auto v : islands[0].objmask)
+      count += v ? 1 : 0;
+    REQUIRE(count == 7);
+  }
+}
+
+TEST_CASE("label_islands assigns labels in row-major first-encountered order", "[label_islands]")
+{
+  // Two isolated single pixels: (0,1) is encountered before (1,0) in a row-major scan, so it must
+  // become island 0 -- a column-major (or otherwise differently-ordered) scan would number these
+  // the other way around.
+  const xt::xarray<bool> mask{{false, true}, {true, false}};
+  const auto islands = label_islands(mask);
+  REQUIRE(islands.size() == 2);
+  REQUIRE(islands[0].r0 == 0);
+  REQUIRE(islands[0].c0 == 1);
+  REQUIRE(islands[1].r0 == 1);
+  REQUIRE(islands[1].c0 == 0);
+}
+
+TEST_CASE("label_islands matches an independently-implemented union-find reference", "[label_islands]")
+{
+  std::mt19937 rng(42);
+  std::bernoulli_distribution dist(0.4);
+
+  for (int trial = 0; trial < 20; ++trial)
+  {
+    xt::xarray<bool> mask(std::vector<size_t>{9, 11});
+    for (auto &v : mask)
+      v = dist(rng);
+
+    const auto actual = sorted_by_bbox(label_islands(mask));
+    const auto expected = sorted_by_bbox(brute_force_label_islands(mask));
+
+    CAPTURE(trial);
+    REQUIRE(actual.size() == expected.size());
+    for (size_t i = 0; i < actual.size(); ++i)
+    {
+      require_islands_equal(actual[i], expected[i]);
+    }
+  }
+}
+
+TEST_CASE("max_to_std_ratio", "[max_to_std_ratio]")
+{
+  SECTION("increases monotonically with n")
+  {
+    const float r1 = max_to_std_ratio(4);
+    const float r2 = max_to_std_ratio(25);
+    const float r3 = max_to_std_ratio(400);
+    REQUIRE(r1 < r2);
+    REQUIRE(r2 < r3);
+  }
+
+  SECTION("n = 1 is close to 0 (median of a single N(0,1) draw)")
+  {
+    REQUIRE_THAT(max_to_std_ratio(1), WithinAbs(0.f, 0.05f));
+  }
+
+  SECTION("memoized calls return bit-identical results")
+  {
+    const float a = max_to_std_ratio(123);
+    const float b = max_to_std_ratio(123);
+    REQUIRE(a == b);
+  }
+}
+
+TEST_CASE("create_multidimensional_gaussian_kernel", "[gaussian_kernel]")
+{
+  SECTION("sums to 1")
+  {
+    for (auto [sr, sc, hs, rot] : {std::tuple{2.0, 2.0, 5L, 0.0}, std::tuple{1.5, 3.0, 4L, 0.3},
+                                   std::tuple{0.0, 2.0, 3L, 0.0}})
+    {
+      const auto kernel = create_multidimensional_gaussian_kernel(sr, sc, hs, rot);
+      CAPTURE(sr, sc, hs, rot);
+      REQUIRE_THAT(xt::sum(kernel)(), WithinAbs(1.0, 1e-9));
+    }
+  }
+
+  SECTION("radially symmetric when sigma_row == sigma_col and rotate = 0")
+  {
+    const auto kernel = create_multidimensional_gaussian_kernel(2.0, 2.0, 4, 0.0);
+    // Peak at the center; corners smaller than edge-midpoints; smaller than center everywhere else.
+    const long c = 4;
+    REQUIRE(kernel(c, c) > kernel(c, c + 1));
+    REQUIRE(kernel(0, 0) < kernel(c, 0));
+    // Symmetric across both axes and the diagonal.
+    REQUIRE_THAT(kernel(c - 1, c + 2), WithinAbs(kernel(c + 1, c + 2), 1e-12));
+    REQUIRE_THAT(kernel(c + 2, c - 1), WithinAbs(kernel(c - 1, c + 2), 1e-12));
+  }
+
+  SECTION("sigma = 0 on one axis collapses to a 1D ridge along the other")
+  {
+    const auto kernel = create_multidimensional_gaussian_kernel(0.0, 1.5, 3, 0.0);
+    // Every row is identical (no falloff along the row axis).
+    for (long i = 0; i < 7; ++i)
+    {
+      REQUIRE_THAT(xt::xarray<double>(xt::view(kernel, i, xt::all())), AllCloseD(xt::xarray<double>(xt::view(kernel, 0, xt::all()))));
+    }
+  }
+
+  SECTION("180 degree rotation reproduces the unrotated (symmetric) kernel")
+  {
+    const auto kernel = create_multidimensional_gaussian_kernel(1.5, 2.5, 4, 0.0);
+    const auto rotated = create_multidimensional_gaussian_kernel(1.5, 2.5, 4, M_PI);
+    REQUIRE_THAT(rotated, AllCloseD(kernel, 1e-9, 1e-9));
+  }
+}
+
+TEST_CASE("find_island_peak", "[find_island_peak]")
+{
+  const xt::xarray<float> snr{{0.f, 1.f, 0.f}, {0.f, -3.f, 2.f}, {0.f, 0.f, 0.f}};
+  const xt::xarray<float> plane_img{{0.f, 0.1f, 0.f}, {0.f, -0.3f, 0.2f}, {0.f, 0.f, 0.f}};
+  const xt::xarray<float> noisemap{{1.f, 1.f, 1.f}, {1.f, 2.f, 3.f}, {1.f, 1.f, 1.f}};
+  const xt::xarray<float> selfnoise{{0.f, 0.f, 0.f}, {0.f, 5.f, 0.f}, {0.f, 0.f, 0.f}};
+  const xt::xarray<float> enf{{0.f, 0.f, 0.f}, {0.f, 7.f, 0.f}, {0.f, 0.f, 0.f}};
+  Island island{0, 3, 0, 3, xt::xarray<bool>{{false, true, false}, {false, true, true}, {false, false, false}}};
+
+  SECTION("peak is the pixel with the largest |snr|")
+  {
+    const IslandPeak peak = find_island_peak(island, snr, plane_img, noisemap, 0.1f, std::nullopt, selfnoise, enf);
+    REQUIRE(peak.x == 1);
+    REQUIRE(peak.y == 1);
+    REQUIRE_THAT(peak.maxsig, WithinAbs(3.f, 1e-6f));
+    REQUIRE_THAT(peak.flux, WithinAbs(-0.3f, 1e-6f));
+    REQUIRE(peak.size == 3);
+    REQUIRE_THAT(peak.local_noise, WithinAbs(3.f, 1e-6f));
+    REQUIRE_THAT(peak.selfnoise_value, WithinAbs(5.f, 1e-6f));
+    REQUIRE_THAT(peak.excess_noise_factor_value, WithinAbs(7.f, 1e-6f));
+  }
+
+  SECTION("tie-breaking picks the first pixel in row-major order")
+  {
+    const xt::xarray<float> tied_snr{{0.f, 2.f, 0.f}, {0.f, 2.f, 2.f}, {0.f, 0.f, 0.f}};
+    const IslandPeak peak =
+        find_island_peak(island, tied_snr, plane_img, noisemap, 0.1f, std::nullopt, selfnoise, enf);
+    // Row-major order over the island's own objmask visits (0,1) before (1,1) and (1,2).
+    REQUIRE(peak.y == 0);
+    REQUIRE(peak.x == 1);
+  }
+
+  SECTION("boost is 0 when no baseline flux is given")
+  {
+    const IslandPeak peak = find_island_peak(island, snr, plane_img, noisemap, 0.1f, std::nullopt, selfnoise, enf);
+    REQUIRE(peak.boost == 0.f);
+  }
+
+  SECTION("boost picks the max-abs-value flux/baseline ratio over all island pixels")
+  {
+    const xt::xarray<float> baseline{{1.f, 0.5f, 1.f}, {1.f, 2.f, -0.1f}, {1.f, 1.f, 1.f}};
+    const IslandPeak peak = find_island_peak(island, snr, plane_img, noisemap, 0.1f, baseline, selfnoise, enf);
+    // flmax = -0.3 (peak flux). Ratios over island pixels {(0,1),(1,1),(1,2)}: -0.3/0.5=-0.6,
+    // -0.3/2=-0.15, -0.3/-0.1=3.0 -- the last has the largest |ratio|.
+    REQUIRE_THAT(peak.boost, WithinAbs(3.0f, 1e-5f));
+  }
+}
+
+TEST_CASE("compute_adjusted_noise_stats", "[compute_adjusted_noise_stats]")
+{
+  // 5x5 plane, padded by 2 on every side (pad=2); peak at (2,2) with flux 10.
+  xt::xarray<float> plane_img = constant_array({5u, 5u}, 1.f);
+  plane_img(2, 2) = 10.f;
+  const long pad = 2;
+  const xt::xarray<float> padimg = pad_plane_img(plane_img, pad);
+
+  xt::xarray<float> snr = constant_array({5u, 5u}, 0.5f);
+  Island island{2, 3, 2, 3, single_true_mask()};
+
+  SECTION("computes adjusted-noise stats and overwrites the island's snr pixels")
+  {
+    // boxsize=4 -> r=2 (5x5 postage stamp); inner_boxsize=0 -> only the single center pixel zeroed.
+    const AdjustedNoiseStats stats = compute_adjusted_noise_stats(island, snr, padimg, 2, 2, pad, 4, 0, 10.f);
+    // After zeroing the center, the postage stamp is all 1s (extreme=1), n=25.
+    const float expected_adjnoise = 1.f / max_to_std_ratio(25);
+    REQUIRE_THAT(stats.adjnoise, WithinRel(expected_adjnoise, 1e-5f));
+    REQUIRE_THAT(stats.sig_ext, WithinRel(10.f / expected_adjnoise, 1e-5f));
+    // donut excludes the zeroed center; all remaining 24 pixels are exactly 1 -> rms = 0 -> sig_rms = 0
+    // (guarded, matching Python's `if rms else 0`), median|donut| = 1 -> sig_lmad = 10/(1*1.4826).
+    REQUIRE_THAT(stats.sig_rms, WithinAbs(0.f, 1e-6f));
+    REQUIRE_THAT(stats.sig_lmad, WithinRel(10.f / 1.4826f, 1e-5f));
+    // snr got overwritten at the island's pixel with sig_ext, nowhere else.
+    REQUIRE_THAT(snr(2, 2), WithinRel(stats.sig_ext, 1e-6f));
+    REQUIRE_THAT(snr(0, 0), WithinAbs(0.5f, 1e-6f));
+  }
+
+  SECTION("degenerate fully-zero postage stamp falls back to 0 without crashing")
+  {
+    xt::xarray<float> zero_plane = xt::zeros<float>({5u, 5u});
+    xt::xarray<float> zero_padimg = pad_plane_img(zero_plane, pad);
+    xt::xarray<float> zero_snr = xt::zeros<float>({5u, 5u});
+    const AdjustedNoiseStats stats = compute_adjusted_noise_stats(island, zero_snr, zero_padimg, 2, 2, pad, 4, 0, 0.f);
+    REQUIRE(stats.sig_rms == 0.f);
+    REQUIRE(stats.sig_lmad == 0.f);
+  }
+
+  SECTION("edge padding contributes zeros to 'extreme' but is excluded from donut stats")
+  {
+    // Peak right at the image edge, so the postage stamp includes real padding zeros.
+    xt::xarray<float> edge_plane = constant_array({5u, 5u}, 2.f);
+    edge_plane(0, 0) = -20.f;
+    xt::xarray<float> edge_padimg = pad_plane_img(edge_plane, pad);
+    xt::xarray<float> edge_snr = xt::zeros<float>({5u, 5u});
+    Island edge_island{0, 1, 0, 1, single_true_mask()};
+    const AdjustedNoiseStats stats =
+        compute_adjusted_noise_stats(edge_island, edge_snr, edge_padimg, 0, 0, pad, 4, 0, -20.f);
+    // The zeroed center (-20 -> 0) plus real zero-padding beyond the image edge both get excluded
+    // from the donut, but extreme = max(|padding-inclusive stamp|) sees only the constant 2s here
+    // once the (already-zero) center is zeroed, since padding doesn't reach 2s' magnitude.
+    REQUIRE_THAT(stats.adjnoise, WithinRel(2.f / max_to_std_ratio(25), 1e-5f));
+  }
+}
+
+TEST_CASE("compute_beam_chi2", "[compute_beam_chi2]")
+{
+  const long half_size = 2;
+  const auto kernel = create_multidimensional_gaussian_kernel(1.0, 1.0, half_size, 0.0);
+
+  SECTION("perfect fit (postage stamp is an exact scaled copy of the kernel) gives chi2 ~ 0")
+  {
+    const xt::xarray<float> plane_img = xt::xarray<float>(kernel * 5.0);
+    const xt::xarray<float> padimg = pad_plane_img(plane_img, 0);
+    const float chi2 = compute_beam_chi2(kernel, half_size, padimg, half_size, half_size, 0, 1.0f);
+    REQUIRE_THAT(chi2, WithinAbs(0.f, 1e-6f));
+  }
+
+  SECTION("mismatched postage stamp gives chi2 > 0, scaling with adjnoise")
+  {
+    xt::xarray<float> plane_img = xt::xarray<float>(kernel * 5.0);
+    plane_img(half_size, half_size) += 10.f; // perturb the peak
+    const xt::xarray<float> padimg = pad_plane_img(plane_img, 0);
+    const float chi2_small_noise = compute_beam_chi2(kernel, half_size, padimg, half_size, half_size, 0, 1.0f);
+    const float chi2_large_noise = compute_beam_chi2(kernel, half_size, padimg, half_size, half_size, 0, 10.0f);
+    REQUIRE(chi2_small_noise > 0.f);
+    // Larger adjnoise divides the same numerator by a bigger denominator -> smaller chi2.
+    REQUIRE(chi2_large_noise < chi2_small_noise);
+  }
+}
+
+TEST_CASE("compute_spectral_variance_stats", "[compute_spectral_variance_stats]")
+{
+  xt::xarray<float> cube{{{1.f, 2.f}, {3.f, 4.f}}, {{0.f, 0.f}, {0.f, 0.f}}, {{2.f, -1.f}, {1.f, 0.f}}};
+  const xt::xarray<bool> nonzero{true, false, true};
+
+  SECTION("sums (not averages) squares/cubes/quartics over nonzero channels only")
+  {
+    const auto result = compute_spectral_variance_stats(cube, nonzero, false);
+    REQUIRE(result.counts == 2);
+    // channel 0: {{1,2},{3,4}}, channel 2: {{2,-1},{1,0}}. Brute-force per-pixel sums:
+    const xt::xarray<double> expected_spvar{{1. * 1 + 2. * 2, 2. * 2 + (-1.) * (-1.)},
+                                             {3. * 3 + 1. * 1, 4. * 4 + 0. * 0}};
+    const xt::xarray<double> expected_spskew{{1. * 1 * 1 + 2. * 2 * 2, 2. * 2 * 2 + (-1.) * (-1.) * (-1.)},
+                                              {3. * 3 * 3 + 1. * 1 * 1, 4. * 4 * 4 + 0.}};
+    const xt::xarray<double> expected_spkurt{{1. + 16., 16. + 1.}, {81. + 1., 256. + 0.}};
+    REQUIRE_THAT(result.spvar, AllCloseD(expected_spvar));
+    REQUIRE_THAT(result.spskew, AllCloseD(expected_spskew));
+    REQUIRE_THAT(result.spkurt, AllCloseD(expected_spkurt));
+    REQUIRE_FALSE(result.timevar.has_value());
+  }
+
+  SECTION("save_stat_cubes=true returns the full per-channel squared cube")
+  {
+    const auto result = compute_spectral_variance_stats(cube, nonzero, true);
+    REQUIRE(result.timevar.has_value());
+    REQUIRE_THAT(*result.timevar, AllClose(xt::xarray<float>(cube * cube)));
+  }
+}
+
+TEST_CASE("process_band_slice_core_serial matches process_band_slice_core", "[process_band_slice_core_serial]")
+{
+  // Correctness anchor for the hand-rolled (raw-loop, no xtensor) TODO.md item-4 implementation:
+  // both functions must agree on the same synthetic input, since bench.cpp times them independently
+  // rather than cross-checking them on every call.
+  std::mt19937 rng(23);
+  const size_t npix = 20;
+  const xt::xarray<float> stokes_cube_template = random_array(rng, {3, npix, npix}, 0.f, 1.f);
+  const xt::xarray<float> weights{1.f, 1.f, 1.f};
+  const xt::xarray<bool> accept_mask({3u, npix, npix}, true);
+  const xt::xarray<float> channel_width{1.f, 1.f, 1.f};
+  const xt::xarray<float> mean_image = random_array(rng, {3, npix, npix}, 0.f, 0.1f);
+  const xt::xarray<float> selfnoise_offset = constant_array({npix, npix}, 0.01f);
+  const xt::xarray<float> dde_noise = constant_array({npix, npix}, 0.02f);
+  const xt::xarray<float> flux_cutoff = constant_array({3u, npix, npix}, 0.05f);
+  const xt::xarray<float> snr_cutoff = constant_array({3u, npix, npix}, 0.3f);
+
+  auto run_case = [&](bool is_single_channel, long band_start, long band_stop, bool subtract_mean,
+                      bool use_rms_noise_estimator, int boxsize) {
+    xt::xarray<float> cube_a = stokes_cube_template;
+    xt::xarray<float> cube_b = stokes_cube_template;
+    const ProcessBandSliceResult a = process_band_slice_core(
+        cube_a, weights, accept_mask, channel_width, band_start, band_stop, is_single_channel, subtract_mean,
+        mean_image, use_rms_noise_estimator, boxsize, selfnoise_offset, dde_noise, 1.f, 3.f, flux_cutoff, snr_cutoff,
+        1.5f, 2, 10, 0.5f);
+    const ProcessBandSliceResult b = process_band_slice_core_serial(
+        cube_b, weights, accept_mask, channel_width, band_start, band_stop, is_single_channel, subtract_mean,
+        mean_image, use_rms_noise_estimator, boxsize, selfnoise_offset, dde_noise, 1.f, 3.f, flux_cutoff, snr_cutoff,
+        1.5f, 2, 10, 0.5f);
+
+    REQUIRE(a.processed == b.processed);
+    REQUIRE(a.reached_cutoffs == b.reached_cutoffs);
+    REQUIRE_THAT(a.mednoise, WithinRel(b.mednoise, 1e-4f) || WithinAbs(0.f, 1e-6f));
+    REQUIRE_THAT(a.noise_globmad, WithinRel(b.noise_globmad, 1e-4f) || WithinAbs(0.f, 1e-6f));
+    REQUIRE_THAT(a.hist0, RangeEquals(b.hist0));
+    REQUIRE_THAT(a.hist1, RangeEquals(b.hist1));
+    REQUIRE_THAT(a.hist2, RangeEquals(b.hist2));
+    if (a.processed)
+    {
+      REQUIRE_THAT(a.minsig, WithinRel(b.minsig, 1e-4f) || WithinAbs(0.f, 1e-6f));
+      REQUIRE_THAT(a.maxsig, WithinRel(b.maxsig, 1e-4f) || WithinAbs(0.f, 1e-6f));
+      REQUIRE_THAT(a.snr, AllClose(b.snr, 1e-4f, 1e-4f));
+      REQUIRE_THAT(a.noisemap, AllClose(b.noisemap, 1e-4f, 1e-4f));
+      REQUIRE_THAT(a.excess_noise_factor, AllClose(b.excess_noise_factor, 1e-4f, 1e-4f));
+      REQUIRE_THAT(a.plane_img, AllClose(b.plane_img, 1e-4f, 1e-4f));
+      REQUIRE_THAT(a.mask, RangeEquals(b.mask));
+      REQUIRE_THAT(cube_a, AllClose(cube_b, 1e-4f, 1e-4f)); // in-place write-back agrees too
+    }
+  };
+
+  SECTION("single-channel band, mean subtraction, sliding RMS noise estimator")
+  {
+    run_case(true, 0, 1, true, true, 6);
+  }
+
+  SECTION("multi-channel aggregated band, no mean subtraction, flat MAD estimator")
+  {
+    run_case(false, 0, 3, false, false, 0);
+  }
+}
+
+TEST_CASE("process_plane_core", "[process_plane_core]")
+{
+  const long npix = 6;
+  const xt::xarray<bool> nonzero_channels{true};
+  const xt::xarray<float> weights{1.f};
+  const xt::xarray<float> channel_width{1.f};
+  xt::xarray<bool> accept_mask({1u, static_cast<size_t>(npix), static_cast<size_t>(npix)}, true);
+  const xt::xarray<float> selfnoise = xt::zeros<float>({static_cast<size_t>(npix), static_cast<size_t>(npix)});
+  const xt::xarray<float> dde_noise = xt::zeros<float>({static_cast<size_t>(npix), static_cast<size_t>(npix)});
+
+  PlaneConfig config;
+  config.band_slices = {BandSlice{0, 1, "B0"}};
+  config.use_rms_noise_estimator = false; // simpler: flat MAD estimator, no boxsize dependency
+  config.boxsize = 4;
+  config.inner_boxsize = 0;
+  config.full_bandwidth = 1.f;
+  config.threshold = 3.f;
+
+  SECTION("no islands (all pixels below threshold): empty detections, but minsig/maxsig are still "
+         "set since pixels survive the rejection cutoffs regardless of the final threshold")
+  {
+    xt::xarray<float> stokes_cube = constant_array({1u, static_cast<size_t>(npix), static_cast<size_t>(npix)}, 0.01f);
+    const ProcessPlaneResult result =
+        process_plane_core(stokes_cube, weights, accept_mask, channel_width, nonzero_channels, std::nullopt, selfnoise,
+                            selfnoise, dde_noise, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt,
+                            std::nullopt, config);
+    REQUIRE(result.any_data);
+    REQUIRE(result.detections.x.empty());
+    REQUIRE(result.minsig.has_value());
+    REQUIRE(result.maxsig.has_value());
+    REQUIRE(result.hist0.empty()); // histogram_detail defaults to 0
+    REQUIRE(result.mednoises.size() == 1);
+  }
+
+  SECTION("no data at all (nonzero_channels all false): everything stays absent/empty")
+  {
+    xt::xarray<float> stokes_cube = constant_array({1u, static_cast<size_t>(npix), static_cast<size_t>(npix)}, 0.01f);
+    const xt::xarray<bool> all_zero_channels{false};
+    const ProcessPlaneResult result =
+        process_plane_core(stokes_cube, weights, accept_mask, channel_width, all_zero_channels, std::nullopt,
+                            selfnoise, selfnoise, dde_noise, std::nullopt, std::nullopt, std::nullopt, std::nullopt,
+                            std::nullopt, std::nullopt, config);
+    REQUIRE_FALSE(result.any_data);
+    REQUIRE(result.detections.x.empty());
+    REQUIRE_FALSE(result.minsig.has_value());
+    REQUIRE_FALSE(result.maxsig.has_value());
+    REQUIRE(result.hist0.empty());
+    REQUIRE(result.mednoises.empty());
+  }
+
+  SECTION("one clear point-source island: detection recorded and stokes_cube holds sig_ext, not raw SNR")
+  {
+    xt::xarray<float> stokes_cube = constant_array({1u, static_cast<size_t>(npix), static_cast<size_t>(npix)}, 0.01f);
+    stokes_cube(0, 3, 3) = 5.f; // a strong point source well above threshold
+    const ProcessPlaneResult result =
+        process_plane_core(stokes_cube, weights, accept_mask, channel_width, nonzero_channels, std::nullopt, selfnoise,
+                            selfnoise, dde_noise, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt,
+                            std::nullopt, config);
+    REQUIRE(result.detections.x.size() == 1);
+    REQUIRE(result.detections.x[0] == 3);
+    REQUIRE(result.detections.y[0] == 3);
+    REQUIRE(result.minsig.has_value());
+    // The written-back cube value at the peak is sigma_ext (island-adjusted), not the raw
+    // flux/noise_globmad SNR -- this is the single most important regression case in this file.
+    REQUIRE_THAT(stokes_cube(0, 3, 3), WithinRel(result.detections.sigma_ext[0], 1e-5f));
+    REQUIRE_FALSE(stokes_cube(0, 3, 3) == result.detections.sigma[0]);
+  }
+
+  SECTION("beam_size_enabled = false gives beamchi2 == 0 for every detection")
+  {
+    xt::xarray<float> stokes_cube = constant_array({1u, static_cast<size_t>(npix), static_cast<size_t>(npix)}, 0.01f);
+    stokes_cube(0, 3, 3) = 5.f;
+    const ProcessPlaneResult result =
+        process_plane_core(stokes_cube, weights, accept_mask, channel_width, nonzero_channels, std::nullopt, selfnoise,
+                            selfnoise, dde_noise, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt,
+                            std::nullopt, config);
+    REQUIRE(result.detections.beamchi2.size() == 1);
+    REQUIRE(result.detections.beamchi2[0] == 0.f);
+  }
+
+  SECTION("nfreq > 1 populates variance_stats; nfreq == 1 doesn't")
+  {
+    xt::xarray<float> single_channel_cube =
+        constant_array({1u, static_cast<size_t>(npix), static_cast<size_t>(npix)}, 0.01f);
+    const ProcessPlaneResult single_result =
+        process_plane_core(single_channel_cube, weights, accept_mask, channel_width, nonzero_channels, std::nullopt,
+                            selfnoise, selfnoise, dde_noise, std::nullopt, std::nullopt, std::nullopt, std::nullopt,
+                            std::nullopt, std::nullopt, config);
+    REQUIRE_FALSE(single_result.variance_stats.has_value());
+
+    xt::xarray<float> multi_cube =
+        constant_array({2u, static_cast<size_t>(npix), static_cast<size_t>(npix)}, 0.01f);
+    xt::xarray<bool> multi_accept({2u, static_cast<size_t>(npix), static_cast<size_t>(npix)}, true);
+    const xt::xarray<bool> multi_nonzero{true, true};
+    const xt::xarray<float> multi_weights{1.f, 1.f};
+    const xt::xarray<float> multi_channel_width{1.f, 1.f};
+    PlaneConfig multi_config = config;
+    multi_config.band_slices = {BandSlice{0, 1, "B0"}, BandSlice{1, 2, "B1"}};
+    const ProcessPlaneResult multi_result =
+        process_plane_core(multi_cube, multi_weights, multi_accept, multi_channel_width, multi_nonzero, std::nullopt,
+                            selfnoise, selfnoise, dde_noise, std::nullopt, std::nullopt, std::nullopt, std::nullopt,
+                            std::nullopt, std::nullopt, multi_config);
+    REQUIRE(multi_result.variance_stats.has_value());
+    REQUIRE(multi_result.variance_stats->counts == 2);
+  }
+
+  SECTION("mednoises is indexed by reversed-loop position, not original band index")
+  {
+    xt::xarray<float> multi_cube = constant_array({2u, static_cast<size_t>(npix), static_cast<size_t>(npix)}, 0.01f);
+    xt::xarray<bool> multi_accept({2u, static_cast<size_t>(npix), static_cast<size_t>(npix)}, true);
+    const xt::xarray<bool> multi_nonzero{true, true};
+    const xt::xarray<float> multi_weights{1.f, 1.f};
+    const xt::xarray<float> multi_channel_width{1.f, 1.f};
+    // Distinct per-channel magnitudes so each band's mednoise (from noise_globmad, since
+    // use_rms_noise_estimator=false) is distinguishable.
+    multi_cube(0, 0, 0) = 0.02f;
+    multi_cube(1, 0, 0) = 0.05f;
+
+    PlaneConfig multi_config = config;
+    multi_config.band_slices = {BandSlice{0, 1, "B0"}, BandSlice{1, 2, "B1"}};
+    const ProcessPlaneResult result =
+        process_plane_core(multi_cube, multi_weights, multi_accept, multi_channel_width, multi_nonzero, std::nullopt,
+                            selfnoise, selfnoise, dde_noise, std::nullopt, std::nullopt, std::nullopt, std::nullopt,
+                            std::nullopt, std::nullopt, multi_config);
+    // band_slices reversed: iband=0 processes band index 1 (B1), iband=1 processes band index 0 (B0).
+    REQUIRE(result.mednoises.size() == 2);
   }
 }

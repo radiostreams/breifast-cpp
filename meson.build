@@ -91,9 +91,9 @@ test('breifast_helpers',
   depends : [ext_module],
 )
 
-bench_process_band_slice = executable(
-  'bench_process_band_slice',
-  ['src/bench_process_band_slice.cpp', tbb_build],
+bench = executable(
+  'bench',
+  ['src/bench.cpp', tbb_build],
   dependencies : [xtl_dep, xtensor_dep, tbb_dep],
   link_args : ['-static-libstdc++', '-static-libgcc'],
 )
