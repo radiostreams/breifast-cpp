@@ -77,8 +77,8 @@ catch2_dep = declare_dependency(
 
 ext_module = py.extension_module(
   'breifast_helpers',
-  ['src/breifast_helpers.cpp', tbb_build],
-  dependencies : [py.dependency(), pybind11_dep, xtl_dep, xtensor_dep, xtensor_python_dep, numpy_dep, tbb_dep],
+  ['src/breifast_helpers.cpp', 'src/plane_lot_bindings.cpp', tbb_build],
+  dependencies : [py.dependency(), pybind11_dep, xtl_dep, xtensor_dep, xtensor_python_dep, numpy_dep, tbb_dep, itt_dep],
   link_args : ['-static-libstdc++', '-static-libgcc'],
   install : true,
 )
@@ -94,14 +94,14 @@ test('breifast_helpers',
 bench = executable(
   'bench',
   ['src/bench.cpp', tbb_build],
-  dependencies : [xtl_dep, xtensor_dep, tbb_dep],
+  dependencies : [xtl_dep, xtensor_dep, tbb_dep, itt_dep],
   link_args : ['-static-libstdc++', '-static-libgcc'],
 )
 
 test_breifast_core = executable(
   'test_breifast_core',
   ['tests/cpp/test_breifast_core.cpp', tbb_build, catch2_build],
-  dependencies : [xtl_dep, xtensor_dep, tbb_dep, catch2_dep],
+  dependencies : [xtl_dep, xtensor_dep, tbb_dep, catch2_dep, itt_dep],
   link_args : ['-static-libstdc++', '-static-libgcc'],
 )
 test('breifast_core', test_breifast_core)

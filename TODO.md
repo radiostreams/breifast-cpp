@@ -5,14 +5,14 @@
 `box_sum`, `make_noise_map` (both `Accum` variants), `histogram_counts`,
 `estimate_noise_and_snr`, and `apply_rejection_cutoffs` in isolation, using
 Catch2 -- a standalone C++-native test executable (same pattern as
-`bench_process_band_slice.cpp`, no pybind11 needed) rather than exposing them
+`bench.cpp`, no pybind11 needed) rather than exposing them
 to Python. Catch2 is built from source by meson (`catch2_build` in
 meson.build), not pulled from nixpkgs -- the prebuilt nixpkgs binary needs a
 newer glibc than the system one this project links against (see the comment
 above `catch2_build`), the same reason TBB is also built from source.
 
 ## 2. Unit benchmarks (per-function, not just end-to-end)
-`bench_process_band_slice.cpp` currently only times the full
+`bench.cpp` currently only times the full
 `process_band_slice_core()` call, plus the one-off `make_noise_map<float>` vs
 `<double>` A/B added today. Extend with per-function microbenchmarks
 (`compute_integral_image`, `box_sum`, `histogram_counts`, etc.) to find which
@@ -46,14 +46,14 @@ Python side first.
 ---
 *Context for picking this back up:* `breifast_core.hpp` is the
 Python/pybind11-independent core (shared by `breifast_helpers.cpp`'s pybind11
-wrapper and `bench_process_band_slice.cpp`'s standalone VTune driver). Real
+wrapper and `bench.cpp`'s standalone VTune driver). Real
 regression fixtures live on Nextcloud, not in git -- `./scripts/fetch_fixtures.sh`
 to pull them down (see `README.md`).
 
 ## Checklist
 
 - [x] Unit tests for the individual C++ functions
-- [ ] Unit benchmarks (per-function, not just end-to-end)
-- [ ] Xtensor performance bottlenecks
-- [ ] Manual (non-xtensor) implementation, for comparison
-- [ ] Extend the C++ port to more of the pipeline
+- [x] Unit benchmarks (per-function, not just end-to-end)
+- [x] Xtensor performance bottlenecks
+- [x] Manual (non-xtensor) implementation, for comparison
+- [x] Extend the C++ port to more of the pipeline
