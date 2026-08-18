@@ -2,16 +2,13 @@
 #include "plane_lot_dispatch.hpp"
 
 #include <pybind11/stl.h>
+
+#define XTENSOR_USE_TBB
+#define FORCE_IMPORT_ARRAY
 #include <xtensor-python/pyarray.hpp>
 
-// Pybind11 bindings for run_lot_core() (plane_lot_dispatch.hpp) -- deliberately kept separate from
-// breifast_helpers.cpp's marshaling so this file only has to answer "how does one Python lot turn
-// into a LotBatch", not the rest of the module's bindings.
-//
-
-namespace
+namespace breifast
 {
-
 template <typename T> xt::xarray<T> require_xarray(const pybind11::dict &d, const char *key)
 {
   return xt::xarray<T>(d[key].cast<xt::pyarray<T>>());
@@ -176,16 +173,21 @@ pybind11::list process_lot(pybind11::list planes, pybind11::list stokes_groups, 
   }
   return out;
 }
-
-} // namespace
+} // namespace breifast
 
 void init_plane_lot_bindings(pybind11::module_ &m)
 {
-  m.def("process_lot", &process_lot, pybind11::arg("planes"), pybind11::arg("stokes_groups"),
+  m.def("process_lot", &breifast::process_lot, pybind11::arg("planes"), pybind11::arg("stokes_groups"),
         pybind11::arg("band_slices"), pybind11::arg("baseline_flux") = pybind11::none(), pybind11::arg("subtract_mean"),
         pybind11::arg("use_rms_noise_estimator") = true, pybind11::arg("boxsize"), pybind11::arg("inner_boxsize") = 10,
         pybind11::arg("ddenoise_scaling_factor") = 1.0f, pybind11::arg("full_bandwidth"),
         pybind11::arg("reject_noise_threshold") = 0.0f, pybind11::arg("histogram_detail") = 0,
         pybind11::arg("max_sigma_bin") = 200, pybind11::arg("threshold"), pybind11::arg("save_stat_cubes") = false,
         pybind11::arg("beam_size_enabled") = false, pybind11::arg("num_threads") = 0);
+}
+
+PYBIND11_MODULE(breifast_helpers, m)
+{
+  xt::import_numpy();
+  init_plane_lot_bindings(m);
 }

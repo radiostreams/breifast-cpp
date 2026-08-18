@@ -88,7 +88,7 @@ private:
   void clear()
   {
     parents_.clear();
-    labels_.resize(0);
+    labels_.resize({0});
   }
 
   /// Union-find parent pointers, indexed by provisional label ID. Index `0` is an unused placeholder so real label IDs.
@@ -102,7 +102,7 @@ private:
 IslandLabels IslandsLabeler::operator()(const xt::xarray<bool> &masks, const xt::xarray<float> &image,
                                         const xt::xarray<float> &local_noise)
 {
-  labels_.reshape(masks.shape());
+  labels_.resize(masks.shape());
   labels_.fill(0);
 
   size_t next_label = 1;

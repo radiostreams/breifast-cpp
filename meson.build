@@ -5,11 +5,11 @@ project('breifast-helpers-cpp', 'cpp',
 
 py = import('python').find_installation()
 
-pybind11_dep = dependency('pybind11')
-xtl_dep = dependency('xtl')
-xtensor_dep = dependency('xtensor')
-xtensor_python_dep = dependency('xtensor-python')
-numpy_dep = dependency('numpy')
+pybind11_dep = dependency('pybind11').as_system('system')
+xtl_dep = dependency('xtl').as_system('system')
+xtensor_dep = dependency('xtensor').as_system('system')
+xtensor_python_dep = dependency('xtensor-python').as_system('system')
+numpy_dep = dependency('numpy').as_system('system')
 
 tbb_version = '2022.3.0'
 tbb_tarball_sha256 = '01598a46c1162c27253a0de0236f520fd8ee8166e9ebb84a4243574f88e6e50a'
@@ -40,7 +40,7 @@ tbb_build = custom_target('tbb-build',
 tbb_install_dir = tbb_build[0].full_path()
 
 tbb_dep = declare_dependency(
-  compile_args : ['-I' + tbb_install_dir / 'include'],
+  compile_args : ['-isystem', tbb_install_dir / 'include'],
   link_args : ['-L' + tbb_install_dir / 'lib64', '-L' + tbb_install_dir / 'lib',
                '-Wl,-rpath,$ORIGIN', '-ltbb'],
 )
@@ -70,14 +70,14 @@ catch2_build = custom_target('catch2-build',
 catch2_install_dir = catch2_build[0].full_path()
 
 catch2_dep = declare_dependency(
-  compile_args : ['-I' + catch2_install_dir / 'include'],
+  compile_args : ['-isystem', catch2_install_dir / 'include'],
   link_args : ['-L' + catch2_install_dir / 'lib64', '-L' + catch2_install_dir / 'lib',
                '-lCatch2Main', '-lCatch2'],
 )
 
 ext_module = py.extension_module(
   'breifast_helpers',
-  ['src/breifast_helpers.cpp', 'src/plane_lot_bindings.cpp', tbb_build],
+  ['src/plane_lot_bindings.cpp', 'src/plane_lot_dispatch.cpp', 'src/islands.cpp', tbb_build],
   dependencies : [py.dependency(), pybind11_dep, xtl_dep, xtensor_dep, xtensor_python_dep, numpy_dep, tbb_dep, itt_dep],
   link_args : ['-static-libstdc++', '-static-libgcc'],
   install : true,
@@ -98,9 +98,22 @@ bench = executable(
   link_args : ['-static-libstdc++', '-static-libgcc'],
 )
 
+test_breifast_core_sources = [
+  'src/plane_lot_dispatch.cpp',
+  'src/islands.cpp',
+  'tests/cpp/group1_pure_functions/test_build_gaussian_beam_kernel.cpp',
+  'tests/cpp/group1_pure_functions/test_compute_rms_noise_map.cpp',
+  'tests/cpp/group1_pure_functions/test_max_to_std_ratio.cpp',
+  'tests/cpp/group1_pure_functions/test_compute_spectral_variance_stats.cpp',
+  'tests/cpp/group1_pure_functions/test_label_islands.cpp',
+  'tests/cpp/group2_snr_filters/test_compute_snr_and_apply_filters.cpp',
+  'tests/cpp/group3_integration/test_process_band.cpp',
+]
+
 test_breifast_core = executable(
   'test_breifast_core',
-  ['tests/cpp/test_breifast_core.cpp', tbb_build, catch2_build],
+  test_breifast_core_sources + [tbb_build, catch2_build],
+  include_directories : include_directories('src'),
   dependencies : [xtl_dep, xtensor_dep, tbb_dep, catch2_dep, itt_dep],
   link_args : ['-static-libstdc++', '-static-libgcc'],
 )
