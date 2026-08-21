@@ -12,10 +12,11 @@ TEST_CASE("compute_rms_noise_map matches a hand-computed 3x3 grid at boxsize=3",
   const auto plane = make_plane({{1.F, 2.F, 3.F}, {4.F, 5.F, 6.F}, {7.F, 8.F, 9.F}});
   const auto noise_map = compute_rms_noise_map(plane, 3);
 
-  // Computed independently in Python with the same clamped-window formula.
-  const float expected[3][3] = {{3.3911649916F, 3.8944404818F, 4.3011626335F},
-                                {5.1478150705F, 5.6273143387F, 6.0415229868F},
-                                {6.2048368230F, 6.7206150512F, 7.1763500472F}};
+  // Computed independently in Python with the same clamped-window formula, floored to the map's own median
+  // (matching breifast.py's make_noise_map(method='std')).
+  const float expected[3][3] = {{5.62731434F, 5.62731434F, 5.62731434F},
+                                {5.62731434F, 5.62731434F, 6.04152299F},
+                                {6.20483682F, 6.72061505F, 7.17635005F}};
   for (size_t i_y = 0; i_y < 3; ++i_y)
   {
     for (size_t i_x = 0; i_x < 3; ++i_x)
@@ -30,8 +31,8 @@ TEST_CASE("compute_rms_noise_map matches a hand-computed rectangular (non-square
   const auto plane = make_plane({{1.F, -2.F, 3.F, -4.F}, {5.F, -6.F, 7.F, -8.F}});
   const auto noise_map = compute_rms_noise_map(plane, 3);
 
-  const float expected[2][4] = {{4.0620192023F, 4.5460605657F, 5.4467115461F, 5.8736700622F},
-                                {4.0620192023F, 4.5460605657F, 5.4467115461F, 5.8736700622F}};
+  const float expected[2][4] = {{4.99638606F, 4.99638606F, 5.44671155F, 5.87367006F},
+                                {4.99638606F, 4.99638606F, 5.44671155F, 5.87367006F}};
   for (size_t i_y = 0; i_y < 2; ++i_y)
   {
     for (size_t i_x = 0; i_x < 4; ++i_x)
@@ -57,12 +58,12 @@ TEST_CASE("compute_rms_noise_map matches a seeded-random 6x7 plane against a Pyt
   const auto noise_map = compute_rms_noise_map(plane, 5);
 
   const float expected[6][7] = {
-      {4.76394328F, 5.02123578F, 5.68226601F, 5.92141826F, 5.97159894F, 6.33326408F, 6.52367911F},
-      {5.50039544F, 5.54737780F, 5.96437343F, 6.10361170F, 6.11825061F, 6.29137857F, 6.48061791F},
-      {5.46629612F, 5.76606717F, 5.98719171F, 5.96230869F, 5.93054102F, 6.08241817F, 5.90576838F},
-      {5.53077692F, 5.87280263F, 5.88772560F, 5.52019247F, 5.35189843F, 5.60300150F, 5.14404966F},
-      {5.55120333F, 6.09347866F, 5.90759139F, 5.55696420F, 5.41052825F, 5.58042627F, 4.77808454F},
-      {6.12384865F, 6.36247273F, 6.03752274F, 5.54219880F, 5.36535065F, 5.36792255F, 4.68468072F},
+      {5.81943484F, 5.81943484F, 5.81943484F, 5.92141819F, 5.97159889F, 6.33326403F, 6.52367909F},
+      {5.81943484F, 5.81943484F, 5.96437340F, 6.10361164F, 6.11825057F, 6.29137853F, 6.48061790F},
+      {5.81943484F, 5.81943484F, 5.98719166F, 5.96230861F, 5.93054095F, 6.08241810F, 5.90576837F},
+      {5.81943484F, 5.87280257F, 5.88772554F, 5.81943484F, 5.81943484F, 5.81943484F, 5.81943484F},
+      {5.81943484F, 6.09347858F, 5.90759130F, 5.81943484F, 5.81943484F, 5.81943484F, 5.81943484F},
+      {6.12384864F, 6.36247266F, 6.03752267F, 5.81943484F, 5.81943484F, 5.81943484F, 5.81943484F},
   };
   for (size_t i_y = 0; i_y < 6; ++i_y)
   {
@@ -88,49 +89,62 @@ TEST_CASE("compute_rms_noise_map is uniform when boxsize covers the whole plane"
   }
 }
 
-TEST_CASE("compute_rms_noise_map with boxsize=1 is the identity abs(plane)", "[compute_rms_noise_map]")
+TEST_CASE("compute_rms_noise_map with boxsize=1 is abs(plane) floored to its own median",
+         "[compute_rms_noise_map]")
 {
+  // boxsize=1 gives a 1x1 window (== abs(plane)) before the median floor; the floor still applies on top.
   const auto plane = make_plane({{-3.F, 0.F}, {4.F, -5.F}});
   const auto noise_map = compute_rms_noise_map(plane, 1);
 
+  // median(abs(plane)) = median({0, 3, 4, 5}) = 3.5 -> the two values below it (0 and 3) get floored to 3.5.
+  const float expected[2][2] = {{3.5F, 3.5F}, {4.F, 5.F}};
   for (size_t i_y = 0; i_y < plane.shape(0); ++i_y)
   {
     for (size_t i_x = 0; i_x < plane.shape(1); ++i_x)
     {
-      CHECK(noise_map(i_y, i_x) == Catch::Approx(std::abs(plane(i_y, i_x))).epsilon(1e-6));
+      CHECK(noise_map(i_y, i_x) == Catch::Approx(expected[i_y][i_x]).epsilon(1e-6));
     }
   }
 }
 
 TEST_CASE("compute_rms_noise_map boxsize=0 behaves the same as boxsize=1", "[compute_rms_noise_map]")
 {
-  // boxsize/2 truncates, so boxsize=0 and boxsize=1 both give radius=0 (a 1x1 window == abs(plane)).
+  // boxsize/2 truncates, so boxsize=0 and boxsize=1 both give radius=0 (a 1x1 window == abs(plane), pre-floor).
   const auto plane = make_plane({{-3.F, 0.F, 2.5F}, {4.F, -5.F, 1.F}});
   const auto noise_map_0 = compute_rms_noise_map(plane, 0);
   const auto noise_map_1 = compute_rms_noise_map(plane, 1);
 
+  // median(abs(plane)) = median({0, 1, 2.5, 3, 4, 5}) = 2.75 -> values below it get floored to 2.75.
+  const float expected[2][3] = {{3.F, 2.75F, 2.75F}, {4.F, 5.F, 2.75F}};
   for (size_t i_y = 0; i_y < plane.shape(0); ++i_y)
   {
     for (size_t i_x = 0; i_x < plane.shape(1); ++i_x)
     {
       CHECK(noise_map_0(i_y, i_x) == Catch::Approx(noise_map_1(i_y, i_x)).epsilon(1e-6));
-      CHECK(noise_map_0(i_y, i_x) == Catch::Approx(std::abs(plane(i_y, i_x))).epsilon(1e-6));
+      CHECK(noise_map_0(i_y, i_x) == Catch::Approx(expected[i_y][i_x]).epsilon(1e-6));
     }
   }
 }
 
-TEST_CASE("compute_rms_noise_map even boxsize truncates to the same radius as boxsize-1", "[compute_rms_noise_map]")
+TEST_CASE("compute_rms_noise_map even boxsize windows are one pixel narrower than the next odd boxsize",
+         "[compute_rms_noise_map]")
 {
-  // boxsize=2 and boxsize=3 both give radius=1 (2/2 == 3/2 == 1 under integer division).
+  // For an even boxsize, the window is [i - boxsize/2, i + (boxsize - boxsize/2)) -- boxsize pixels total,
+  // matching scipy.ndimage.uniform_filter's asymmetric-for-even-size convention (one fewer pixel on the
+  // trailing side than a symmetric radius=boxsize/2 window would have). So boxsize=2 is genuinely narrower
+  // than boxsize=3, not equivalent to it.
   const auto plane = make_plane({{1.F, 2.F, 3.F}, {4.F, 5.F, 6.F}, {7.F, 8.F, 9.F}});
   const auto noise_map_2 = compute_rms_noise_map(plane, 2);
-  const auto noise_map_3 = compute_rms_noise_map(plane, 3);
 
+  // Computed independently in Python with the same clamped-window formula, floored to the map's own median.
+  const float expected[3][3] = {{3.39116499F, 3.39116499F, 3.39116499F},
+                                {3.39116499F, 3.39116499F, 4.30116263F},
+                                {5.70087713F, 6.20483682F, 7.17635005F}};
   for (size_t i_y = 0; i_y < plane.shape(0); ++i_y)
   {
     for (size_t i_x = 0; i_x < plane.shape(1); ++i_x)
     {
-      CHECK(noise_map_2(i_y, i_x) == Catch::Approx(noise_map_3(i_y, i_x)).epsilon(1e-6));
+      CHECK(noise_map_2(i_y, i_x) == Catch::Approx(expected[i_y][i_x]).epsilon(1e-5));
     }
   }
 }
@@ -159,4 +173,36 @@ TEST_CASE("compute_rms_noise_map on a uniform-value plane returns that constant 
   check_uniform(5, 9, 7.25F, 1);    // rectangular plane, boxsize=1
   check_uniform(20, 20, 1000.F, 7); // large plane, large value, wider box
   check_uniform(3, 8, 0.001F, 4);   // small value, even boxsize
+}
+
+TEST_CASE("compute_rms_noise_map should floor below-median values up to the median, matching "
+         "breifast.py's make_noise_map(method='std')",
+         "[compute_rms_noise_map]")
+{
+  // Check that the median noise value flooring is effectively done as `noise[noise < median_noise] = median_noise`
+  // does.
+  // Test based on a Python-generated reference.
+  const auto plane = make_plane({
+      {1.F, 1.F, 1.F, 9.F, 9.F},
+      {1.F, 1.F, 1.F, 9.F, 9.F},
+      {1.F, 1.F, 1.F, 1.F, 1.F},
+      {9.F, 9.F, 1.F, 1.F, 1.F},
+      {9.F, 9.F, 1.F, 1.F, 1.F},
+  });
+  const auto noise_map = compute_rms_noise_map(plane, 3);
+
+  const float expected[5][5] = {
+      {4.33333333F, 4.33333333F, 5.25991128F, 7.37111480F, 9.00000000F},
+      {4.33333333F, 4.33333333F, 4.33333333F, 6.04611905F, 7.37111480F},
+      {5.25991128F, 4.33333333F, 4.33333333F, 4.33333333F, 5.25991128F},
+      {7.37111480F, 6.04611905F, 4.33333333F, 4.33333333F, 4.33333333F},
+      {9.00000000F, 7.37111480F, 5.25991128F, 4.33333333F, 4.33333333F},
+  };
+  for (size_t i_y = 0; i_y < 5; ++i_y)
+  {
+    for (size_t i_x = 0; i_x < 5; ++i_x)
+    {
+      CHECK(noise_map(i_y, i_x) == Catch::Approx(expected[i_y][i_x]).epsilon(1e-5));
+    }
+  }
 }

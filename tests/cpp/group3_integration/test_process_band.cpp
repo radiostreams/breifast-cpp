@@ -11,8 +11,7 @@ TEST_CASE("process_band detects a single clear point-source island with correct 
          "fields",
          "[process_band]")
 {
-  // 7x7 plane, single-channel band: background = 1.0 everywhere except the center pixel (3,3) = 50.0. The peak is a
-  // 1-in-49 outlier, so it can never move the median -- keeping noise_global_mad trivially hand-computable.
+  // Background 1.0, peak (3,3)=50; a 1-in-49 outlier can't move the median.
   auto plane_rows = std::vector<std::vector<float>>(7, std::vector<float>(7, 1.F));
   plane_rows[3][3] = 50.F;
   xt::xarray<float> plane_2d;
@@ -46,59 +45,53 @@ TEST_CASE("process_band detects a single clear point-source island with correct 
 
   PlaneConfig config;
   config.subtract_mean = false;
-  config.use_rms_noise_estimator = false; // Global-MAD noise -> a single broadcast constant, trivial to hand-verify;
-                                          // the RMS-box estimator is already covered directly by
-                                          // compute_rms_noise_map's own tests.
+  config.use_rms_noise_estimator = false; // global-MAD noise, trivial to verify
   config.boxsize = 3;
-  config.inner_boxsize = 0; // Zeroes only the postage stamp's own center pixel, leaving its 8-neighbor donut intact.
+  config.inner_boxsize = 0; // zeroes only the center pixel, donut intact
   config.reject_noise_threshold = 0.F;
-  config.threshold = 5.F; // Background snr ~0.67 fails this; the center's snr ~33.7 clears it -- exactly one
-                          // size-1 island.
+  config.threshold = 5.F; // clears the peak's snr ~33.7, not the background's ~0.67
   config.beam_size_enabled = false;
 
   ProcessPlaneResult result;
   process_band(item, group, band, config, result);
 
-  REQUIRE(result.detections.peak_y.size() == 1);
-  CHECK(result.detections.peak_y[0] == 3);
-  CHECK(result.detections.peak_x[0] == 3);
-  CHECK(result.detections.island_size[0] == 1);
-  CHECK(result.detections.stokes_label[0] == "I");
-  CHECK(result.detections.band_label[0] == "bandA");
+  REQUIRE(result.detections.peak_y().size() == 1);
+  CHECK(result.detections.peak_y()[0] == 3);
+  CHECK(result.detections.peak_x()[0] == 3);
+  CHECK(result.detections.island_size()[0] == 1);
+  CHECK(result.detections.stokes_label()[0] == "I");
+  CHECK(result.detections.band_label()[0] == "bandA");
 
-  // noise_global_mad = median(|plane|) * 1.4826 = 1.0 * 1.4826, since only 1 of 49 pixels differs from 1.0.
-  const float expected_noise = 1.4826F;
-  CHECK(result.detections.local_noise[0] == Catch::Approx(expected_noise).epsilon(1e-4));
-  CHECK(result.detections.local_noise_median_ratio[0] == Catch::Approx(1.F).epsilon(1e-4));
+  const float expected_noise = 1.4826F; // median(|plane|) * 1.4826
+  CHECK(result.detections.local_noise()[0] == Catch::Approx(expected_noise).epsilon(1e-4));
+  CHECK(result.detections.local_noise_median_ratio()[0] == Catch::Approx(1.F).epsilon(1e-4));
+
+  // median_noises collects one entry per band processed; with a uniform selfnoise_offset/dde_noise
+  // of zero, this band's noisemap is uniformly the scalar global-MAD estimate, so its median equals
+  // that same expected_noise value.
+  REQUIRE(result.median_noises.size() == 1);
+  CHECK(result.median_noises[0] == Catch::Approx(expected_noise).epsilon(1e-4));
 
   const float expected_snr = 50.F / expected_noise;
-  CHECK(result.detections.signal_to_noise[0] == Catch::Approx(expected_snr).epsilon(1e-4));
-  // Uniform background -> the postage stamp's 8-neighbor donut is all identical values, so its stddev is exactly 0
-  // and signal_to_noise_rms hits the rms==0 guard.
-  CHECK(result.detections.signal_to_noise_rms[0] == 0.F);
-  CHECK(result.detections.signal_to_noise_local_mad[0] == Catch::Approx(expected_snr).epsilon(1e-4));
-  CHECK(result.detections.signal_to_noise_global_mad[0] == Catch::Approx(expected_snr).epsilon(1e-4));
+  CHECK(result.detections.signal_to_noise()[0] == Catch::Approx(expected_snr).epsilon(1e-4));
+  CHECK(result.detections.signal_to_noise_rms()[0] == 0.F); // uniform donut, stddev=0, rms guard
+  CHECK(result.detections.signal_to_noise_local_mad()[0] == Catch::Approx(expected_snr).epsilon(1e-4));
+  CHECK(result.detections.signal_to_noise_global_mad()[0] == Catch::Approx(expected_snr).epsilon(1e-4));
 
-  // signal_to_noise_extended_box = flux * max_to_std_ratio_value(): computed via the same config call the
-  // production code uses, rather than hardcoding a literal -- that ratio is itself the output of a numerical
-  // search Group 1's max_to_std_ratio tests already pin down independently.
-  const float expected_extended_box = 50.F * config.max_to_std_ratio_value();
-  CHECK(result.detections.signal_to_noise_extended_box[0] == Catch::Approx(expected_extended_box).epsilon(1e-4));
+  const float expected_extended_box = 50.F * config.max_to_std_ratio_value(); // ratio pinned by Group 1 tests
+  CHECK(result.detections.signal_to_noise_extended_box()[0] == Catch::Approx(expected_extended_box).epsilon(1e-4));
 
-  CHECK(result.detections.self_noise[0] == Catch::Approx(2.5F));
-  CHECK(result.detections.excess_noise_factor[0] == Catch::Approx(1.F).epsilon(1e-4));
-  CHECK(result.detections.beam_chi2[0] == 0.F);
-  CHECK(result.detections.boost[0] == 0.F);
+  CHECK(result.detections.self_noise()[0] == Catch::Approx(2.5F));
+  CHECK(result.detections.excess_noise_factor()[0] == Catch::Approx(1.F).epsilon(1e-4));
+  CHECK(result.detections.beam_chi2()[0] == 0.F);
+  CHECK(result.detections.boost()[0] == 0.F);
 }
 
 TEST_CASE("process_band zero-pads postage stamps correctly for islands touching all four plane edges",
          "[process_band]")
 {
-  // 5x5 plane, boxsize=3 (radius=1, pad=2). Top-left peak (0,0)=50 pulls its postage stamp's top/left edges into
-  // padded index 1 (< pad) -- the duplicate-condition bug fixed earlier. Bottom-right peak (4,4)=60 pulls its
-  // stamp's bottom/right edges into padded index 7 (== pad+n_y == pad+n_x) -- the off-by-one bug fixed just now.
-  // Both islands share the same decoy neighbor set {2,4,6} by design, so their noise-derived stats are directly
-  // comparable and any padding regression (wrapped/garbage data instead of zeros) would corrupt both differently.
+  // 5x5 plane, boxsize=3 (pad=2). Top-left peak exercises the pad-boundary duplicate-condition bug; bottom-right
+  // exercises the off-by-one bug. Same decoy neighbor set {2,4,6} on both, so a padding regression is comparable.
   xt::xarray<float> plane_2d;
   plane_2d.resize({5, 5});
   plane_2d.fill(1.F);
@@ -125,7 +118,7 @@ TEST_CASE("process_band zero-pads postage stamps correctly for islands touching 
   group.selfnoise_offset.fill(0.F);
   group.selfnoise_raw.resize({5, 5});
   group.selfnoise_raw.fill(2.5F);
-  group.selfnoise_raw(0, 0) = 1.1F; // distinct per-peak values, to prove each detection reads its own pixel.
+  group.selfnoise_raw(0, 0) = 1.1F; // distinct per-peak values
   group.selfnoise_raw(4, 4) = 9.9F;
   group.dde_noise.resize({5, 5});
   group.dde_noise.fill(0.F);
@@ -137,22 +130,19 @@ TEST_CASE("process_band zero-pads postage stamps correctly for islands touching 
   config.boxsize = 3;
   config.inner_boxsize = 0;
   config.reject_noise_threshold = 0.F;
-  // Peaks (snr ~33.7, ~40.5) clear this; every decoy/background value (max snr ~4.05) doesn't -- exactly two
-  // size-1 islands.
-  config.threshold = 5.F;
+  config.threshold = 5.F; // clears both peaks (snr ~33.7, ~40.5), not the decoys (max ~4.05)
   config.beam_size_enabled = false;
 
   ProcessPlaneResult result;
   process_band(item, group, band, config, result);
 
-  REQUIRE(result.detections.peak_y.size() == 2);
-  // Detection order isn't guaranteed (islands come from an unordered_map), so look each one up by its peak
-  // coordinates rather than assuming index 0/1.
+  REQUIRE(result.detections.peak_y().size() == 2);
+  // detection order isn't guaranteed (unordered_map)
   const auto find_index = [&](long peak_y, long peak_x)
   {
-    for (size_t i = 0; i < result.detections.peak_y.size(); ++i)
+    for (size_t i = 0; i < result.detections.peak_y().size(); ++i)
     {
-      if (result.detections.peak_y[i] == peak_y && result.detections.peak_x[i] == peak_x)
+      if (result.detections.peak_y()[i] == peak_y && result.detections.peak_x()[i] == peak_x)
       {
         return i;
       }
@@ -168,37 +158,35 @@ TEST_CASE("process_band zero-pads postage stamps correctly for islands touching 
   const float expected_lmad = 5.9304F;     // median({2,4,6}) * 1.4826.
   const auto ratio = config.max_to_std_ratio_value();
 
-  CHECK(result.detections.island_size[tl] == 1);
-  CHECK(result.detections.local_noise[tl] == Catch::Approx(expected_noise).epsilon(1e-4));
-  CHECK(result.detections.signal_to_noise[tl] == Catch::Approx(50.F / expected_noise).epsilon(1e-4));
-  CHECK(result.detections.signal_to_noise_rms[tl] == Catch::Approx(50.F / expected_stddev).epsilon(1e-4));
-  CHECK(result.detections.signal_to_noise_local_mad[tl] == Catch::Approx(50.F / expected_lmad).epsilon(1e-4));
-  CHECK(result.detections.signal_to_noise_global_mad[tl] == Catch::Approx(50.F / expected_noise).epsilon(1e-4));
-  CHECK(result.detections.signal_to_noise_extended_box[tl] == Catch::Approx(50.F * ratio / 6.F).epsilon(1e-4));
-  CHECK(result.detections.self_noise[tl] == Catch::Approx(1.1F));
+  CHECK(result.detections.island_size()[tl] == 1);
+  CHECK(result.detections.local_noise()[tl] == Catch::Approx(expected_noise).epsilon(1e-4));
+  CHECK(result.detections.signal_to_noise()[tl] == Catch::Approx(50.F / expected_noise).epsilon(1e-4));
+  CHECK(result.detections.signal_to_noise_rms()[tl] == Catch::Approx(50.F / expected_stddev).epsilon(1e-4));
+  CHECK(result.detections.signal_to_noise_local_mad()[tl] == Catch::Approx(50.F / expected_lmad).epsilon(1e-4));
+  CHECK(result.detections.signal_to_noise_global_mad()[tl] == Catch::Approx(50.F / expected_noise).epsilon(1e-4));
+  CHECK(result.detections.signal_to_noise_extended_box()[tl] == Catch::Approx(50.F * ratio / 6.F).epsilon(1e-4));
+  CHECK(result.detections.self_noise()[tl] == Catch::Approx(1.1F));
 
-  CHECK(result.detections.island_size[br] == 1);
-  CHECK(result.detections.local_noise[br] == Catch::Approx(expected_noise).epsilon(1e-4));
-  CHECK(result.detections.signal_to_noise[br] == Catch::Approx(60.F / expected_noise).epsilon(1e-4));
-  CHECK(result.detections.signal_to_noise_rms[br] == Catch::Approx(60.F / expected_stddev).epsilon(1e-4));
-  CHECK(result.detections.signal_to_noise_local_mad[br] == Catch::Approx(60.F / expected_lmad).epsilon(1e-4));
-  CHECK(result.detections.signal_to_noise_global_mad[br] == Catch::Approx(60.F / expected_noise).epsilon(1e-4));
-  CHECK(result.detections.signal_to_noise_extended_box[br] == Catch::Approx(60.F * ratio / 6.F).epsilon(1e-4));
-  CHECK(result.detections.self_noise[br] == Catch::Approx(9.9F));
+  CHECK(result.detections.island_size()[br] == 1);
+  CHECK(result.detections.local_noise()[br] == Catch::Approx(expected_noise).epsilon(1e-4));
+  CHECK(result.detections.signal_to_noise()[br] == Catch::Approx(60.F / expected_noise).epsilon(1e-4));
+  CHECK(result.detections.signal_to_noise_rms()[br] == Catch::Approx(60.F / expected_stddev).epsilon(1e-4));
+  CHECK(result.detections.signal_to_noise_local_mad()[br] == Catch::Approx(60.F / expected_lmad).epsilon(1e-4));
+  CHECK(result.detections.signal_to_noise_global_mad()[br] == Catch::Approx(60.F / expected_noise).epsilon(1e-4));
+  CHECK(result.detections.signal_to_noise_extended_box()[br] == Catch::Approx(60.F * ratio / 6.F).epsilon(1e-4));
+  CHECK(result.detections.self_noise()[br] == Catch::Approx(9.9F));
 }
 
 TEST_CASE("process_band computes a weighted, unequally-weighted multi-channel mean, with subtract_mean off and on",
          "[process_band]")
 {
-  // 5x5 plane, 2-channel band, weights=[3,1] (deliberately unequal -- a naive unweighted mean would give 40 at the
-  // peak instead of the correct weighted 50, so this directly catches that bug class). Peak away from any edge, so
-  // its postage stamp never touches padding (already covered by the border test above).
+  // 5x5 plane, 2-channel band, weights=[3,1] unequal -- naive unweighted mean would give 40 instead of 50.
   xt::xarray<float> stokes_cube;
   stokes_cube.resize({2, 5, 5});
   xt::view(stokes_cube, 0) = 1.F;
   xt::view(stokes_cube, 1) = 1.F;
   stokes_cube(0, 2, 2) = 60.F;
-  stokes_cube(1, 2, 2) = 20.F; // weighted mean at the peak: (3*60 + 1*20) / 4 = 50.
+  stokes_cube(1, 2, 2) = 20.F; // weighted mean: (3*60+1*20)/4 = 50
 
   PlaneBatchItem item;
   item.stokes_cube = stokes_cube;
@@ -227,27 +215,25 @@ TEST_CASE("process_band computes a weighted, unequally-weighted multi-channel me
   config.beam_size_enabled = false;
 
   const auto ratio = config.max_to_std_ratio_value();
-  const float expected_noise = 1.4826F; // median(|plane|) is unmoved by a 1-in-25 outlier, in both parts below.
+  const float expected_noise = 1.4826F; // unmoved by the 1-in-25 outlier, in both parts below
 
-  // Part A: subtract_mean off.
+  // subtract_mean off
   {
     config.subtract_mean = false;
     ProcessPlaneResult result;
     process_band(item, group, band, config, result);
 
-    REQUIRE(result.detections.peak_y.size() == 1);
-    CHECK(result.detections.peak_y[0] == 2);
-    CHECK(result.detections.peak_x[0] == 2);
-    CHECK(result.detections.signal_to_noise[0] == Catch::Approx(50.F / expected_noise).epsilon(1e-4));
-    CHECK(result.detections.signal_to_noise_global_mad[0] == Catch::Approx(50.F / expected_noise).epsilon(1e-4));
-    CHECK(result.detections.signal_to_noise_rms[0] == 0.F); // uniform-1.0 donut, same as the first test's case.
-    CHECK(result.detections.signal_to_noise_extended_box[0] == Catch::Approx(50.F * ratio).epsilon(1e-4));
+    REQUIRE(result.detections.peak_y().size() == 1);
+    CHECK(result.detections.peak_y()[0] == 2);
+    CHECK(result.detections.peak_x()[0] == 2);
+    CHECK(result.detections.signal_to_noise()[0] == Catch::Approx(50.F / expected_noise).epsilon(1e-4));
+    CHECK(result.detections.signal_to_noise_global_mad()[0] == Catch::Approx(50.F / expected_noise).epsilon(1e-4));
+    CHECK(result.detections.signal_to_noise_rms()[0] == 0.F); // uniform donut
+    CHECK(result.detections.signal_to_noise_extended_box()[0] == Catch::Approx(50.F * ratio).epsilon(1e-4));
   }
 
-  // Part B: subtract_mean on. mean_image = 4.0 on channel 0, 0.0 on channel 1, uniform over the grid,
-  // inv_band_size=0.5 -> subtracts exactly 0.5*(4+0)=2.0 at every pixel: background 1.0 -> -1.0, peak 50 -> 48. A
-  // clean, exact delta from part A isolates the subtraction's effect from everything else (noise stays 1.4826,
-  // since abs() doesn't care about the sign flip on the background).
+  // subtract_mean on: mean_image=[4,0], inv_band_size=0.5 -> subtracts 2.0 everywhere: background 1.0->-1.0, peak
+  // 50->48.
   {
     xt::xarray<float> mean_image;
     mean_image.resize({2, 5, 5});
@@ -258,13 +244,13 @@ TEST_CASE("process_band computes a weighted, unequally-weighted multi-channel me
     ProcessPlaneResult result;
     process_band(item, group, band, config, result);
 
-    REQUIRE(result.detections.peak_y.size() == 1);
-    CHECK(result.detections.peak_y[0] == 2);
-    CHECK(result.detections.peak_x[0] == 2);
-    CHECK(result.detections.signal_to_noise[0] == Catch::Approx(48.F / expected_noise).epsilon(1e-4));
-    CHECK(result.detections.signal_to_noise_global_mad[0] == Catch::Approx(48.F / expected_noise).epsilon(1e-4));
-    CHECK(result.detections.signal_to_noise_rms[0] == 0.F); // uniform-(-1.0) donut: still identical, still 0.
-    CHECK(result.detections.signal_to_noise_extended_box[0] == Catch::Approx(48.F * ratio).epsilon(1e-4));
+    REQUIRE(result.detections.peak_y().size() == 1);
+    CHECK(result.detections.peak_y()[0] == 2);
+    CHECK(result.detections.peak_x()[0] == 2);
+    CHECK(result.detections.signal_to_noise()[0] == Catch::Approx(48.F / expected_noise).epsilon(1e-4));
+    CHECK(result.detections.signal_to_noise_global_mad()[0] == Catch::Approx(48.F / expected_noise).epsilon(1e-4));
+    CHECK(result.detections.signal_to_noise_rms()[0] == 0.F); // uniform donut
+    CHECK(result.detections.signal_to_noise_extended_box()[0] == Catch::Approx(48.F * ratio).epsilon(1e-4));
   }
 }
 
@@ -272,14 +258,11 @@ TEST_CASE("process_band matches an independent Python reference on a wide-scale 
          "estimator",
          "[process_band]")
 {
-  // 12x12 plane, 1 channel, numpy seed=33, background uniform(-10,10), overwritten with 4 well-separated interior
-  // point sources of alternating sign: (2,2)=70, (2,9)=-65, (9,2)=55, (9,9)=-80. boxsize=5/inner_boxsize=1/
-  // threshold=4.0 keeps the background's max |snr| (~1.88) comfortably below threshold, giving exactly 4 clean
-  // size-1 islands -- confirmed by an independent Python reference script (make_noise_map's box-RMS formula,
-  // noisemap/excess_noise_factor combination, and postage-stamp extreme/rms/lmad, all re-derived from breifast.py's
-  // algorithm, not from this C++ code). First Group 3 test to exercise the real windowed-RMS noise estimator
-  // in-line (compute_rms_noise_map was previously only tested standalone in Group 1) and the first with non-1.0
-  // excess_noise_factor / non-trivial selfnoise_scale_factor+ddenoise_scaling_factor combination.
+  // 12x12 plane, numpy seed=33, background uniform(-10,10), 4 point sources of alternating sign at (2,2)=70,
+  // (2,9)=-65, (9,2)=55, (9,9)=-80. Only 3 of the 4 are actually detected: (9,2)=55 sits in a region whose
+  // windowed-RMS noise is below the map's own median, so once compute_rms_noise_map floors it up to the median
+  // (matching breifast.py's make_noise_map(method='std')), its snr drops under threshold=4.0. Expected values
+  // cross-checked against an independent Python reference script.
   constexpr size_t n = 12;
   const auto fill_from_flat = [](xt::xarray<float> &arr, const std::array<float, n * n> &flat)
   {
@@ -431,7 +414,7 @@ TEST_CASE("process_band matches an independent Python reference on a wide-scale 
 
   PlaneConfig config;
   config.subtract_mean = false;
-  config.use_rms_noise_estimator = true; // first Group 3 test exercising the real windowed-RMS estimator in-line.
+  config.use_rms_noise_estimator = true;
   config.boxsize = 5;
   config.inner_boxsize = 1;
   config.ddenoise_scaling_factor = 0.7F;
@@ -442,12 +425,12 @@ TEST_CASE("process_band matches an independent Python reference on a wide-scale 
   ProcessPlaneResult result;
   process_band(item, group, band, config, result);
 
-  REQUIRE(result.detections.peak_y.size() == 4);
+  REQUIRE(result.detections.peak_y().size() == 3);
   const auto find_index = [&](long peak_y, long peak_x)
   {
-    for (size_t i = 0; i < result.detections.peak_y.size(); ++i)
+    for (size_t i = 0; i < result.detections.peak_y().size(); ++i)
     {
-      if (result.detections.peak_y[i] == peak_y && result.detections.peak_x[i] == peak_x)
+      if (result.detections.peak_y()[i] == peak_y && result.detections.peak_x()[i] == peak_x)
       {
         return i;
       }
@@ -465,36 +448,370 @@ TEST_CASE("process_band matches an independent Python reference on a wide-scale 
         signal_to_noise_local_mad, signal_to_noise_global_mad, self_noise, excess_noise_factor;
   };
 
-  // Expected values from the independent Python reference (see test file header comment); `extreme` is the
-  // postage-stamp max-abs after inner-box zeroing -- signal_to_noise_extended_box's expected value is derived from
-  // it via the live config.max_to_std_ratio_value() call below, same pattern as the border-padding test above.
+  // `extreme` is the postage-stamp max-abs after inner-box zeroing, from the Python reference.
   const std::vector<ExpectedIsland> expected{
-      {2, 2, 70.F, 1.521881962e+01F, 1.006362200e+00F, 4.599568367e+00F, 1.384368904e+01F, 8.408848763e+00F,
-       9.612234116e+00F, 1.014038944e+01F, -1.508080363e-01F, 1.004153848e+00F},
-      {2, 9, -65.F, 1.407065201e+01F, 9.304382801e-01F, 4.619544506e+00F, -1.101443786e+01F, 9.365844727e+00F,
-       -7.683967113e+00F, -9.416075706e+00F, 2.255144596e+00F, 1.002945423e+00F},
-      {9, 2, 55.F, 1.225867271e+01F, 8.106190562e-01F, 4.486619473e+00F, 1.071099239e+01F, 9.352631569e+00F,
-       8.184073448e+00F, 7.967448711e+00F, 3.185455203e-01F, 1.001738787e+00F},
-      {9, 9, -80.F, 1.681679916e+01F, 1.112030506e+00F, 4.757147789e+00F, -1.823739351e+01F, 9.277424812e+00F,
-       -1.654992867e+01F, -1.158901596e+01F, -2.617845058e+00F, 1.006769300e+00F},
+      {2, 2, 70.0F, 1.521881962e+01F, 1.002321009e+00F, 4.599568280e+00F, 1.384368904e+01F, 8.408848763e+00F,
+       9.612234453e+00F, 1.014038889e+01F, -1.508080363e-01F, 1.004153925e+00F},
+      {2, 9, -65.0F, 1.506541650e+01F, 9.922177823e-01F, 4.314517293e+00F, -1.101443786e+01F, 9.365844727e+00F,
+       -7.683966783e+00F, -9.416075394e+00F, 2.255144596e+00F, 1.002567825e+00F},
+      {9, 9, -80.0F, 1.681679822e+01F, 1.107564881e+00F, 4.757148118e+00F, -1.823739352e+01F, 9.277424812e+00F,
+       -1.654992886e+01F, -1.158901587e+01F, -2.617845058e+00F, 1.006769294e+00F},
   };
 
   for (const auto &e : expected)
   {
     const auto i = find_index(e.peak_y, e.peak_x);
-    CHECK(result.detections.island_size[i] == 1);
-    CHECK(result.detections.local_noise[i] == Catch::Approx(e.local_noise).epsilon(1e-4));
-    CHECK(result.detections.local_noise_median_ratio[i] == Catch::Approx(e.local_noise_median_ratio).epsilon(1e-4));
-    CHECK(result.detections.signal_to_noise[i] == Catch::Approx(e.signal_to_noise).epsilon(1e-4));
-    CHECK(result.detections.signal_to_noise_rms[i] == Catch::Approx(e.signal_to_noise_rms).epsilon(1e-4));
+    CHECK(result.detections.island_size()[i] == 1);
+    CHECK(result.detections.local_noise()[i] == Catch::Approx(e.local_noise).epsilon(1e-4));
+    CHECK(result.detections.local_noise_median_ratio()[i] == Catch::Approx(e.local_noise_median_ratio).epsilon(1e-4));
+    CHECK(result.detections.signal_to_noise()[i] == Catch::Approx(e.signal_to_noise).epsilon(1e-4));
+    CHECK(result.detections.signal_to_noise_rms()[i] == Catch::Approx(e.signal_to_noise_rms).epsilon(1e-4));
     const auto expected_extended_box = e.flux * ratio / e.extreme;
-    CHECK(result.detections.signal_to_noise_extended_box[i] == Catch::Approx(expected_extended_box).epsilon(1e-4));
-    CHECK(result.detections.signal_to_noise_local_mad[i] == Catch::Approx(e.signal_to_noise_local_mad).epsilon(1e-4));
-    CHECK(result.detections.signal_to_noise_global_mad[i] ==
+    CHECK(result.detections.signal_to_noise_extended_box()[i] == Catch::Approx(expected_extended_box).epsilon(1e-4));
+    CHECK(result.detections.signal_to_noise_local_mad()[i] == Catch::Approx(e.signal_to_noise_local_mad).epsilon(1e-4));
+    CHECK(result.detections.signal_to_noise_global_mad()[i] ==
          Catch::Approx(e.signal_to_noise_global_mad).epsilon(1e-4));
-    CHECK(result.detections.self_noise[i] == Catch::Approx(e.self_noise).epsilon(1e-4));
-    CHECK(result.detections.excess_noise_factor[i] == Catch::Approx(e.excess_noise_factor).epsilon(1e-4));
-    CHECK(result.detections.beam_chi2[i] == 0.F);
-    CHECK(result.detections.boost[i] == 0.F);
+    CHECK(result.detections.self_noise()[i] == Catch::Approx(e.self_noise).epsilon(1e-4));
+    CHECK(result.detections.excess_noise_factor()[i] == Catch::Approx(e.excess_noise_factor).epsilon(1e-4));
+    CHECK(result.detections.beam_chi2()[i] == 0.F);
+    CHECK(result.detections.boost()[i] == 0.F);
+  }
+}
+
+TEST_CASE("process_band computes beam_chi2 via a fixed beam kernel, with the beam halfsize dominating padding",
+         "[process_band]")
+{
+  // boxsize=3 -> radius+1=2, but fixed_beam_halfsize=3 > 2, so pad = max(...) = 3 (beam kernel dominates).
+  xt::xarray<float> plane_2d;
+  plane_2d.resize({9, 9});
+  plane_2d.fill(1.F);
+  plane_2d(4, 4) = 50.F;
+
+  PlaneBatchItem item;
+  item.stokes_cube.resize({1, 9, 9});
+  xt::view(item.stokes_cube, 0) = plane_2d;
+  item.weights = xt::xarray<float>({1.F});
+  item.nonzero_channels = xt::xarray<bool>({true});
+  item.stokes_label = "I";
+
+  PlaneBatchGroup group;
+  group.accept_mask.resize({1, 9, 9});
+  group.accept_mask.fill(true);
+  group.selfnoise_offset.resize({9, 9});
+  group.selfnoise_offset.fill(0.F);
+  group.selfnoise_raw.resize({9, 9});
+  group.selfnoise_raw.fill(0.F);
+  group.dde_noise.resize({9, 9});
+  group.dde_noise.fill(0.F);
+
+  BandSlice band{.start = 0, .stop = 1, .selfnoise_scale_factor = 1.F, .label = "bandA"};
+
+  PlaneConfig config;
+  config.subtract_mean = false;
+  config.use_rms_noise_estimator = false;
+  config.boxsize = 3;
+  config.inner_boxsize = 0;
+  config.reject_noise_threshold = 0.F;
+  config.threshold = 5.F;
+  config.beam_size_enabled = true;
+  config.fixed_beam_halfsize = 3;
+  // uniform kernel -> fit collapses to mean(beam_sub_image), so chi2 is hand-derivable
+  xt::xarray<double> fixed_kernel;
+  fixed_kernel.resize({7, 7});
+  fixed_kernel.fill(1.0 / 49.0);
+  config.fixed_beam_kernel = fixed_kernel;
+
+  ProcessPlaneResult result;
+  process_band(item, group, band, config, result);
+
+  REQUIRE(result.detections.peak_y().size() == 1);
+  CHECK(result.detections.peak_y()[0] == 4);
+  CHECK(result.detections.peak_x()[0] == 4);
+  CHECK(result.detections.island_size()[0] == 1);
+
+  // fit = mean(48*1.0 + 50.0)/49 = 2.0; sum(diff^2) = 48*1^2 + 48^2 = 2352; extreme = 1.0 (uniform donut).
+  const float ratio = config.max_to_std_ratio_value();
+  const float expected_chi2 = 2352.F * ratio * ratio / 49.F;
+  CHECK(result.detections.beam_chi2()[0] == Catch::Approx(expected_chi2).epsilon(1e-4));
+
+  const float expected_extended_box = 50.F * ratio;
+  CHECK(result.detections.signal_to_noise_extended_box()[0] == Catch::Approx(expected_extended_box).epsilon(1e-4));
+}
+
+TEST_CASE("process_band computes beam_chi2 via the adaptive weighted-kernel path, with radius+1 dominating padding",
+         "[process_band]")
+{
+  // channel0=60, channel1=20, weights=[3,1] -> weighted flux 50.0. boxsize=9 -> radius+1=5, no fixed_beam_kernel so
+  // beam_kernel_halfsize comes from the unweighted mean of beam_major_axis (-> 2); pad = max(2,5) = 5, the other
+  // branch of that max() vs. the test above. Kernel shape itself uses the weighted (not unweighted) major/minor/angle.
+  constexpr size_t n = 13;
+  xt::xarray<float> channel0, channel1;
+  channel0.resize({n, n});
+  channel1.resize({n, n});
+  channel0.fill(1.F);
+  channel1.fill(1.F);
+  channel0(6, 6) = 60.F;
+  channel1(6, 6) = 20.F;
+
+  PlaneBatchItem item;
+  item.stokes_cube.resize({2, n, n});
+  xt::view(item.stokes_cube, 0) = channel0;
+  xt::view(item.stokes_cube, 1) = channel1;
+  item.weights = xt::xarray<float>({3.F, 1.F});
+  item.nonzero_channels = xt::xarray<bool>({true, true});
+  item.stokes_label = "I";
+  item.beam_major_axis = xt::xarray<float>({0.5F, 0.7F});
+  item.beam_minor_axis = xt::xarray<float>({0.3F, 0.5F});
+  item.beam_position_angle = xt::xarray<float>({0.1F, 0.5F});
+
+  PlaneBatchGroup group;
+  group.accept_mask.resize({2, n, n});
+  group.accept_mask.fill(true);
+  group.selfnoise_offset.resize({n, n});
+  group.selfnoise_offset.fill(0.F);
+  group.selfnoise_raw.resize({n, n});
+  group.selfnoise_raw.fill(3.3F);
+  group.dde_noise.resize({n, n});
+  group.dde_noise.fill(0.F);
+
+  BandSlice band{.start = 0, .stop = 2, .selfnoise_scale_factor = 1.F, .label = "bandA"};
+
+  PlaneConfig config;
+  config.subtract_mean = false;
+  config.use_rms_noise_estimator = false;
+  config.boxsize = 9;
+  config.inner_boxsize = 1;
+  config.reject_noise_threshold = 0.F;
+  config.threshold = 5.F;
+  config.beam_size_enabled = true; // fixed_beam_kernel unset -> adaptive weighted-kernel path
+
+  ProcessPlaneResult result;
+  process_band(item, group, band, config, result);
+
+  REQUIRE(result.detections.peak_y().size() == 1);
+  CHECK(result.detections.peak_y()[0] == 6);
+  CHECK(result.detections.peak_x()[0] == 6);
+  CHECK(result.detections.island_size()[0] == 1);
+  CHECK(result.detections.excess_noise_factor()[0] == Catch::Approx(1.F).epsilon(1e-4));
+
+  // recompute chi2 independently via the Group 1-validated build_gaussian_beam_kernel, not process_band's internals
+  const auto expected_kernel = build_gaussian_beam_kernel(/*halfsize=*/2, /*sigma_major=*/0.55F, /*sigma_minor=*/0.35F,
+                                                          /*rotate=*/0.2F);
+  xt::xarray<float> beam_sub_image;
+  beam_sub_image.resize({5, 5});
+  beam_sub_image.fill(1.F);
+  beam_sub_image(2, 2) = 50.F;
+
+  const float scale = xt::sum(beam_sub_image)() / xt::sum(expected_kernel)();
+  const xt::xarray<float> fit = expected_kernel * scale;
+  const xt::xarray<float> diff = beam_sub_image - fit;
+
+  const float ratio = config.max_to_std_ratio_value(); // extreme = 1.0 (uniform donut)
+  const float adjacent_noise = 1.F / ratio;
+  const float expected_chi2 = xt::sum(diff * diff)() / (adjacent_noise * adjacent_noise * 25.F);
+  CHECK(result.detections.beam_chi2()[0] == Catch::Approx(expected_chi2).epsilon(1e-4));
+
+  const float expected_extended_box = 50.F * ratio;
+  CHECK(result.detections.signal_to_noise_extended_box()[0] == Catch::Approx(expected_extended_box).epsilon(1e-4));
+  CHECK(result.detections.boost()[0] == 0.F);
+}
+
+TEST_CASE("process_band's beam_chi2, signal_to_noise_extended_box, signal_to_noise_rms and "
+         "signal_to_noise_local_mad all degrade to 0 (without crashing or dropping the island) when the "
+         "postage-stamp donut is entirely zeroed",
+         "[process_band]")
+{
+  // boxsize=5, inner_boxsize=2 (== radius) zeroes the entire sub_image, not just the center -> extreme=0,
+  // adjacent_noise=0, and donut (its nonzero subset) is empty too. Regression test for a segfault:
+  // xt::stddev/xt::median used to crash on that empty donut; now rms/lmad guard to 0.F instead.
+  xt::xarray<float> plane_2d;
+  plane_2d.resize({7, 7});
+  plane_2d.fill(1.F);
+  plane_2d(3, 3) = 50.F;
+
+  PlaneBatchItem item;
+  item.stokes_cube.resize({1, 7, 7});
+  xt::view(item.stokes_cube, 0) = plane_2d;
+  item.weights = xt::xarray<float>({1.F});
+  item.nonzero_channels = xt::xarray<bool>({true});
+  item.stokes_label = "I";
+
+  PlaneBatchGroup group;
+  group.accept_mask.resize({1, 7, 7});
+  group.accept_mask.fill(true);
+  group.selfnoise_offset.resize({7, 7});
+  group.selfnoise_offset.fill(0.F);
+  group.selfnoise_raw.resize({7, 7});
+  group.selfnoise_raw.fill(0.F);
+  group.dde_noise.resize({7, 7});
+  group.dde_noise.fill(0.F);
+
+  BandSlice band{.start = 0, .stop = 1, .selfnoise_scale_factor = 1.F, .label = "bandA"};
+
+  PlaneConfig config;
+  config.subtract_mean = false;
+  config.use_rms_noise_estimator = false;
+  config.boxsize = 5;
+  config.inner_boxsize = 2;
+  config.reject_noise_threshold = 0.F;
+  config.threshold = 5.F;
+  config.beam_size_enabled = true;
+  config.fixed_beam_halfsize = 1;
+  xt::xarray<double> fixed_kernel;
+  fixed_kernel.resize({3, 3});
+  fixed_kernel.fill(1.0 / 9.0);
+  config.fixed_beam_kernel = fixed_kernel;
+
+  ProcessPlaneResult result;
+  process_band(item, group, band, config, result);
+
+  REQUIRE(result.detections.peak_y().size() == 1);
+  CHECK(result.detections.peak_y()[0] == 3);
+  CHECK(result.detections.peak_x()[0] == 3);
+
+  CHECK(result.detections.signal_to_noise_extended_box()[0] == 0.F);
+  CHECK(result.detections.beam_chi2()[0] == 0.F);
+  CHECK(result.detections.signal_to_noise_rms()[0] == 0.F);
+  CHECK(result.detections.signal_to_noise_local_mad()[0] == 0.F);
+}
+
+TEST_CASE("process_band's boost preserves the sign of the island's largest-magnitude flux/baseline_flux ratio, "
+         "matching breifast.py's max(..., key=abs)",
+         "[process_band]")
+{
+  // 7x7 plane, background 1.0, adjacent pixels (3,3)=50 and (3,4)=40 merge into one 4-connected, size-2 island; the
+  // peak (largest |snr|) is (3,3), so flux=50. Expected values cross-checked against an independent Python
+  // reference reimplementing breifast.py's exact formula (see boost_ref.py): Part A -6.25, Part B 25.0.
+  xt::xarray<float> plane_2d;
+  plane_2d.resize({7, 7});
+  plane_2d.fill(1.F);
+  plane_2d(3, 3) = 50.F;
+  plane_2d(3, 4) = 40.F;
+
+  PlaneBatchItem item;
+  item.stokes_cube.resize({1, 7, 7});
+  xt::view(item.stokes_cube, 0) = plane_2d;
+  item.weights = xt::xarray<float>({1.F});
+  item.nonzero_channels = xt::xarray<bool>({true});
+  item.stokes_label = "I";
+
+  PlaneBatchGroup group;
+  group.accept_mask.resize({1, 7, 7});
+  group.accept_mask.fill(true);
+  group.selfnoise_offset.resize({7, 7});
+  group.selfnoise_offset.fill(0.F);
+  group.selfnoise_raw.resize({7, 7});
+  group.selfnoise_raw.fill(0.F);
+  group.dde_noise.resize({7, 7});
+  group.dde_noise.fill(0.F);
+
+  BandSlice band{.start = 0, .stop = 1, .selfnoise_scale_factor = 1.F, .label = "bandA"};
+
+  PlaneConfig config;
+  config.subtract_mean = false;
+  config.use_rms_noise_estimator = false;
+  config.boxsize = 3;
+  config.inner_boxsize = 0;
+  config.reject_noise_threshold = 0.F;
+  config.threshold = 5.F;
+  config.beam_size_enabled = false;
+
+  // Part A: the non-peak pixel (3,4) has the larger-magnitude ratio.
+  {
+    xt::xarray<float> baseline_flux;
+    baseline_flux.resize({7, 7});
+    baseline_flux.fill(0.F);
+    baseline_flux(3, 3) = 100.F;
+    baseline_flux(3, 4) = -8.F;
+    config.baseline_flux = baseline_flux;
+
+    ProcessPlaneResult result;
+    process_band(item, group, band, config, result);
+
+    REQUIRE(result.detections.peak_y().size() == 1);
+    CHECK(result.detections.peak_y()[0] == 3);
+    CHECK(result.detections.peak_x()[0] == 3);
+    CHECK(result.detections.island_size()[0] == 2);
+    CHECK(result.detections.boost()[0] == Catch::Approx(-6.25F).epsilon(1e-4));
+  }
+
+  // Part B: the peak pixel (3,3) has the larger-magnitude ratio. process_band overwrites item.stokes_cube with the
+  // computed snr when band.size()==1, so it must be reset to the original flux plane before this second call.
+  xt::view(item.stokes_cube, 0) = plane_2d;
+  {
+    xt::xarray<float> baseline_flux;
+    baseline_flux.resize({7, 7});
+    baseline_flux.fill(0.F);
+    baseline_flux(3, 3) = 2.F;
+    baseline_flux(3, 4) = -100.F;
+    config.baseline_flux = baseline_flux;
+
+    ProcessPlaneResult result;
+    process_band(item, group, band, config, result);
+
+    REQUIRE(result.detections.peak_y().size() == 1);
+    CHECK(result.detections.island_size()[0] == 2);
+    CHECK(result.detections.boost()[0] == Catch::Approx(25.F).epsilon(1e-4));
+  }
+}
+
+TEST_CASE("process_band returns no detections, without running any analysis, when nonzero_channels or accept_mask "
+         "is entirely false for the band",
+         "[process_band]")
+{
+  // Same plane as the first test (clear peak at (3,3)=50) -- would definitely produce a detection if analyzed, so
+  // an empty result here proves the early-exit guard fires, not that the peak got filtered out downstream.
+  xt::xarray<float> plane_2d;
+  plane_2d.resize({7, 7});
+  plane_2d.fill(1.F);
+  plane_2d(3, 3) = 50.F;
+
+  PlaneBatchItem item;
+  item.stokes_cube.resize({1, 7, 7});
+  xt::view(item.stokes_cube, 0) = plane_2d;
+  item.weights = xt::xarray<float>({1.F});
+  item.stokes_label = "I";
+
+  PlaneBatchGroup group;
+  group.accept_mask.resize({1, 7, 7});
+  group.accept_mask.fill(true);
+  group.selfnoise_offset.resize({7, 7});
+  group.selfnoise_offset.fill(0.F);
+  group.selfnoise_raw.resize({7, 7});
+  group.selfnoise_raw.fill(0.F);
+  group.dde_noise.resize({7, 7});
+  group.dde_noise.fill(0.F);
+
+  BandSlice band{.start = 0, .stop = 1, .selfnoise_scale_factor = 1.F, .label = "bandA"};
+
+  PlaneConfig config;
+  config.subtract_mean = false;
+  config.use_rms_noise_estimator = false;
+  config.boxsize = 3;
+  config.inner_boxsize = 0;
+  config.reject_noise_threshold = 0.F;
+  config.threshold = 5.F;
+  config.beam_size_enabled = false;
+
+  // Part A: nonzero_channels entirely false for the band.
+  {
+    item.nonzero_channels = xt::xarray<bool>({false});
+
+    ProcessPlaneResult result;
+    process_band(item, group, band, config, result);
+
+    CHECK(result.detections.peak_y().size() == 0);
+  }
+
+  // Part B: nonzero_channels true, but accept_mask entirely false.
+  {
+    item.nonzero_channels = xt::xarray<bool>({true});
+    group.accept_mask.fill(false);
+    xt::view(item.stokes_cube, 0) = plane_2d;
+
+    ProcessPlaneResult result;
+    process_band(item, group, band, config, result);
+
+    CHECK(result.detections.peak_y().size() == 0);
   }
 }

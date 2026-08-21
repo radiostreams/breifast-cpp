@@ -10,6 +10,7 @@ xtl_dep = dependency('xtl').as_system('system')
 xtensor_dep = dependency('xtensor').as_system('system')
 xtensor_python_dep = dependency('xtensor-python').as_system('system')
 numpy_dep = dependency('numpy').as_system('system')
+json_dep = dependency('nlohmann_json').as_system('system')
 
 tbb_version = '2022.3.0'
 tbb_tarball_sha256 = '01598a46c1162c27253a0de0236f520fd8ee8166e9ebb84a4243574f88e6e50a'
@@ -34,7 +35,7 @@ tbb_build = custom_target('tbb-build',
     'real="$(find @OUTPUT0@/lib* -maxdepth 1 -name "libtbb.so.12.*" ! -type l | head -1)"; ' +
     'cp "$real" @OUTPUT1@'],
   install : true,
-  install_dir : [false, py.get_install_dir()],
+  install_dir : [false, py.get_install_dir(), py.get_install_dir(), py.get_install_dir()],
 )
 
 tbb_install_dir = tbb_build[0].full_path()
@@ -93,9 +94,11 @@ test('breifast_helpers',
 
 bench = executable(
   'bench',
-  ['src/bench.cpp', tbb_build],
-  dependencies : [xtl_dep, xtensor_dep, tbb_dep, itt_dep],
+  ['src/bench.cpp', 'src/plane_lot_dispatch.cpp', 'src/islands.cpp', tbb_build],
+  include_directories : include_directories('src'),
+  dependencies : [xtl_dep, xtensor_dep, tbb_dep, tbbmalloc_dep, itt_dep, json_dep],
   link_args : ['-static-libstdc++', '-static-libgcc'],
+  build_by_default : false,
 )
 
 test_breifast_core_sources = [
@@ -103,18 +106,24 @@ test_breifast_core_sources = [
   'src/islands.cpp',
   'tests/cpp/group1_pure_functions/test_build_gaussian_beam_kernel.cpp',
   'tests/cpp/group1_pure_functions/test_compute_rms_noise_map.cpp',
+  'tests/cpp/group1_pure_functions/test_compute_rms_noise_map_precision.cpp',
   'tests/cpp/group1_pure_functions/test_max_to_std_ratio.cpp',
   'tests/cpp/group1_pure_functions/test_compute_spectral_variance_stats.cpp',
   'tests/cpp/group1_pure_functions/test_label_islands.cpp',
   'tests/cpp/group2_snr_filters/test_compute_snr_and_apply_filters.cpp',
   'tests/cpp/group3_integration/test_process_band.cpp',
+  'tests/cpp/group3_integration/test_process_plane.cpp',
+  'tests/cpp/group3_integration/test_process_band_random.cpp',
+  'tests/cpp/group4_dispatch/test_run_batch_core.cpp',
+  'tests/cpp/group4_dispatch/test_run_batch_core_random.cpp',
 ]
 
 test_breifast_core = executable(
   'test_breifast_core',
   test_breifast_core_sources + [tbb_build, catch2_build],
   include_directories : include_directories('src'),
-  dependencies : [xtl_dep, xtensor_dep, tbb_dep, catch2_dep, itt_dep],
+  dependencies : [xtl_dep, xtensor_dep, tbb_dep, catch2_dep, itt_dep, json_dep],
+  cpp_args : ['-DFIXTURES_DIR="' + meson.project_source_root() / 'tests' / 'fixtures' + '"'],
   link_args : ['-static-libstdc++', '-static-libgcc'],
 )
 test('breifast_core', test_breifast_core)

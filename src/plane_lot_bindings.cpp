@@ -60,13 +60,13 @@ PlaneBatchGroup to_plane_batch_group(const pybind11::dict &group_dict)
   return group;
 }
 
-std::optional<xt::xarray<float>> to_optional_xarray(const pybind11::object &obj)
+template <typename T> std::optional<xt::xarray<T>> to_optional_xarray(const pybind11::object &obj)
 {
   if (obj.is_none())
   {
     return std::nullopt;
   }
-  return xt::xarray<float>(obj.cast<xt::pyarray<float>>());
+  return xt::xarray<T>(obj.cast<xt::pyarray<T>>());
 }
 
 pybind11::object to_python_result(const ProcessPlaneResult &result)
@@ -81,22 +81,23 @@ pybind11::object to_python_result(const ProcessPlaneResult &result)
   out["median_noises"] = result.median_noises;
 
   pybind11::dict detections;
-  detections["peak_x"] = result.detections.peak_x;
-  detections["peak_y"] = result.detections.peak_y;
-  detections["island_size"] = result.detections.island_size;
-  detections["stokes_label"] = result.detections.stokes_label;
-  detections["band_label"] = result.detections.band_label;
-  detections["local_noise"] = result.detections.local_noise;
-  detections["local_noise_median_ratio"] = result.detections.local_noise_median_ratio;
-  detections["signal_to_noise"] = result.detections.signal_to_noise;
-  detections["signal_to_noise_rms"] = result.detections.signal_to_noise_rms;
-  detections["signal_to_noise_extended_box"] = result.detections.signal_to_noise_extended_box;
-  detections["signal_to_noise_local_mad"] = result.detections.signal_to_noise_local_mad;
-  detections["signal_to_noise_global_mad"] = result.detections.signal_to_noise_global_mad;
-  detections["self_noise"] = result.detections.self_noise;
-  detections["excess_noise_factor"] = result.detections.excess_noise_factor;
-  detections["beam_chi2"] = result.detections.beam_chi2;
-  detections["boost"] = result.detections.boost;
+  detections["peak_x"] = result.detections.peak_x();
+  detections["peak_y"] = result.detections.peak_y();
+  detections["island_size"] = result.detections.island_size();
+  detections["stokes_label"] = result.detections.stokes_label();
+  detections["band_label"] = result.detections.band_label();
+  detections["flux"] = result.detections.flux();
+  detections["local_noise"] = result.detections.local_noise();
+  detections["local_noise_median_ratio"] = result.detections.local_noise_median_ratio();
+  detections["signal_to_noise"] = result.detections.signal_to_noise();
+  detections["signal_to_noise_rms"] = result.detections.signal_to_noise_rms();
+  detections["signal_to_noise_extended_box"] = result.detections.signal_to_noise_extended_box();
+  detections["signal_to_noise_local_mad"] = result.detections.signal_to_noise_local_mad();
+  detections["signal_to_noise_global_mad"] = result.detections.signal_to_noise_global_mad();
+  detections["self_noise"] = result.detections.self_noise();
+  detections["excess_noise_factor"] = result.detections.excess_noise_factor();
+  detections["beam_chi2"] = result.detections.beam_chi2();
+  detections["boost"] = result.detections.boost();
   out["detections"] = detections;
 
   if (result.variance_stats)
@@ -129,7 +130,8 @@ pybind11::list process_lot(pybind11::list planes, pybind11::list stokes_groups, 
                            pybind11::object baseline_flux_obj, bool subtract_mean, bool use_rms_noise_estimator,
                            int boxsize, int inner_boxsize, float ddenoise_scaling_factor, float full_bandwidth,
                            float reject_noise_threshold, int histogram_detail, int max_sigma_bin, float threshold,
-                           bool save_stat_cubes, bool beam_size_enabled, int num_threads)
+                           bool save_stat_cubes, bool beam_size_enabled, pybind11::object fixed_beam_kernel_obj,
+                           int fixed_beam_halfsize, int num_threads)
 {
   LotBatch lot;
   for (auto plane_handle : planes)
@@ -154,7 +156,9 @@ pybind11::list process_lot(pybind11::list planes, pybind11::list stokes_groups, 
   config.threshold = threshold;
   config.save_stat_cubes = save_stat_cubes;
   config.beam_size_enabled = beam_size_enabled;
-  config.baseline_flux = to_optional_xarray(baseline_flux_obj);
+  config.fixed_beam_kernel = to_optional_xarray<double>(fixed_beam_kernel_obj);
+  config.fixed_beam_halfsize = fixed_beam_halfsize;
+  config.baseline_flux = to_optional_xarray<float>(baseline_flux_obj);
   for (auto band_slice_handle : band_slices)
   {
     config.band_slices.push_back(to_band_slice(band_slice_handle.cast<pybind11::dict>()));
@@ -183,7 +187,8 @@ void init_plane_lot_bindings(pybind11::module_ &m)
         pybind11::arg("ddenoise_scaling_factor") = 1.0f, pybind11::arg("full_bandwidth"),
         pybind11::arg("reject_noise_threshold") = 0.0f, pybind11::arg("histogram_detail") = 0,
         pybind11::arg("max_sigma_bin") = 200, pybind11::arg("threshold"), pybind11::arg("save_stat_cubes") = false,
-        pybind11::arg("beam_size_enabled") = false, pybind11::arg("num_threads") = 0);
+        pybind11::arg("beam_size_enabled") = false, pybind11::arg("fixed_beam_kernel") = pybind11::none(),
+        pybind11::arg("fixed_beam_halfsize") = 0, pybind11::arg("num_threads") = 0);
 }
 
 PYBIND11_MODULE(breifast_helpers, m)

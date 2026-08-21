@@ -1,4 +1,6 @@
 #include "islands.hpp"
+#include <xtensor/misc/xsort.hpp>
+#include <xtensor/reducers/xreducer.hpp>
 #include "plane_lot_dispatch.hpp"
 
 namespace breifast
@@ -61,7 +63,7 @@ inline xt::xarray<float> compute_rms_noise_map(const xt::xarray<float> &plane, l
   const long n_y = static_cast<long>(plane.shape(0));
   const long n_x = static_cast<long>(plane.shape(1));
 
-  xt::xarray<float> parts_sums;
+  thread_local xt::xarray<double> parts_sums;
   parts_sums.resize({static_cast<size_t>(n_y + 1), static_cast<size_t>(n_x + 1)});
   for (long i_y = 0; i_y <= n_y; ++i_y)
   {
@@ -80,7 +82,7 @@ inline xt::xarray<float> compute_rms_noise_map(const xt::xarray<float> &plane, l
     }
   }
 
-  xt::xarray<float> windows_sums;
+  thread_local xt::xarray<float> windows_sums;
   windows_sums.resize({static_cast<size_t>(n_y), static_cast<size_t>(n_x)});
 
   for (long i_y = 0; i_y < n_y; ++i_y)
@@ -88,15 +90,24 @@ inline xt::xarray<float> compute_rms_noise_map(const xt::xarray<float> &plane, l
     for (long i_x = 0; i_x < n_x; ++i_x)
     {
       const long min_x = std::max(i_x - boxsize / 2, 0L);
-      const long max_x = std::min(i_x + boxsize / 2 + 1, n_x);
+      const long max_x = std::min(i_x + std::max(boxsize, 1L) - boxsize / 2, n_x);
       const long min_y = std::max(i_y - boxsize / 2, 0L);
-      const long max_y = std::min(i_y + boxsize / 2 + 1, n_y);
+      const long max_y = std::min(i_y + std::max(boxsize, 1L) - boxsize / 2, n_y);
 
-      const float window_sum =
+      const double window_sum =
           parts_sums(max_y, max_x) - parts_sums(min_y, max_x) - parts_sums(max_y, min_x) + parts_sums(min_y, min_x);
-      const float count = static_cast<float>(max_y - min_y) * static_cast<float>(max_x - min_x);
+      const double count = static_cast<float>(max_y - min_y) * static_cast<float>(max_x - min_x);
 
       windows_sums(i_y, i_x) = std::sqrt(window_sum / count);
+    }
+  }
+
+  const auto median = xt::median(windows_sums);
+  for (long i_y = 0; i_y < n_y; ++i_y)
+  {
+    for (long i_x = 0; i_x < n_x; ++i_x)
+    {
+      windows_sums(i_y, i_x) = std::max(windows_sums(i_y, i_x), median);
     }
   }
 
@@ -333,6 +344,7 @@ inline void process_band(PlaneBatchItem &item, const PlaneBatchGroup &group, con
   {
     std::tie(noise_map, excess_noise_factor, median_noise) = combine(noise_global_mad);
   }
+  result.median_noises.push_back(median_noise);
 
   const auto snr = compute_snr_and_apply_filters(plane, noise_map, median_noise, inv_band_size, image_mask, group, band,
                                                  config, result);
@@ -345,9 +357,9 @@ inline void process_band(PlaneBatchItem &item, const PlaneBatchGroup &group, con
     return;
   }
 
-  const auto radius = config.boxsize / 2;
-  long pad;
-  long beam_kernel_halfsize = 0;
+  const size_t radius = config.boxsize / 2;
+  size_t pad;
+  size_t beam_kernel_halfsize = 0;
   if (config.beam_size_enabled)
   {
     if (config.fixed_beam_kernel.has_value())
@@ -406,8 +418,8 @@ inline void process_band(PlaneBatchItem &item, const PlaneBatchGroup &group, con
     }
   }
 
-  DetectionArrays detection_arrays;
-  detection_arrays.reserve(islands.peak_per_label.size());
+  auto &detection_arrays = result.detections;
+  detection_arrays.reserve(result.detections.size() + islands.peak_per_label.size());
   for (const auto &[label, island] : islands.peak_per_label)
   {
     const auto padded_y = island.coordinates.first + pad;
@@ -444,8 +456,8 @@ inline void process_band(PlaneBatchItem &item, const PlaneBatchGroup &group, con
     }
 
     const auto donut = xt::filter(sub_image, xt::not_equal(sub_image, 0.F));
-    const auto rms = xt::stddev(donut)();
-    const auto lmad = xt::median(xt::abs(donut)) * 1.4826F;
+    const auto rms = donut.size() == 0 ? 0.F : xt::stddev(donut)();
+    const auto lmad = donut.size() == 0 ? 0.F : xt::median(xt::abs(donut)) * 1.4826F;
 
     float boost_value = 0.F;
     if (config.baseline_flux.has_value())
@@ -456,25 +468,13 @@ inline void process_band(PlaneBatchItem &item, const PlaneBatchGroup &group, con
       boost_value = ratio(max_abs_index);
     }
 
-    detection_arrays.peak_y.push_back(island.coordinates.first);
-    detection_arrays.peak_x.push_back(island.coordinates.second);
-    detection_arrays.island_size.push_back(island.island_size);
-    detection_arrays.stokes_label.push_back(item.stokes_label);
-    detection_arrays.band_label.push_back(band.label);
-    detection_arrays.local_noise.push_back(island.local_noise);
-    detection_arrays.local_noise_median_ratio.push_back(island.local_noise / median_noise);
-    detection_arrays.signal_to_noise.push_back(island.value);
-    detection_arrays.signal_to_noise_rms.push_back(rms != 0.F ? flux / rms : 0.F);
-    detection_arrays.signal_to_noise_extended_box.push_back(signal_to_noise_extended_box);
-    detection_arrays.signal_to_noise_local_mad.push_back(lmad != 0.F ? flux / lmad : 0.F);
-    detection_arrays.signal_to_noise_global_mad.push_back(flux / noise_global_mad);
-    detection_arrays.self_noise.push_back(group.selfnoise_raw(island.coordinates.first, island.coordinates.second));
-    detection_arrays.excess_noise_factor.push_back(
-        excess_noise_factor(island.coordinates.first, island.coordinates.second));
-    detection_arrays.beam_chi2.push_back(beam_chi2_value);
-    detection_arrays.boost.push_back(boost_value);
+    detection_arrays.add(
+        island.coordinates.first, island.coordinates.second, island.island_size, item.stokes_label, band.label, flux,
+        island.local_noise, island.local_noise / median_noise, island.value, rms != 0.F ? flux / rms : 0.F,
+        signal_to_noise_extended_box, lmad != 0.F ? flux / lmad : 0.F, flux / noise_global_mad,
+        group.selfnoise_raw(island.coordinates.first, island.coordinates.second),
+        excess_noise_factor(island.coordinates.first, island.coordinates.second), beam_chi2_value, boost_value);
   }
-  result.detections = std::move(detection_arrays);
 }
 
 SpectralVarianceStats compute_spectral_variance_stats(const PlaneBatchItem &item, const PlaneBatchGroup &group,
@@ -522,9 +522,9 @@ SpectralVarianceStats compute_spectral_variance_stats(const PlaneBatchItem &item
 ProcessPlaneResult process_plane(const PlaneConfig &config, PlaneBatchItem &item, const PlaneBatchGroup &group)
 {
   ProcessPlaneResult result;
-  for (const auto &slice : config.band_slices)
+  for (auto it = config.band_slices.rbegin(); it != config.band_slices.rend(); ++it)
   {
-    process_band(item, group, slice, config, result);
+    process_band(item, group, *it, config, result);
   }
   if (item.nonzero_channels.size() > 1)
   {
@@ -560,7 +560,7 @@ std::vector<ProcessPlaneResult> run_batch_core(std::vector<PlaneBatchItem> &item
       }
     }
   };
-  const auto main_execution = [&]() { tbb::parallel_for(tbb::blocked_range<size_t>(0, items.size()), main_iteration); };
+  const auto main_execution = [&]() { tbb::parallel_for(tbb::blocked_range<size_t>(0, items.size()), main_iteration, tbb::simple_partitioner()); };
 
   task_arena.execute(main_execution);
 
