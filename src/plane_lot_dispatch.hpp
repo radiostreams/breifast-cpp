@@ -24,6 +24,7 @@
 #include <vector>
 
 #include <oneapi/tbb/concurrent_unordered_map.h>
+#include <oneapi/tbb/enumerable_thread_specific.h>
 #include <oneapi/tbb/mutex.h>
 #include <oneapi/tbb/parallel_for.h>
 #include <oneapi/tbb/task_arena.h>
@@ -120,9 +121,9 @@ public:
   float threshold = 0.f;
   bool save_stat_cubes = false;
   bool beam_size_enabled = false;
-  std::optional<xt::xarray<double>> fixed_beam_kernel;
+  std::optional<xt::xtensor<double, 2>> fixed_beam_kernel;
   long fixed_beam_halfsize = 0;
-  std::optional<xt::xarray<float>> baseline_flux;
+  std::optional<xt::xtensor<float, 2>> baseline_flux;
 
   /**
    * @brief max_to_std_ratio() for this config's postage-stamp box (`(2*(boxsize/2)+1)^2` pixels), cached per instance
@@ -141,11 +142,11 @@ public:
 struct PlaneBatchItem
 {
   size_t group_index = 0;
-  xt::xarray<float> stokes_cube;
-  xt::xarray<float> weights;
-  xt::xarray<bool> nonzero_channels;
+  xt::xtensor<float, 3> stokes_cube;
+  xt::xtensor<float, 1> weights;
+  xt::xtensor<bool, 1> nonzero_channels;
   std::string stokes_label;
-  std::optional<xt::xarray<float>> beam_major_axis, beam_minor_axis, beam_position_angle;
+  std::optional<xt::xtensor<float, 1>> beam_major_axis, beam_minor_axis, beam_position_angle;
 };
 
 /**
@@ -154,13 +155,13 @@ struct PlaneBatchItem
  */
 struct PlaneBatchGroup
 {
-  xt::xarray<bool> accept_mask;
-  std::optional<xt::xarray<float>> mean_image;
-  xt::xarray<float> selfnoise_offset;
-  xt::xarray<float> selfnoise_raw;
-  xt::xarray<float> dde_noise;
-  std::optional<xt::xarray<float>> flux_cutoff;
-  std::optional<xt::xarray<float>> snr_cutoff;
+  xt::xtensor<bool, 3> accept_mask;
+  std::optional<xt::xtensor<float, 3>> mean_image;
+  xt::xtensor<float, 2> selfnoise_offset;
+  xt::xtensor<float, 2> selfnoise_raw;
+  xt::xtensor<float, 2> dde_noise;
+  std::optional<xt::xtensor<float, 3>> flux_cutoff;
+  std::optional<xt::xtensor<float, 3>> snr_cutoff;
 };
 
 /**
@@ -332,11 +333,11 @@ public:
  */
 struct SpectralVarianceStats
 {
-  xt::xarray<float> sum_pow2;
-  xt::xarray<float> sum_pow3;
-  xt::xarray<float> sum_pow4;
-  xt::xarray<bool> nonzero_channels_mask;
-  std::optional<xt::xarray<float>> per_channels_squared;
+  xt::xtensor<float, 2> sum_pow2;
+  xt::xtensor<float, 2> sum_pow3;
+  xt::xtensor<float, 2> sum_pow4;
+  xt::xtensor<bool, 1> nonzero_channels_mask;
+  std::optional<xt::xtensor<float, 2>> per_channels_squared;
 };
 
 /**
@@ -356,6 +357,17 @@ struct ProcessPlaneResult
   std::optional<SpectralVarianceStats> variance_stats;
 };
 
+struct ProcessBandScratch
+{
+  xt::xtensor<double, 2> parts_sums;
+  xt::xtensor<float, 2> windows_sums;
+  xt::xtensor<float, 2> plane;
+  xt::xtensor<bool, 2> image_mask;
+  xt::xtensor<float, 2> noise_map;
+  xt::xtensor<float, 2> excess_noise_factor;
+  xt::xtensor<float, 2> padded_image;
+};
+
 /**
  * @brief Local RMS noise estimate: a sliding `boxsize x boxsize` box filter over `plane`, edge-corrected so border
  *        windows use only their true (in-bounds) pixel count rather than being pulled down by phantom padding.
@@ -365,9 +377,11 @@ struct ProcessPlaneResult
  * each pixel's windowed sum is four O(1) lookups instead of re-summing up to `boxsize^2` values per pixel.
  * @param plane 2D image to compute the noise map over.
  * @param boxsize Full window width/height (not radius).
- * @return Noise map, same shape as `plane`: `sqrt(mean of plane^2 within each pixel's window)`.
+ * @return Noise map, same shape as `plane`: `sqrt(mean of plane^2 within each pixel's window)`. Refers to
+ *         `scratch.windows_sums`, so it stays valid only until the next call sharing that scratch.
  */
-xt::xarray<float> compute_rms_noise_map(const xt::xarray<float> &plane, long boxsize);
+const xt::xtensor<float, 2> &compute_rms_noise_map(ProcessBandScratch &scratch, const xt::xtensor<float, 2> &plane,
+                                                   long boxsize);
 
 /**
  * @brief Convert `plane` to SNR units and apply the full per-pixel cutoff cascade in one pass
@@ -390,8 +404,8 @@ xt::xarray<float> compute_rms_noise_map(const xt::xarray<float> &plane, long box
  * @param result Histogram and min/max-sigma outputs are written here.
  * @return SNR image, same shape as `plane` (needed later for peak/island work).
  */
-xt::xarray<float> compute_snr_and_apply_filters(const xt::xarray<float> &plane, const xt::xarray<float> &noise_map,
-                                                float median_noise, float inv_band_size, xt::xarray<bool> &image_mask,
+xt::xtensor<float, 2> compute_snr_and_apply_filters(const xt::xtensor<float, 2> &plane, const xt::xtensor<float, 2> &noise_map,
+                                                float median_noise, float inv_band_size, xt::xtensor<bool, 2> &image_mask,
                                                 const PlaneBatchGroup &group, const BandSlice &band,
                                                 const PlaneConfig &config, ProcessPlaneResult &result);
 
@@ -407,7 +421,7 @@ xt::xarray<float> compute_snr_and_apply_filters(const xt::xarray<float> &plane, 
  * @param rotate Counter-clockwise rotation, in radians.
  * @return `(2*halfsize+1) x (2*halfsize+1)` kernel, normalized so its elements sum to 1.
  */
-xt::xarray<float> build_gaussian_beam_kernel(long halfsize, float sigma_major, float sigma_minor, float rotate);
+xt::xtensor<float, 2> build_gaussian_beam_kernel(long halfsize, float sigma_major, float sigma_minor, float rotate);
 
 /**
  * @brief Process one band slice of one plane: mask, weight, denoise, convert to SNR, label islands, and compute
@@ -429,8 +443,8 @@ xt::xarray<float> build_gaussian_beam_kernel(long halfsize, float sigma_major, f
  * @param config Run-level configuration.
  * @param result Accumulator shared across all of this plane's process_band() calls.
  */
-void process_band(PlaneBatchItem &item, const PlaneBatchGroup &group, const BandSlice &band, const PlaneConfig &config,
-                  ProcessPlaneResult &result);
+void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, const PlaneBatchGroup &group,
+                  const BandSlice &band, const PlaneConfig &config, ProcessPlaneResult &result);
 
 /**
  * @brief Compute per-pixel spectral-variance QA stats across all of a plane's frequency channels (raw sums of
@@ -456,7 +470,8 @@ SpectralVarianceStats compute_spectral_variance_stats(const PlaneBatchItem &item
  * @param group Shared per-Stokes arrays `item` references.
  * @return Combined detections/histograms/sigma-range/variance-stats for the plane.
  */
-ProcessPlaneResult process_plane(const PlaneConfig &config, PlaneBatchItem &item, const PlaneBatchGroup &group);
+ProcessPlaneResult process_plane(ProcessBandScratch &scratch, const PlaneConfig &config, PlaneBatchItem &item,
+                                 const PlaneBatchGroup &group);
 
 /**
  * @brief Run process_plane() over every item in `items`, in parallel via TBB.

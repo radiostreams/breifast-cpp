@@ -1,4 +1,7 @@
 #include "islands.hpp"
+#include <ittnotify.h>
+#include <xtensor/core/xnoalias.hpp>
+#include <xtensor/core/xtensor_forward.hpp>
 #include <xtensor/misc/xsort.hpp>
 #include <xtensor/reducers/xreducer.hpp>
 #include "plane_lot_dispatch.hpp"
@@ -58,12 +61,13 @@ float PlaneConfig::max_to_std_ratio_value() const
   return *max_to_std_ratio_value_;
 }
 
-inline xt::xarray<float> compute_rms_noise_map(const xt::xarray<float> &plane, long boxsize)
+inline const xt::xtensor<float, 2> &compute_rms_noise_map(ProcessBandScratch &scratch,
+                                                          const xt::xtensor<float, 2> &plane, long boxsize)
 {
   const long n_y = static_cast<long>(plane.shape(0));
   const long n_x = static_cast<long>(plane.shape(1));
 
-  thread_local xt::xarray<double> parts_sums;
+  auto &parts_sums = scratch.parts_sums;
   parts_sums.resize({static_cast<size_t>(n_y + 1), static_cast<size_t>(n_x + 1)});
   for (long i_y = 0; i_y <= n_y; ++i_y)
   {
@@ -82,7 +86,7 @@ inline xt::xarray<float> compute_rms_noise_map(const xt::xarray<float> &plane, l
     }
   }
 
-  thread_local xt::xarray<float> windows_sums;
+  auto &windows_sums = scratch.windows_sums;
   windows_sums.resize({static_cast<size_t>(n_y), static_cast<size_t>(n_x)});
 
   for (long i_y = 0; i_y < n_y; ++i_y)
@@ -94,9 +98,9 @@ inline xt::xarray<float> compute_rms_noise_map(const xt::xarray<float> &plane, l
       const long min_y = std::max(i_y - boxsize / 2, 0L);
       const long max_y = std::min(i_y + std::max(boxsize, 1L) - boxsize / 2, n_y);
 
-      const double window_sum =
+      const float window_sum =
           parts_sums(max_y, max_x) - parts_sums(min_y, max_x) - parts_sums(max_y, min_x) + parts_sums(min_y, min_x);
-      const double count = static_cast<float>(max_y - min_y) * static_cast<float>(max_x - min_x);
+      const float count = static_cast<float>(max_y - min_y) * static_cast<float>(max_x - min_x);
 
       windows_sums(i_y, i_x) = std::sqrt(window_sum / count);
     }
@@ -114,15 +118,16 @@ inline xt::xarray<float> compute_rms_noise_map(const xt::xarray<float> &plane, l
   return windows_sums;
 }
 
-xt::xarray<float> compute_snr_and_apply_filters(const xt::xarray<float> &plane, const xt::xarray<float> &noise_map,
-                                                float median_noise, float inv_band_size, xt::xarray<bool> &image_mask,
-                                                const PlaneBatchGroup &group, const BandSlice &band,
-                                                const PlaneConfig &config, ProcessPlaneResult &result)
+xt::xtensor<float, 2> compute_snr_and_apply_filters(const xt::xtensor<float, 2> &plane,
+                                                    const xt::xtensor<float, 2> &noise_map, float median_noise,
+                                                    float inv_band_size, xt::xtensor<bool, 2> &image_mask,
+                                                    const PlaneBatchGroup &group, const BandSlice &band,
+                                                    const PlaneConfig &config, ProcessPlaneResult &result)
 {
   const size_t n_y = plane.shape(0);
   const size_t n_x = plane.shape(1);
 
-  xt::xarray<float> snr;
+  xt::xtensor<float, 2> snr;
   snr.resize(plane.shape());
   result.histogram0.clear();
   result.histogram0.resize(config.max_sigma_bin * 2, 0);
@@ -212,10 +217,10 @@ xt::xarray<float> compute_snr_and_apply_filters(const xt::xarray<float> &plane, 
   return snr;
 }
 
-xt::xarray<float> build_gaussian_beam_kernel(long halfsize, float sigma_major, float sigma_minor, float rotate)
+xt::xtensor<float, 2> build_gaussian_beam_kernel(long halfsize, float sigma_major, float sigma_minor, float rotate)
 {
   const auto size = 2 * halfsize + 1;
-  xt::xarray<float> kernel;
+  xt::xtensor<float, 2> kernel;
   kernel.resize({static_cast<size_t>(size), static_cast<size_t>(size)});
 
   const float cos_r = std::cos(rotate);
@@ -239,8 +244,8 @@ xt::xarray<float> build_gaussian_beam_kernel(long halfsize, float sigma_major, f
   return kernel;
 }
 
-inline void process_band(PlaneBatchItem &item, const PlaneBatchGroup &group, const BandSlice &band,
-                         const PlaneConfig &config, ProcessPlaneResult &result)
+inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, const PlaneBatchGroup &group,
+                         const BandSlice &band, const PlaneConfig &config, ProcessPlaneResult &result)
 {
   if (!xt::any(xt::view(item.nonzero_channels, band.xrange())))
   {
@@ -251,15 +256,8 @@ inline void process_band(PlaneBatchItem &item, const PlaneBatchGroup &group, con
   const size_t n_x = item.stokes_cube.shape(2);
 
   // Masking
-#if USE_XTENSOR
-  const auto band_accept_mask = xt::view(group.accept_mask, band.xrange(), xt::all(), xt::all());
-  const xt::xarray<bool> image_mask = xt::reduce(std::logical_or<bool>(), band_accept_mask, {0});
-  if (!xt::any(image_mask))
-  {
-    return;
-  }
-#else
-  xt::xarray<bool> image_mask = xt::view(group.accept_mask, band.start, xt::all(), xt::all());
+  auto &image_mask = scratch.image_mask;
+  xt::noalias(image_mask) = xt::view(group.accept_mask, band.start, xt::all(), xt::all());
   bool any_mask = xt::any(image_mask);
   for (long i_band = band.start + 1; i_band < band.stop; ++i_band)
   {
@@ -278,32 +276,17 @@ inline void process_band(PlaneBatchItem &item, const PlaneBatchGroup &group, con
   {
     return;
   }
-#endif
 
   const auto &weights = item.weights;
-  const xt::xarray<float> weights_sliced = xt::view(weights, band.xrange());
+  const xt::xtensor<float, 1> weights_sliced = xt::view(weights, band.xrange());
 
   const bool do_subtract_mean = config.subtract_mean && group.mean_image.has_value();
   const float inv_band_size = 1.F / static_cast<float>(band.size());
-#if USE_XTENSOR
-  xt::xarray<float> plane = xt::view(item.stokes_cube, band.xrange(), xt::all(), xt::all());
-  const auto weights_sum = xt::sum(weights_sliced);
-  if (band.size() > 1)
-  {
-    plane *= xt::view(weights_sliced, xt::all(), xt::newaxis(), xt::newaxis());
-    plane = xt::sum(plane, {0});
-    plane *= (1.F / weights_sum);
-  }
 
-  if (do_subtract_mean)
-  {
-    const xt::xarray<float> sliced_mean = xt::view(*group.mean_image, band.xrange(), xt::all(), xt::all());
-    plane = plane - xt::sum(sliced_mean, {0}) * inv_band_size;
-  }
-#else
   const float weights_sum = std::accumulate(weights_sliced.cbegin(), weights_sliced.cend(), 0.F);
   const float inv_weights_sum = 1.F / weights_sum;
-  xt::xarray<float> plane;
+
+  auto &plane = scratch.plane;
   plane.resize({n_y, n_x});
   plane.fill(0);
   for (auto i_channel = band.start; i_channel < band.stop; ++i_channel)
@@ -320,29 +303,31 @@ inline void process_band(PlaneBatchItem &item, const PlaneBatchGroup &group, con
       }
     }
   }
-#endif
 
   const float noise_global_mad = xt::median(xt::abs(plane)) * 1.4826F;
 
-  const auto combine = [&](const auto &noisemap0)
+  const auto combine = [&](auto &noisemap, auto &excess_noise_factor, const auto &noisemap0)
   {
-    xt::xarray<float> noisemap = xt::sqrt(noisemap0 * noisemap0 + band.selfnoise_scale_factor * group.selfnoise_offset +
-                                          config.ddenoise_scaling_factor * group.dde_noise);
-    xt::xarray<float> excess_noise_factor = noisemap / noisemap0;
+    // noalias: plain operator= reaches xtensor's shape check through a noexcept frame, so a shape mismatch
+    // aborts the process instead of throwing catchably (run_batch_core's per-item try/catch never sees it).
+    xt::noalias(noisemap) = xt::sqrt(noisemap0 * noisemap0 + band.selfnoise_scale_factor * group.selfnoise_offset +
+                                     config.ddenoise_scaling_factor * group.dde_noise);
+    xt::noalias(excess_noise_factor) = noisemap / noisemap0;
     const float mednoise = xt::median(noisemap);
-    return std::tuple{noisemap, excess_noise_factor, mednoise};
+    return mednoise;
   };
 
-  xt::xarray<float> noise_map;
-  xt::xarray<float> excess_noise_factor;
+  auto &noise_map = scratch.noise_map;
+  auto &excess_noise_factor = scratch.excess_noise_factor;
   float median_noise = 0.F;
   if (config.use_rms_noise_estimator)
   {
-    std::tie(noise_map, excess_noise_factor, median_noise) = combine(compute_rms_noise_map(plane, config.boxsize));
+    median_noise =
+        combine(scratch.noise_map, scratch.excess_noise_factor, compute_rms_noise_map(scratch, plane, config.boxsize));
   }
   else
   {
-    std::tie(noise_map, excess_noise_factor, median_noise) = combine(noise_global_mad);
+    median_noise = combine(scratch.noise_map, scratch.excess_noise_factor, noise_global_mad);
   }
   result.median_noises.push_back(median_noise);
 
@@ -383,7 +368,7 @@ inline void process_band(PlaneBatchItem &item, const PlaneBatchGroup &group, con
     pad = radius + 1;
   }
 
-  xt::xarray<float> padded_image;
+  auto &padded_image = scratch.padded_image;
   padded_image.resize({plane.shape(0) + pad * 2, plane.shape(1) + pad * 2});
   const size_t padded_ny = static_cast<size_t>(padded_image.shape(0));
   const size_t padded_nx = static_cast<size_t>(padded_image.shape(1));
@@ -398,12 +383,12 @@ inline void process_band(PlaneBatchItem &item, const PlaneBatchGroup &group, con
 
   const auto islands = breifast::islands::label_islands(image_mask, snr, noise_map);
 
-  std::optional<xt::xarray<float>> beam_kernel;
+  std::optional<xt::xtensor<float, 2>> beam_kernel;
   if (config.beam_size_enabled)
   {
     if (config.fixed_beam_kernel.has_value())
     {
-      beam_kernel = xt::xarray<float>(*config.fixed_beam_kernel);
+      beam_kernel = xt::xtensor<float, 2>(*config.fixed_beam_kernel);
     }
     else
     {
@@ -425,8 +410,8 @@ inline void process_band(PlaneBatchItem &item, const PlaneBatchGroup &group, con
     const auto padded_y = island.coordinates.first + pad;
     const auto padded_x = island.coordinates.second + pad;
 
-    xt::xarray<float> sub_image = xt::view(padded_image, xt::range(padded_y - radius, padded_y + radius + 1),
-                                           xt::range(padded_x - radius, padded_x + radius + 1));
+    xt::xtensor<float, 2> sub_image = xt::view(padded_image, xt::range(padded_y - radius, padded_y + radius + 1),
+                                               xt::range(padded_x - radius, padded_x + radius + 1));
     xt::view(sub_image, xt::range(radius - config.inner_boxsize, radius + config.inner_boxsize + 1),
              xt::range(radius - config.inner_boxsize, radius + config.inner_boxsize + 1)) = 0.F;
 
@@ -440,7 +425,7 @@ inline void process_band(PlaneBatchItem &item, const PlaneBatchGroup &group, con
     float beam_chi2_value = 0.F;
     if (beam_kernel.has_value())
     {
-      xt::xarray<float> beam_sub_image =
+      xt::xtensor<float, 2> beam_sub_image =
           xt::view(padded_image, xt::range(padded_y - beam_kernel_halfsize, padded_y + beam_kernel_halfsize + 1),
                    xt::range(padded_x - beam_kernel_halfsize, padded_x + beam_kernel_halfsize + 1));
 
@@ -463,7 +448,7 @@ inline void process_band(PlaneBatchItem &item, const PlaneBatchGroup &group, con
     if (config.baseline_flux.has_value())
     {
       const auto island_mask = xt::equal(islands.labels, label);
-      const xt::xarray<float> ratio = flux / xt::filter(*config.baseline_flux, island_mask);
+      const xt::xtensor<float, 1> ratio = flux / xt::filter(*config.baseline_flux, island_mask);
       const auto max_abs_index = xt::argmax(xt::abs(ratio))();
       boost_value = ratio(max_abs_index);
     }
@@ -519,12 +504,13 @@ SpectralVarianceStats compute_spectral_variance_stats(const PlaneBatchItem &item
   return stats;
 }
 
-ProcessPlaneResult process_plane(const PlaneConfig &config, PlaneBatchItem &item, const PlaneBatchGroup &group)
+ProcessPlaneResult process_plane(ProcessBandScratch &scratch, const PlaneConfig &config, PlaneBatchItem &item,
+                                 const PlaneBatchGroup &group)
 {
   ProcessPlaneResult result;
   for (auto it = config.band_slices.rbegin(); it != config.band_slices.rend(); ++it)
   {
-    process_band(item, group, *it, config, result);
+    process_band(scratch, item, group, *it, config, result);
   }
   if (item.nonzero_channels.size() > 1)
   {
@@ -542,8 +528,12 @@ std::vector<ProcessPlaneResult> run_batch_core(std::vector<PlaneBatchItem> &item
 
   tbb::task_arena task_arena(num_threads > 0 ? num_threads : tbb::task_arena::automatic);
 
+  // One scratch buffer set per worker thread, reused across every item that thread processes.
+  tbb::enumerable_thread_specific<ProcessBandScratch> scratches;
+
   const auto main_iteration = [&](const tbb::blocked_range<size_t> &range)
   {
+    auto &scratch = scratches.local();
     for (auto index = range.begin(); index != range.end(); ++index)
     {
       auto &item = items[index];
@@ -552,7 +542,7 @@ std::vector<ProcessPlaneResult> run_batch_core(std::vector<PlaneBatchItem> &item
 
       try
       {
-        results[index] = process_plane(config, item, group);
+        results[index] = process_plane(scratch, config, item, group);
       }
       catch (const std::exception &e)
       {
@@ -560,9 +550,11 @@ std::vector<ProcessPlaneResult> run_batch_core(std::vector<PlaneBatchItem> &item
       }
     }
   };
-  const auto main_execution = [&]() { tbb::parallel_for(tbb::blocked_range<size_t>(0, items.size()), main_iteration, tbb::simple_partitioner()); };
+  const auto main_execution = [&]() { tbb::parallel_for(tbb::blocked_range<size_t>(0, items.size()), main_iteration); };
 
+  __itt_resume();
   task_arena.execute(main_execution);
+  __itt_pause();
 
   return results;
 }

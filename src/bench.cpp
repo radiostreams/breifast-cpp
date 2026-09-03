@@ -32,10 +32,10 @@ using breifast::PlaneBatchGroup;
 using breifast::PlaneBatchItem;
 using breifast::PlaneConfig;
 
-template <typename T> xt::xarray<T> load_array(const nlohmann::json &desc, const std::string &base_dir)
+template <typename T, size_t N> xt::xtensor<T, N> load_tensor(const nlohmann::json &desc, const std::string &base_dir)
 {
   const std::vector<size_t> shape = desc.at("shape").get<std::vector<size_t>>();
-  xt::xarray<T> arr;
+  xt::xtensor<T, N> arr;
   arr.resize(shape);
   const std::string path = base_dir + "/" + desc.at("file").get<std::string>();
   std::ifstream in(path, std::ios::binary);
@@ -51,14 +51,14 @@ template <typename T> xt::xarray<T> load_array(const nlohmann::json &desc, const
   return arr;
 }
 
-template <typename T>
-std::optional<xt::xarray<T>> load_optional_array(const nlohmann::json &j, const char *key, const std::string &base_dir)
+template <typename T, size_t N>
+std::optional<xt::xtensor<T, N>> load_optional_tensor(const nlohmann::json &j, const char *key, const std::string &base_dir)
 {
   if (!j.contains(key) || j.at(key).is_null())
   {
     return std::nullopt;
   }
-  return load_array<T>(j.at(key), base_dir);
+  return load_tensor<T, N>(j.at(key), base_dir);
 }
 
 BandSlice load_band_slice(const nlohmann::json &j)
@@ -74,13 +74,13 @@ BandSlice load_band_slice(const nlohmann::json &j)
 PlaneBatchGroup load_group(const nlohmann::json &j, const std::string &base_dir)
 {
   PlaneBatchGroup group;
-  group.accept_mask = load_array<bool>(j.at("accept_mask"), base_dir);
-  group.selfnoise_offset = load_array<float>(j.at("selfnoise_offset"), base_dir);
-  group.selfnoise_raw = load_array<float>(j.at("selfnoise_raw"), base_dir);
-  group.dde_noise = load_array<float>(j.at("dde_noise"), base_dir);
-  group.mean_image = load_optional_array<float>(j, "mean_image", base_dir);
-  group.flux_cutoff = load_optional_array<float>(j, "flux_cutoff", base_dir);
-  group.snr_cutoff = load_optional_array<float>(j, "snr_cutoff", base_dir);
+  group.accept_mask = load_tensor<bool, 3>(j.at("accept_mask"), base_dir);
+  group.selfnoise_offset = load_tensor<float, 2>(j.at("selfnoise_offset"), base_dir);
+  group.selfnoise_raw = load_tensor<float, 2>(j.at("selfnoise_raw"), base_dir);
+  group.dde_noise = load_tensor<float, 2>(j.at("dde_noise"), base_dir);
+  group.mean_image = load_optional_tensor<float, 3>(j, "mean_image", base_dir);
+  group.flux_cutoff = load_optional_tensor<float, 3>(j, "flux_cutoff", base_dir);
+  group.snr_cutoff = load_optional_tensor<float, 3>(j, "snr_cutoff", base_dir);
   return group;
 }
 
@@ -89,12 +89,12 @@ PlaneBatchItem load_item(const nlohmann::json &j, const std::string &base_dir)
   PlaneBatchItem item;
   item.group_index = j.at("group_index").get<size_t>();
   item.stokes_label = j.at("stokes_label").get<std::string>();
-  item.stokes_cube = load_array<float>(j.at("stokes_cube"), base_dir);
-  item.weights = load_array<float>(j.at("weights"), base_dir);
-  item.nonzero_channels = load_array<bool>(j.at("nonzero_channels"), base_dir);
-  item.beam_major_axis = load_optional_array<float>(j, "beam_major_axis", base_dir);
-  item.beam_minor_axis = load_optional_array<float>(j, "beam_minor_axis", base_dir);
-  item.beam_position_angle = load_optional_array<float>(j, "beam_position_angle", base_dir);
+  item.stokes_cube = load_tensor<float, 3>(j.at("stokes_cube"), base_dir);
+  item.weights = load_tensor<float, 1>(j.at("weights"), base_dir);
+  item.nonzero_channels = load_tensor<bool, 1>(j.at("nonzero_channels"), base_dir);
+  item.beam_major_axis = load_optional_tensor<float, 1>(j, "beam_major_axis", base_dir);
+  item.beam_minor_axis = load_optional_tensor<float, 1>(j, "beam_minor_axis", base_dir);
+  item.beam_position_angle = load_optional_tensor<float, 1>(j, "beam_position_angle", base_dir);
   return item;
 }
 
@@ -114,8 +114,8 @@ PlaneConfig load_config(const nlohmann::json &m, const std::string &base_dir)
   config.save_stat_cubes = m.at("save_stat_cubes").get<bool>();
   config.beam_size_enabled = m.at("beam_size_enabled").get<bool>();
   config.fixed_beam_halfsize = m.at("fixed_beam_halfsize").get<long>();
-  config.fixed_beam_kernel = load_optional_array<double>(m, "fixed_beam_kernel", base_dir);
-  config.baseline_flux = load_optional_array<float>(m, "baseline_flux", base_dir);
+  config.fixed_beam_kernel = load_optional_tensor<double, 2>(m, "fixed_beam_kernel", base_dir);
+  config.baseline_flux = load_optional_tensor<float, 2>(m, "baseline_flux", base_dir);
   for (const auto &band_json : m.at("band_slices"))
   {
     config.band_slices.push_back(load_band_slice(band_json));
@@ -176,12 +176,13 @@ int main(int argc, char **argv)
     const size_t n_sample = std::min<size_t>(36, base_lot.planes.size());
     std::vector<double> item_times;
     item_times.reserve(n_sample);
+    breifast::ProcessBandScratch scratch;
     for (size_t i = 0; i < n_sample; ++i)
     {
       PlaneBatchItem item = base_lot.planes[i];
       const auto &group = base_lot.groups[item.group_index];
       const auto t0 = std::chrono::steady_clock::now();
-      const auto result = process_plane(config, item, group);
+      const auto result = process_plane(scratch, config, item, group);
       const auto t1 = std::chrono::steady_clock::now();
       item_times.push_back(std::chrono::duration<double>(t1 - t0).count());
     }

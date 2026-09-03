@@ -11,6 +11,7 @@ TEST_CASE("process_band detects a single clear point-source island with correct 
          "fields",
          "[process_band]")
 {
+  ProcessBandScratch scratch;
   // Background 1.0, peak (3,3)=50; a 1-in-49 outlier can't move the median.
   auto plane_rows = std::vector<std::vector<float>>(7, std::vector<float>(7, 1.F));
   plane_rows[3][3] = 50.F;
@@ -53,7 +54,7 @@ TEST_CASE("process_band detects a single clear point-source island with correct 
   config.beam_size_enabled = false;
 
   ProcessPlaneResult result;
-  process_band(item, group, band, config, result);
+  process_band(scratch, item, group, band, config, result);
 
   REQUIRE(result.detections.peak_y().size() == 1);
   CHECK(result.detections.peak_y()[0] == 3);
@@ -90,6 +91,7 @@ TEST_CASE("process_band detects a single clear point-source island with correct 
 TEST_CASE("process_band zero-pads postage stamps correctly for islands touching all four plane edges",
          "[process_band]")
 {
+  ProcessBandScratch scratch;
   // 5x5 plane, boxsize=3 (pad=2). Top-left peak exercises the pad-boundary duplicate-condition bug; bottom-right
   // exercises the off-by-one bug. Same decoy neighbor set {2,4,6} on both, so a padding regression is comparable.
   xt::xarray<float> plane_2d;
@@ -134,7 +136,7 @@ TEST_CASE("process_band zero-pads postage stamps correctly for islands touching 
   config.beam_size_enabled = false;
 
   ProcessPlaneResult result;
-  process_band(item, group, band, config, result);
+  process_band(scratch, item, group, band, config, result);
 
   REQUIRE(result.detections.peak_y().size() == 2);
   // detection order isn't guaranteed (unordered_map)
@@ -180,6 +182,7 @@ TEST_CASE("process_band zero-pads postage stamps correctly for islands touching 
 TEST_CASE("process_band computes a weighted, unequally-weighted multi-channel mean, with subtract_mean off and on",
          "[process_band]")
 {
+  ProcessBandScratch scratch;
   // 5x5 plane, 2-channel band, weights=[3,1] unequal -- naive unweighted mean would give 40 instead of 50.
   xt::xarray<float> stokes_cube;
   stokes_cube.resize({2, 5, 5});
@@ -221,7 +224,7 @@ TEST_CASE("process_band computes a weighted, unequally-weighted multi-channel me
   {
     config.subtract_mean = false;
     ProcessPlaneResult result;
-    process_band(item, group, band, config, result);
+    process_band(scratch, item, group, band, config, result);
 
     REQUIRE(result.detections.peak_y().size() == 1);
     CHECK(result.detections.peak_y()[0] == 2);
@@ -242,7 +245,7 @@ TEST_CASE("process_band computes a weighted, unequally-weighted multi-channel me
     group.mean_image = mean_image;
     config.subtract_mean = true;
     ProcessPlaneResult result;
-    process_band(item, group, band, config, result);
+    process_band(scratch, item, group, band, config, result);
 
     REQUIRE(result.detections.peak_y().size() == 1);
     CHECK(result.detections.peak_y()[0] == 2);
@@ -258,6 +261,7 @@ TEST_CASE("process_band matches an independent Python reference on a wide-scale 
          "estimator",
          "[process_band]")
 {
+  ProcessBandScratch scratch;
   // 12x12 plane, numpy seed=33, background uniform(-10,10), 4 point sources of alternating sign at (2,2)=70,
   // (2,9)=-65, (9,2)=55, (9,9)=-80. Only 3 of the 4 are actually detected: (9,2)=55 sits in a region whose
   // windowed-RMS noise is below the map's own median, so once compute_rms_noise_map floors it up to the median
@@ -423,7 +427,7 @@ TEST_CASE("process_band matches an independent Python reference on a wide-scale 
   config.beam_size_enabled = false;
 
   ProcessPlaneResult result;
-  process_band(item, group, band, config, result);
+  process_band(scratch, item, group, band, config, result);
 
   REQUIRE(result.detections.peak_y().size() == 3);
   const auto find_index = [&](long peak_y, long peak_x)
@@ -481,6 +485,7 @@ TEST_CASE("process_band matches an independent Python reference on a wide-scale 
 TEST_CASE("process_band computes beam_chi2 via a fixed beam kernel, with the beam halfsize dominating padding",
          "[process_band]")
 {
+  ProcessBandScratch scratch;
   // boxsize=3 -> radius+1=2, but fixed_beam_halfsize=3 > 2, so pad = max(...) = 3 (beam kernel dominates).
   xt::xarray<float> plane_2d;
   plane_2d.resize({9, 9});
@@ -522,7 +527,7 @@ TEST_CASE("process_band computes beam_chi2 via a fixed beam kernel, with the bea
   config.fixed_beam_kernel = fixed_kernel;
 
   ProcessPlaneResult result;
-  process_band(item, group, band, config, result);
+  process_band(scratch, item, group, band, config, result);
 
   REQUIRE(result.detections.peak_y().size() == 1);
   CHECK(result.detections.peak_y()[0] == 4);
@@ -541,6 +546,7 @@ TEST_CASE("process_band computes beam_chi2 via a fixed beam kernel, with the bea
 TEST_CASE("process_band computes beam_chi2 via the adaptive weighted-kernel path, with radius+1 dominating padding",
          "[process_band]")
 {
+  ProcessBandScratch scratch;
   // channel0=60, channel1=20, weights=[3,1] -> weighted flux 50.0. boxsize=9 -> radius+1=5, no fixed_beam_kernel so
   // beam_kernel_halfsize comes from the unweighted mean of beam_major_axis (-> 2); pad = max(2,5) = 5, the other
   // branch of that max() vs. the test above. Kernel shape itself uses the weighted (not unweighted) major/minor/angle.
@@ -586,7 +592,7 @@ TEST_CASE("process_band computes beam_chi2 via the adaptive weighted-kernel path
   config.beam_size_enabled = true; // fixed_beam_kernel unset -> adaptive weighted-kernel path
 
   ProcessPlaneResult result;
-  process_band(item, group, band, config, result);
+  process_band(scratch, item, group, band, config, result);
 
   REQUIRE(result.detections.peak_y().size() == 1);
   CHECK(result.detections.peak_y()[0] == 6);
@@ -621,6 +627,7 @@ TEST_CASE("process_band's beam_chi2, signal_to_noise_extended_box, signal_to_noi
          "postage-stamp donut is entirely zeroed",
          "[process_band]")
 {
+  ProcessBandScratch scratch;
   // boxsize=5, inner_boxsize=2 (== radius) zeroes the entire sub_image, not just the center -> extreme=0,
   // adjacent_noise=0, and donut (its nonzero subset) is empty too. Regression test for a segfault:
   // xt::stddev/xt::median used to crash on that empty donut; now rms/lmad guard to 0.F instead.
@@ -663,7 +670,7 @@ TEST_CASE("process_band's beam_chi2, signal_to_noise_extended_box, signal_to_noi
   config.fixed_beam_kernel = fixed_kernel;
 
   ProcessPlaneResult result;
-  process_band(item, group, band, config, result);
+  process_band(scratch, item, group, band, config, result);
 
   REQUIRE(result.detections.peak_y().size() == 1);
   CHECK(result.detections.peak_y()[0] == 3);
@@ -679,6 +686,7 @@ TEST_CASE("process_band's boost preserves the sign of the island's largest-magni
          "matching breifast.py's max(..., key=abs)",
          "[process_band]")
 {
+  ProcessBandScratch scratch;
   // 7x7 plane, background 1.0, adjacent pixels (3,3)=50 and (3,4)=40 merge into one 4-connected, size-2 island; the
   // peak (largest |snr|) is (3,3), so flux=50. Expected values cross-checked against an independent Python
   // reference reimplementing breifast.py's exact formula (see boost_ref.py): Part A -6.25, Part B 25.0.
@@ -726,7 +734,7 @@ TEST_CASE("process_band's boost preserves the sign of the island's largest-magni
     config.baseline_flux = baseline_flux;
 
     ProcessPlaneResult result;
-    process_band(item, group, band, config, result);
+    process_band(scratch, item, group, band, config, result);
 
     REQUIRE(result.detections.peak_y().size() == 1);
     CHECK(result.detections.peak_y()[0] == 3);
@@ -747,7 +755,7 @@ TEST_CASE("process_band's boost preserves the sign of the island's largest-magni
     config.baseline_flux = baseline_flux;
 
     ProcessPlaneResult result;
-    process_band(item, group, band, config, result);
+    process_band(scratch, item, group, band, config, result);
 
     REQUIRE(result.detections.peak_y().size() == 1);
     CHECK(result.detections.island_size()[0] == 2);
@@ -759,6 +767,7 @@ TEST_CASE("process_band returns no detections, without running any analysis, whe
          "is entirely false for the band",
          "[process_band]")
 {
+  ProcessBandScratch scratch;
   // Same plane as the first test (clear peak at (3,3)=50) -- would definitely produce a detection if analyzed, so
   // an empty result here proves the early-exit guard fires, not that the peak got filtered out downstream.
   xt::xarray<float> plane_2d;
@@ -798,7 +807,7 @@ TEST_CASE("process_band returns no detections, without running any analysis, whe
     item.nonzero_channels = xt::xarray<bool>({false});
 
     ProcessPlaneResult result;
-    process_band(item, group, band, config, result);
+    process_band(scratch, item, group, band, config, result);
 
     CHECK(result.detections.peak_y().size() == 0);
   }
@@ -810,7 +819,7 @@ TEST_CASE("process_band returns no detections, without running any analysis, whe
     xt::view(item.stokes_cube, 0) = plane_2d;
 
     ProcessPlaneResult result;
-    process_band(item, group, band, config, result);
+    process_band(scratch, item, group, band, config, result);
 
     CHECK(result.detections.peak_y().size() == 0);
   }

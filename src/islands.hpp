@@ -8,7 +8,7 @@
 #pragma once
 #include <limits>
 #include <unordered_map>
-#include <xtensor/containers/xarray.hpp>
+#include <xtensor/containers/xtensor.hpp>
 
 namespace breifast::islands
 {
@@ -18,7 +18,7 @@ namespace breifast::islands
 struct IslandLabels
 {
   /// Same shape as the input mask. `0` = background, `1..count` = island IDs.
-  xt::xarray<size_t> labels;
+  xt::xtensor<size_t, 2> labels;
 
   struct PeakInfo
   {
@@ -38,6 +38,6 @@ struct IslandLabels
  * @param local_noise 2D local noise image (row index = axis 0 / Y, column index = axis 1 / X).
  * @return An IslandLabels with `labels` sized like `image` and `count` set to the number of distinct islands found.
  */
-IslandLabels label_islands(const xt::xarray<bool> &masks, const xt::xarray<float> &image,
-                           const xt::xarray<float> &local_noise);
+IslandLabels label_islands(const xt::xtensor<bool, 2> &masks, const xt::xtensor<float, 2> &image,
+                           const xt::xtensor<float, 2> &local_noise);
 } // namespace breifast::islands

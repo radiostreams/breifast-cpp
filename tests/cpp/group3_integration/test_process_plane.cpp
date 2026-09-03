@@ -11,6 +11,7 @@ TEST_CASE("process_plane accumulates detections across all bands of a plane, pro
          "let single-channel bands corrupt a later combined-channel band's flux",
          "[process_plane]")
 {
+  ProcessBandScratch scratch;
   // 7x7 plane, 2 channels, weights=[1,1]. channel0 background=1.0/peak=60, channel1 background=3.0/peak=40 (peak
   // at (3,3) in both). band_slices in the natural construction order breifast.py:517-524 uses (single-channel
   // bands first, then the combined band) -- Python itself iterates this list reversed (breifast.py:659,
@@ -60,7 +61,7 @@ TEST_CASE("process_plane accumulates detections across all bands of a plane, pro
       BandSlice{.start = 0, .stop = 2, .selfnoise_scale_factor = 1.F, .label = "B0~1"},
   };
 
-  const auto result = process_plane(config, item, group);
+  const auto result = process_plane(scratch, config, item, group);
 
   REQUIRE(result.detections.peak_y().size() == 3);
   const auto find_band = [&](const std::string &band_label)
@@ -108,6 +109,7 @@ TEST_CASE("process_plane accumulates detections across all bands of a plane, pro
 TEST_CASE("process_plane's histograms reflect only the last band processed, not accumulated across bands",
          "[process_plane]")
 {
+  ProcessBandScratch scratch;
   // 2x2 plane, 2 single-channel bands. channel0 background=1.0/outlier=5.0, channel1 background=2.0/outlier=8.0.
   // Both give the same background bin (background/noise_global_mad is always 1/1.4826, regardless of scale), but a
   // different outlier bin, so a leaked/accumulated earlier band would show up as an extra populated bin.
@@ -154,7 +156,7 @@ TEST_CASE("process_plane's histograms reflect only the last band processed, not 
       BandSlice{.start = 1, .stop = 2, .selfnoise_scale_factor = 1.F, .label = "B1"},
   };
 
-  const auto result = process_plane(config, item, group);
+  const auto result = process_plane(scratch, config, item, group);
 
   // Bins {10: 3, 13: 1}, confirmed via an independent Python reference script.
   std::vector<long> expected(20, 0);
@@ -167,6 +169,7 @@ TEST_CASE("process_plane's histograms reflect only the last band processed, not 
 
 TEST_CASE("process_plane only computes variance_stats for multi-channel items", "[process_plane]")
 {
+  ProcessBandScratch scratch;
   const auto make_group = [](size_t n)
   {
     PlaneBatchGroup group;
@@ -202,7 +205,7 @@ TEST_CASE("process_plane only computes variance_stats for multi-channel items", 
     PlaneConfig config_a = config;
     config_a.band_slices = {BandSlice{.start = 0, .stop = 1, .selfnoise_scale_factor = 1.F, .label = "B0"}};
 
-    const auto result = process_plane(config_a, item, make_group(1));
+    const auto result = process_plane(scratch, config_a, item, make_group(1));
     CHECK_FALSE(result.variance_stats.has_value());
   }
 
@@ -218,7 +221,7 @@ TEST_CASE("process_plane only computes variance_stats for multi-channel items", 
     PlaneConfig config_b = config;
     config_b.band_slices = {BandSlice{.start = 0, .stop = 2, .selfnoise_scale_factor = 1.F, .label = "B0~1"}};
 
-    const auto result = process_plane(config_b, item, make_group(2));
+    const auto result = process_plane(scratch, config_b, item, make_group(2));
     CHECK(result.variance_stats.has_value());
   }
 }

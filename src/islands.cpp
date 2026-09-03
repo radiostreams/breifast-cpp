@@ -27,8 +27,8 @@ public:
    * @param image 2D boolean mask, axis 0 = Y (rows), axis 1 = X (columns).
    * @return Labeled result; see IslandLabels.
    */
-  IslandLabels operator()(const xt::xarray<bool> &masks, const xt::xarray<float> &image,
-                          const xt::xarray<float> &local_noise);
+  IslandLabels operator()(const xt::xtensor<bool, 2> &masks, const xt::xtensor<float, 2> &image,
+                          const xt::xtensor<float, 2> &local_noise);
 
 private:
   /**
@@ -88,19 +88,19 @@ private:
   void clear()
   {
     parents_.clear();
-    labels_.resize({0});
+    labels_.resize({0, 0});
   }
 
   /// Union-find parent pointers, indexed by provisional label ID. Index `0` is an unused placeholder so real label IDs.
   /// (starting at `1`) map directly onto it.
   std::vector<size_t> parents_;
   ///  Working label grid for the current image; moved into the returned IslandLabels::labels at the end of operator().
-  xt::xarray<size_t> labels_;
+  xt::xtensor<size_t, 2> labels_;
   std::unordered_map<size_t, IslandLabels::PeakInfo> peak_per_label_;
 };
 
-IslandLabels IslandsLabeler::operator()(const xt::xarray<bool> &masks, const xt::xarray<float> &image,
-                                        const xt::xarray<float> &local_noise)
+IslandLabels IslandsLabeler::operator()(const xt::xtensor<bool, 2> &masks, const xt::xtensor<float, 2> &image,
+                                        const xt::xtensor<float, 2> &local_noise)
 {
   labels_.resize(masks.shape());
   labels_.fill(0);
@@ -184,8 +184,8 @@ IslandLabels IslandsLabeler::operator()(const xt::xarray<bool> &masks, const xt:
   return result;
 }
 
-IslandLabels label_islands(const xt::xarray<bool> &masks, const xt::xarray<float> &image,
-                           const xt::xarray<float> &local_noise)
+IslandLabels label_islands(const xt::xtensor<bool, 2> &masks, const xt::xtensor<float, 2> &image,
+                           const xt::xtensor<float, 2> &local_noise)
 {
   return IslandsLabeler{}(masks, image, local_noise);
 }
