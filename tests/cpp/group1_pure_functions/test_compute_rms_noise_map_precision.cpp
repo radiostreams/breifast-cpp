@@ -37,6 +37,7 @@ xt::xarray<float> splitmix64_plane(size_t n_y, size_t n_x, uint64_t seed, float 
 TEST_CASE("compute_rms_noise_map matches a float64 Python reference on a large real-scale plane",
          "[compute_rms_noise_map]")
 {
+  ProcessBandScratch scratch;
   // Real production configs use boxsize=400 on ~3072x3072 images. This regression-guards a numerical
   // precision bug found via real pipeline data: the summed-area table `compute_rms_noise_map` builds
   // internally used to sum in float32, and its recursive 2D formula compounds rounding error badly
@@ -45,7 +46,7 @@ TEST_CASE("compute_rms_noise_map matches a float64 Python reference on a large r
   const long boxsize = 400;
   const auto plane = splitmix64_plane(n, n, 0xC0FFEEULL, 0.001F);
 
-  const auto noise_map = compute_rms_noise_map(plane, boxsize);
+  const auto noise_map = compute_rms_noise_map(scratch, plane, boxsize);
 
   // Expected values computed in Python
   struct ExpectedPoint

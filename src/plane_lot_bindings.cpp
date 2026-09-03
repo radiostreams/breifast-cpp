@@ -9,18 +9,18 @@
 
 namespace breifast
 {
-template <typename T> xt::xarray<T> require_xarray(const pybind11::dict &d, const char *key)
+template <typename T, size_t N> xt::xtensor<T, N> require_xtensor(const pybind11::dict &d, const char *key)
 {
-  return xt::xarray<T>(d[key].cast<xt::pyarray<T>>());
+  return xt::xtensor<T, N>(d[key].cast<xt::pyarray<T>>());
 }
 
-template <typename T> std::optional<xt::xarray<T>> optional_xarray_key(const pybind11::dict &d, const char *key)
+template <typename T, size_t N> std::optional<xt::xtensor<T, N>> optional_xtensor_key(const pybind11::dict &d, const char *key)
 {
   if (!d.contains(key))
   {
     return std::nullopt;
   }
-  return xt::xarray<T>(d[key].cast<xt::pyarray<T>>());
+  return xt::xtensor<T, N>(d[key].cast<xt::pyarray<T>>());
 }
 
 BandSlice to_band_slice(const pybind11::dict &d)
@@ -36,37 +36,37 @@ BandSlice to_band_slice(const pybind11::dict &d)
 PlaneBatchItem to_plane_batch_item(const pybind11::dict &plane_dict)
 {
   PlaneBatchItem item;
-  item.stokes_cube = require_xarray<float>(plane_dict, "stokes_cube");
-  item.weights = require_xarray<float>(plane_dict, "weights");
-  item.nonzero_channels = require_xarray<bool>(plane_dict, "nonzero_channels");
+  item.stokes_cube = require_xtensor<float, 3>(plane_dict, "stokes_cube");
+  item.weights = require_xtensor<float, 1>(plane_dict, "weights");
+  item.nonzero_channels = require_xtensor<bool, 1>(plane_dict, "nonzero_channels");
   item.group_index = plane_dict["group_index"].cast<size_t>();
   item.stokes_label = plane_dict["stokes_label"].cast<std::string>();
-  item.beam_major_axis = optional_xarray_key<float>(plane_dict, "beam_major_axis");
-  item.beam_minor_axis = optional_xarray_key<float>(plane_dict, "beam_minor_axis");
-  item.beam_position_angle = optional_xarray_key<float>(plane_dict, "beam_position_angle");
+  item.beam_major_axis = optional_xtensor_key<float, 1>(plane_dict, "beam_major_axis");
+  item.beam_minor_axis = optional_xtensor_key<float, 1>(plane_dict, "beam_minor_axis");
+  item.beam_position_angle = optional_xtensor_key<float, 1>(plane_dict, "beam_position_angle");
   return item;
 }
 
 PlaneBatchGroup to_plane_batch_group(const pybind11::dict &group_dict)
 {
   PlaneBatchGroup group;
-  group.accept_mask = require_xarray<bool>(group_dict, "accept_mask");
-  group.mean_image = optional_xarray_key<float>(group_dict, "mean_image");
-  group.selfnoise_offset = require_xarray<float>(group_dict, "selfnoise_offset");
-  group.selfnoise_raw = require_xarray<float>(group_dict, "selfnoise_raw");
-  group.dde_noise = require_xarray<float>(group_dict, "dde_noise");
-  group.flux_cutoff = optional_xarray_key<float>(group_dict, "flux_cutoff");
-  group.snr_cutoff = optional_xarray_key<float>(group_dict, "snr_cutoff");
+  group.accept_mask = require_xtensor<bool, 3>(group_dict, "accept_mask");
+  group.mean_image = optional_xtensor_key<float, 3>(group_dict, "mean_image");
+  group.selfnoise_offset = require_xtensor<float, 2>(group_dict, "selfnoise_offset");
+  group.selfnoise_raw = require_xtensor<float, 2>(group_dict, "selfnoise_raw");
+  group.dde_noise = require_xtensor<float, 2>(group_dict, "dde_noise");
+  group.flux_cutoff = optional_xtensor_key<float, 3>(group_dict, "flux_cutoff");
+  group.snr_cutoff = optional_xtensor_key<float, 3>(group_dict, "snr_cutoff");
   return group;
 }
 
-template <typename T> std::optional<xt::xarray<T>> to_optional_xarray(const pybind11::object &obj)
+template <typename T, size_t N> std::optional<xt::xtensor<T, N>> to_optional_xtensor(const pybind11::object &obj)
 {
   if (obj.is_none())
   {
     return std::nullopt;
   }
-  return xt::xarray<T>(obj.cast<xt::pyarray<T>>());
+  return xt::xtensor<T, N>(obj.cast<xt::pyarray<T>>());
 }
 
 pybind11::object to_python_result(const ProcessPlaneResult &result)
@@ -156,9 +156,9 @@ pybind11::list process_lot(pybind11::list planes, pybind11::list stokes_groups, 
   config.threshold = threshold;
   config.save_stat_cubes = save_stat_cubes;
   config.beam_size_enabled = beam_size_enabled;
-  config.fixed_beam_kernel = to_optional_xarray<double>(fixed_beam_kernel_obj);
+  config.fixed_beam_kernel = to_optional_xtensor<double, 2>(fixed_beam_kernel_obj);
   config.fixed_beam_halfsize = fixed_beam_halfsize;
-  config.baseline_flux = to_optional_xarray<float>(baseline_flux_obj);
+  config.baseline_flux = to_optional_xtensor<float, 2>(baseline_flux_obj);
   for (auto band_slice_handle : band_slices)
   {
     config.band_slices.push_back(to_band_slice(band_slice_handle.cast<pybind11::dict>()));

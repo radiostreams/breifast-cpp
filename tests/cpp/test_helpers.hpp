@@ -1,13 +1,13 @@
 #pragma once
 #include <initializer_list>
 
-#include <xtensor/containers/xarray.hpp>
+#include <xtensor/containers/xtensor.hpp>
 
-inline xt::xarray<float> make_plane(std::initializer_list<std::initializer_list<float>> rows)
+inline xt::xtensor<float, 2> make_plane(std::initializer_list<std::initializer_list<float>> rows)
 {
   const size_t n_y = rows.size();
   const size_t n_x = rows.begin()->size();
-  xt::xarray<float> plane;
+  xt::xtensor<float, 2> plane;
   plane.resize({n_y, n_x});
   size_t i_y = 0;
   for (const auto &row : rows)
@@ -23,12 +23,12 @@ inline xt::xarray<float> make_plane(std::initializer_list<std::initializer_list<
   return plane;
 }
 
-inline xt::xarray<float> make_cube(std::initializer_list<std::initializer_list<std::initializer_list<float>>> channels)
+inline xt::xtensor<float, 3> make_cube(std::initializer_list<std::initializer_list<std::initializer_list<float>>> channels)
 {
   const size_t n_channels = channels.size();
   const size_t n_y = channels.begin()->size();
   const size_t n_x = channels.begin()->begin()->size();
-  xt::xarray<float> cube;
+  xt::xtensor<float, 3> cube;
   cube.resize({n_channels, n_y, n_x});
   size_t i_channel = 0;
   for (const auto &rows : channels)
@@ -49,11 +49,11 @@ inline xt::xarray<float> make_cube(std::initializer_list<std::initializer_list<s
   return cube;
 }
 
-inline xt::xarray<bool> make_mask(std::initializer_list<std::initializer_list<bool>> rows)
+inline xt::xtensor<bool, 2> make_mask(std::initializer_list<std::initializer_list<bool>> rows)
 {
   const size_t n_y = rows.size();
   const size_t n_x = rows.begin()->size();
-  xt::xarray<bool> mask;
+  xt::xtensor<bool, 2> mask;
   mask.resize({n_y, n_x});
   size_t i_y = 0;
   for (const auto &row : rows)
@@ -69,9 +69,9 @@ inline xt::xarray<bool> make_mask(std::initializer_list<std::initializer_list<bo
   return mask;
 }
 
-inline xt::xarray<bool> make_mask1d(std::initializer_list<bool> values)
+inline xt::xtensor<bool, 1> make_mask1d(std::initializer_list<bool> values)
 {
-  xt::xarray<bool> mask;
+  xt::xtensor<bool, 1> mask;
   mask.resize({values.size()});
   size_t i = 0;
   for (const auto value : values)
