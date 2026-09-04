@@ -308,11 +308,46 @@ inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, cons
 
   const auto combine = [&](auto &noisemap, auto &excess_noise_factor, const auto &noisemap0)
   {
-    // noalias: plain operator= reaches xtensor's shape check through a noexcept frame, so a shape mismatch
-    // aborts the process instead of throwing catchably (run_batch_core's per-item try/catch never sees it).
-    xt::noalias(noisemap) = xt::sqrt(noisemap0 * noisemap0 + band.selfnoise_scale_factor * group.selfnoise_offset +
-                                     config.ddenoise_scaling_factor * group.dde_noise);
-    xt::noalias(excess_noise_factor) = noisemap / noisemap0;
+    // Precondition: group.selfnoise_offset/dde_noise must match the plane's shape. 
+    if (group.selfnoise_offset.shape() != std::array<size_t, 2>{n_y, n_x} ||
+        group.dde_noise.shape() != std::array<size_t, 2>{n_y, n_x})
+    {
+      throw std::runtime_error("selfnoise_offset/dde_noise shape mismatch with plane");
+    }
+
+    constexpr bool noisemap0_is_scalar = std::is_floating_point_v<std::decay_t<decltype(noisemap0)>>;
+    const auto noisemap0_at = [&](size_t i_y, size_t i_x) -> float
+    {
+      if constexpr (noisemap0_is_scalar)
+      {
+        return noisemap0;
+      }
+      else
+      {
+        return noisemap0(i_y, i_x);
+      }
+    };
+
+    noisemap.resize({n_y, n_x});
+    excess_noise_factor.resize({n_y, n_x});
+
+    for (size_t i_y = 0; i_y < n_y; ++i_y)
+    {
+      for (size_t i_x = 0; i_x < n_x; ++i_x)
+      {
+        const float noisemap0_value = noisemap0_at(i_y, i_x);
+        noisemap(i_y, i_x) = std::sqrt(noisemap0_value * noisemap0_value +
+                                       band.selfnoise_scale_factor * group.selfnoise_offset(i_y, i_x) +
+                                       config.ddenoise_scaling_factor * group.dde_noise(i_y, i_x));
+      }
+    }
+    for (size_t i_y = 0; i_y < n_y; ++i_y)
+    {
+      for (size_t i_x = 0; i_x < n_x; ++i_x)
+      {
+        excess_noise_factor(i_y, i_x) = noisemap(i_y, i_x) / noisemap0_at(i_y, i_x);
+      }
+    }
     const float mednoise = xt::median(noisemap);
     return mednoise;
   };
