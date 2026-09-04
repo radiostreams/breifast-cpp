@@ -1,0 +1,50 @@
+--- a/meson.build	2026-09-03 15:20:36.590481472 +0200
++++ b/meson.build	2026-09-03 15:20:36.598481441 +0200
+@@ -35,7 +35,7 @@
+     'real="$(find @OUTPUT0@/lib* -maxdepth 1 -name "libtbb.so.12.*" ! -type l | head -1)"; ' +
+     'cp "$real" @OUTPUT1@'],
+   install : true,
+-  install_dir : [false, py.get_install_dir(), py.get_install_dir(), py.get_install_dir()],
++  install_dir : [false, py.get_install_dir()],
+ )
+ 
+ tbb_install_dir = tbb_build[0].full_path()
+@@ -76,10 +76,18 @@
+                '-lCatch2Main', '-lCatch2'],
+ )
+ 
++itt_root = '/ssoft/spack/pinot-noir/jed/v2/spack/opt/spack/linux-rhel9-x86_64_v3/gcc-11.4.1/intel-oneapi-vtune-2024.1.0-ggpuzpx5nqydg76zoguizove2pgh4c4i/vtune/2024.1'
++
++itt_dep = declare_dependency(
++  compile_args : ['-isystem', itt_root / 'include'],
++  link_args : [itt_root / 'lib64' / 'libittnotify.a', '-ldl'],
++)
++
+ ext_module = py.extension_module(
+   'breifast_helpers',
+   ['src/plane_lot_bindings.cpp', 'src/plane_lot_dispatch.cpp', 'src/islands.cpp', tbb_build],
+-  dependencies : [py.dependency(), pybind11_dep, xtl_dep, xtensor_dep, xtensor_python_dep, numpy_dep, tbb_dep, itt_dep],
++  dependencies : [py.dependency(), pybind11_dep, xtl_dep, xtensor_dep, xtensor_python_dep, numpy_dep, tbb_dep,
++                  itt_dep],
+   link_args : ['-static-libstdc++', '-static-libgcc'],
+   install : true,
+ )
+@@ -96,7 +104,7 @@
+   'bench',
+   ['src/bench.cpp', 'src/plane_lot_dispatch.cpp', 'src/islands.cpp', tbb_build],
+   include_directories : include_directories('src'),
+-  dependencies : [xtl_dep, xtensor_dep, tbb_dep, tbbmalloc_dep, itt_dep, json_dep],
++  dependencies : [xtl_dep, xtensor_dep, tbb_dep, itt_dep, json_dep],
+   link_args : ['-static-libstdc++', '-static-libgcc'],
+   build_by_default : false,
+ )
+--- a/flake.nix	2026-09-03 15:20:36.596481449 +0200
++++ b/flake.nix	2026-09-03 15:20:36.600481433 +0200
+@@ -22,6 +22,7 @@
+           pythonEnv
+           pkgs.xtensor
+           pkgs.xtl
++          pkgs.nlohmann_json
+         ];
+         shellHook = ''
+           export PKG_CONFIG_PATH="${pkgs.python3Packages.numpy}/${pkgs.python3.sitePackages}/numpy/_core/lib/pkgconfig:$PKG_CONFIG_PATH"

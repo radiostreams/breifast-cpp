@@ -22,6 +22,7 @@
           pythonEnv
           pkgs.xtensor
           pkgs.xtl
+          pkgs.nlohmann_json
         ];
         shellHook = ''
           export PKG_CONFIG_PATH="${pkgs.python3Packages.numpy}/${pkgs.python3.sitePackages}/numpy/_core/lib/pkgconfig:$PKG_CONFIG_PATH"

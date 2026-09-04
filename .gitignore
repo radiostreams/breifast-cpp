@@ -5,3 +5,5 @@ __pycache__
 
 tests/fixtures/*.npz
 profiling
+manual_bench_deps
+optimization/*/results
