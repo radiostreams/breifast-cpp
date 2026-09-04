@@ -1,13 +1,56 @@
-#include "islands.hpp"
 #include <ittnotify.h>
+#include <span>
 #include <xtensor/core/xnoalias.hpp>
 #include <xtensor/core/xtensor_forward.hpp>
 #include <xtensor/misc/xsort.hpp>
 #include <xtensor/reducers/xreducer.hpp>
+
+#include "islands.hpp"
 #include "plane_lot_dispatch.hpp"
 
 namespace breifast
 {
+namespace detail
+{
+template<typename T>
+float median_of_abs(std::span<const T> values, std::vector<T> &scratch)
+{
+  scratch.assign(values.begin(), values.end());
+  const size_t n = scratch.size();
+  const size_t mid = n / 2;
+  const auto cmp = [](T a, T b) { return std::abs(a) < std::abs(b); };
+
+  std::nth_element(scratch.begin(), scratch.begin() + mid, scratch.end(), cmp);
+  const T hi = std::abs(scratch[mid]);
+  if (n % 2 == 1)
+  {
+    return hi;
+  }
+  std::nth_element(scratch.begin(), scratch.begin() + mid - 1, scratch.begin() + mid, cmp);
+  const T lo = std::abs(scratch[mid - 1]);
+  return (hi + lo) / 2.F;
+}
+
+template<typename T>
+float median_of(std::span<const T> values, std::vector<T> &scratch)
+{
+  scratch.assign(values.begin(), values.end());
+  const size_t n = scratch.size();
+  const size_t mid = n / 2;
+  const auto cmp = [](T a, T b) { return a < b; };
+
+  std::nth_element(scratch.begin(), scratch.begin() + mid, scratch.end(), cmp);
+  const T hi = scratch[mid];
+  if (n % 2 == 1)
+  {
+    return hi;
+  }
+  std::nth_element(scratch.begin(), scratch.begin() + mid - 1, scratch.begin() + mid, cmp);
+  const T lo = scratch[mid - 1];
+  return (hi + lo) / 2.F;
+}
+} // namespace detail
+
 float PlaneConfig::max_to_std_ratio(const size_t n)
 {
   const auto compute = [](const size_t n)
@@ -106,7 +149,7 @@ inline const xt::xtensor<float, 2> &compute_rms_noise_map(ProcessBandScratch &sc
     }
   }
 
-  const auto median = xt::median(windows_sums);
+  const auto median = detail::median_of({windows_sums.data(), windows_sums.size()}, scratch.median_scratch);
   for (long i_y = 0; i_y < n_y; ++i_y)
   {
     for (long i_x = 0; i_x < n_x; ++i_x)
@@ -304,11 +347,11 @@ inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, cons
     }
   }
 
-  const float noise_global_mad = xt::median(xt::abs(plane)) * 1.4826F;
+  const float noise_global_mad = detail::median_of_abs({plane.data(), plane.size()}, scratch.median_scratch) * 1.4826F;
 
   const auto combine = [&](auto &noisemap, auto &excess_noise_factor, const auto &noisemap0)
   {
-    // Precondition: group.selfnoise_offset/dde_noise must match the plane's shape. 
+    // Precondition: group.selfnoise_offset/dde_noise must match the plane's shape.
     if (group.selfnoise_offset.shape() != std::array<size_t, 2>{n_y, n_x} ||
         group.dde_noise.shape() != std::array<size_t, 2>{n_y, n_x})
     {
@@ -348,7 +391,7 @@ inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, cons
         excess_noise_factor(i_y, i_x) = noisemap(i_y, i_x) / noisemap0_at(i_y, i_x);
       }
     }
-    const float mednoise = xt::median(noisemap);
+    const float mednoise = detail::median_of({noisemap.data(), noisemap.size()}, scratch.median_scratch);
     return mednoise;
   };
 

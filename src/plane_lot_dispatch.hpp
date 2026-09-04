@@ -362,6 +362,7 @@ struct ProcessBandScratch
   xt::xtensor<double, 2> parts_sums;
   xt::xtensor<float, 2> windows_sums;
   xt::xtensor<float, 2> plane;
+  std::vector<float> median_scratch;
   xt::xtensor<bool, 2> image_mask;
   xt::xtensor<float, 2> noise_map;
   xt::xtensor<float, 2> excess_noise_factor;
