@@ -64,5 +64,31 @@ sbatch ../step_1/vtune_job.sh /tmp/step_3-after/builddir/bench step_3-after 72 5
 ```
 
 Issue: Claude Code made a mistake and attributed all the accessor overhead to ONE CALL, which turned out to be wrong and it then moved to pointing out call to xt::median.
-xt::median also uses lazy xtensor calls and switching to std::nth_elements on raw pointer should solve the issue.
+Next step is to identify all the situations where basic strided accessors are used to get rid of them when possible.
+- xt::median also uses lazy xtensor calls and switching to std::nth_elements on raw pointer should solve the issue.
 
+## Result 2: `xt::median` bypass
+
+First attempt: materialize `xt::abs(plane)` into a concrete tensor before calling `xt::median`,
+so it would see a contiguous, statically-laid-out container instead of a lazy expression
+(job 66349086). This backfired as a diagnostic more than a fix: it made `xt::median` itself
+show up as the single largest hotspot in the whole binary (616.8 s, 14.9 % of CPU time) instead
+of reducing anything -- `xt::median` carries real overhead of its own, independent of whether
+its input is lazy or already concrete. Previously that same cost was just smeared thin across
+many differently-instantiated symbols (`nth_element<xiterator<...>>`, `xtensor_container`
+construction, `xfunction_stepper`), each individually too small to show up.
+
+Actual fix: replaced `xt::median` outright, at the three call sites that operate on plain
+contiguous tensors (`plane`, `windows_sums`, `noisemap`), with a hand-rolled
+`std::nth_element`-based median over a reused scratch buffer
+(`detail::median_of`/`median_of_abs`, `ProcessBandScratch::median_scratch`). Re-profiled
+(job 66349126, same config -- 72 threads, 5 iters, `lot_diff36_cpp`):
+
+| | before (66347490) | after (66349126) |
+|---|---:|---:|
+| mean iteration (bench's own timer) | 14.254 s | **11.626 s (-18.4 %)** |
+| total CPU time | 4059.6 s | 3798.6 s (-6.4 %) |
+| `xt::median` as a top-5 hotspot | not present (smeared into "Others") | gone entirely |
+
+Good performance improvement overall.
+See `results/vtune-nth-element-median-job66349126.{out,provenance.txt,source.patch}`.
