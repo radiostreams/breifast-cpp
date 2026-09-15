@@ -180,47 +180,53 @@ xt::xtensor<float, 2> compute_snr_and_apply_filters(const xt::xtensor<float, 2> 
   result.histogram2.resize(config.max_sigma_bin * 2, 0);
   float local_min_sigma = std::numeric_limits<float>::infinity();
   float local_max_sigma = std::numeric_limits<float>::lowest();
-  for (size_t i_y = 0; i_y < n_y; ++i_y)
-  {
-    for (size_t i_x = 0; i_x < n_x; ++i_x)
-    {
-      const auto noise = noise_map(i_y, i_x);
-      const bool valid = noise != 0 && std::isfinite(noise);
-      snr(i_y, i_x) = valid ? plane(i_y, i_x) / noise_map(i_y, i_x) : 0;
-      image_mask(i_y, i_x) &= valid;
 
-      const auto mask0 = image_mask(i_y, i_x);
+  const float *const plane_ptr = plane.data();
+  const float *const noise_map_ptr = noise_map.data();
+  float *const snr_ptr = snr.data();
+  bool *const image_mask_ptr = image_mask.data();
+  const bool snr_cutoff_enabled = group.snr_cutoff.has_value();
+  const float *const snr_cutoff_ptr = snr_cutoff_enabled ? group.snr_cutoff->data() : nullptr;
+  const bool flux_cutoff_enabled = group.flux_cutoff.has_value();
+  const float *const flux_cutoff_ptr = flux_cutoff_enabled ? group.flux_cutoff->data() : nullptr;
+
+  for (size_t i_pixel = 0; i_pixel < n_y * n_x; ++i_pixel)
+    {
+    const auto noise = noise_map_ptr[i_pixel];
+      const bool valid = noise != 0 && std::isfinite(noise);
+    snr_ptr[i_pixel] = valid ? plane_ptr[i_pixel] / noise : 0;
+    image_mask_ptr[i_pixel] &= valid;
+
+    const auto mask0 = image_mask_ptr[i_pixel];
 
       float snr_cutoff_threshold = 0.F;
-      const bool snr_cutoff_enabled = group.snr_cutoff.has_value();
       if (snr_cutoff_enabled)
       {
         for (auto i_channel = band.start; i_channel < band.stop; ++i_channel)
         {
-          snr_cutoff_threshold += (*group.snr_cutoff)(i_channel, i_y, i_x);
+        snr_cutoff_threshold += snr_cutoff_ptr[i_channel * n_y * n_x + i_pixel];
         }
         snr_cutoff_threshold *= inv_band_size;
       }
 
       float flux_cutoff_threshold = 0.F;
-      const bool flux_cutoff_enabled = group.flux_cutoff.has_value();
       if (flux_cutoff_enabled)
       {
         for (auto i_channel = band.start; i_channel < band.stop; ++i_channel)
         {
-          flux_cutoff_threshold += (*group.flux_cutoff)(i_channel, i_y, i_x);
+        flux_cutoff_threshold += flux_cutoff_ptr[i_channel * n_y * n_x + i_pixel];
         }
         flux_cutoff_threshold *= inv_band_size;
       }
 
-      const auto mask1 = mask0 && (!snr_cutoff_enabled || std::abs(snr(i_y, i_x)) >= snr_cutoff_threshold);
-      const auto mask2 = mask1 && (!flux_cutoff_enabled || std::abs(plane(i_y, i_x)) >= flux_cutoff_threshold);
+    const auto mask1 = mask0 && (!snr_cutoff_enabled || std::abs(snr_ptr[i_pixel]) >= snr_cutoff_threshold);
+    const auto mask2 = mask1 && (!flux_cutoff_enabled || std::abs(plane_ptr[i_pixel]) >= flux_cutoff_threshold);
       const auto mask3 = mask2 && (config.reject_noise_threshold == 0.F ||
-                                   noise_map(i_y, i_x) <= median_noise * config.reject_noise_threshold);
+                                 noise_map_ptr[i_pixel] <= median_noise * config.reject_noise_threshold);
 
-      image_mask(i_y, i_x) = mask3;
+    image_mask_ptr[i_pixel] = mask3;
 
-      long bin_index = std::floor(snr(i_y, i_x) + config.max_sigma_bin);
+    long bin_index = std::floor(snr_ptr[i_pixel] + config.max_sigma_bin);
       if (bin_index == 2 * config.max_sigma_bin)
       {
         bin_index = 2 * config.max_sigma_bin - 1;
@@ -243,14 +249,13 @@ xt::xtensor<float, 2> compute_snr_and_apply_filters(const xt::xtensor<float, 2> 
 
       if (mask3)
       {
-        const float value = snr(i_y, i_x);
+      const float value = snr_ptr[i_pixel];
         local_min_sigma = std::min(local_min_sigma, value);
         local_max_sigma = std::max(local_max_sigma, value);
       }
 
-      const float thresholded_abs_snr = mask3 ? std::abs(snr(i_y, i_x)) : 0.F;
-      image_mask(i_y, i_x) = thresholded_abs_snr >= config.threshold;
-    }
+    const float thresholded_abs_snr = mask3 ? std::abs(snr_ptr[i_pixel]) : 0.F;
+    image_mask_ptr[i_pixel] = thresholded_abs_snr >= config.threshold;
   }
   if (local_min_sigma < std::numeric_limits<float>::infinity())
   {
