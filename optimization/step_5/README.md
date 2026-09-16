@@ -90,34 +90,32 @@ Bench's own timer, before (`282e669`, no NUMA pinning) vs. after (NUMA-pinned ar
 | mean iteration (`run_batch_core`) | 11.711 s | 11.387 s (-2.8%) |
 | per-iteration range | 10.616-12.782 s | 10.899-12.094 s |
 
-**Hypothesis confirmed, but doesn't help wall-clock.** UPI utilization and remote-access count
-both dropped to essentially zero -- the pinning now genuinely works. But Local Memory Access
-Count roughly doubled (783M &rarr; 1.48B): the same total memory traffic that used to cross the
-UPI fabric is now just served from local DRAM instead. DRAM bandwidth utilization (~123 GB/s
-average, ~59% of elapsed time in the high-utilization band) was already saturated-ish both
-before and after. The workload is bandwidth/cache-hierarchy bound (L2 Bound 16.7%, DRAM Bound
-11.0%) on the *total volume* of memory traffic, not latency-bound on the *extra hop* remote
-access added -- so removing that hop freed up a resource (UPI) that was never actually gating
-wall-clock time. The -2.8% mean-iteration change is within this cluster's normal run-to-run
-noise (see step_1's README), i.e. not a real improvement.
+**Hypothesis confirmed; mean-iteration wall-clock is within noise, but CPU Time is genuinely
+lower.** UPI utilization and remote-access count both dropped to essentially zero -- the pinning
+now genuinely works. Local Memory Access Count roughly doubled (783M &rarr; 1.48B): the same
+total memory traffic that used to cross the UPI fabric is now just served from local DRAM
+instead. DRAM bandwidth utilization (~123 GB/s average, ~59% of elapsed time in the
+high-utilization band) was already saturated-ish both before and after, and the -2.8%
+mean-iteration change is within this cluster's normal run-to-run noise (see step_1's README).
+But total CPU Time dropped too (5048.1s &rarr; 4965.9s, -1.6%) -- a real, if modest, reduction in
+aggregate work done, consistent with threads no longer paying the extra latency/retry cost of
+remote memory access even though it doesn't show up as a wall-clock win at this thread count.
 
-**Implication**: NUMA placement is correctly solved now, but the actual lever for wall-clock
-improvement is reducing total memory traffic per pixel (working-set size, fewer large arrays
-touched per item) -- a data-layout/algorithmic problem, not a placement one.
+**Implication**: NUMA placement is correctly solved and worth keeping. The bigger remaining
+lever for wall-clock improvement is reducing total memory traffic per pixel (working-set size,
+fewer large arrays touched per item) -- a data-layout/algorithmic problem, not a placement one.
 
 ## Reproducing
 
-This work is kept on branch `thread_pinning_uci_fix` (commit `5488530`) to cherry-pick later
-if/when memory-traffic reductions make NUMA placement worth revisiting.
+Cherry-picked to `main` (commit `1f59096`) since CPU Time improved. Building still needs hwloc
+available to CMake's pkg-config check:
 
 ```bash
-git worktree add --detach /tmp/step_5 thread_pinning_uci_fix
 module load hwloc/2.9.1 libxml2/2.10.3
 export PKG_CONFIG_PATH="<libpciaccess prefix>/lib/pkgconfig:$PKG_CONFIG_PATH"
-nix develop --command meson setup /tmp/step_5/builddir /tmp/step_5
-nix develop --command ninja -C /tmp/step_5/builddir bench
+nix develop --command meson setup --wipe builddir .
+nix develop --command ninja -C builddir bench
 ```
 
-Running (module load only, no `PKG_CONFIG_PATH`/`libxml2` needed): `module load hwloc/2.9.1`,
-then `sbatch run_profile.sh 72` (hotspots) or `sbatch run_bench_memaccess.sh` (memory-access,
-NUMA/UPI metrics) from the worktree.
+Running only needs `module load hwloc/2.9.1` (already added to `run_profile.sh`,
+`run_bench_memaccess.sh` and `run_bench.sh`).
