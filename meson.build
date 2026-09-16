@@ -12,12 +12,12 @@ xtensor_python_dep = dependency('xtensor-python').as_system('system')
 numpy_dep = dependency('numpy').as_system('system')
 json_dep = dependency('nlohmann_json').as_system('system')
 
-tbb_version = '2022.3.0'
-tbb_tarball_sha256 = '01598a46c1162c27253a0de0236f520fd8ee8166e9ebb84a4243574f88e6e50a'
+tbb_version = '2023.1.0'
+tbb_tarball_sha256 = '191288b52e1e6b17198000b64d77d194bb65e791be46ebc606e9b091781e2070'
 tbb_tarball_url = 'https://github.com/uxlfoundation/oneTBB/archive/refs/tags/v' + tbb_version + '.tar.gz'
 
 tbb_build = custom_target('tbb-build',
-  output : ['tbb-install', 'libtbb.so.12'],
+  output : ['tbb-install', 'libtbb.so.12', 'libtbbbind_2_5.so.3'],
   command : ['sh', '-c',
     'set -eu; ' +
     'PATH=/usr/bin:/bin:$PATH; ' +
@@ -33,9 +33,16 @@ tbb_build = custom_target('tbb-build',
     'cmake --build "$build" -j$(nproc); ' +
     'cmake --install "$build"; ' +
     'real="$(find @OUTPUT0@/lib* -maxdepth 1 -name "libtbb.so.12.*" ! -type l | head -1)"; ' +
-    'cp "$real" @OUTPUT1@'],
+    'cp "$real" @OUTPUT1@; ' +
+    # TBB looks for tbbbind next to wherever libtbb.so actually loaded from, so it has to sit
+    # in the same flat directory as the libtbb.so.12 copy above. Requires hwloc >= 2.5 findable
+    # via pkg-config when tbb-install is (re)configured (module load hwloc/2.9.1 plus its
+    # Requires.private -- libxml2, pciaccess -- also on PKG_CONFIG_PATH), otherwise tbbbind_2_5
+    # is never built and this cp fails.
+    'tbbbind="$(find @OUTPUT0@/lib* -maxdepth 1 -name "libtbbbind_2_5.so.3.*" ! -type l | head -1)"; ' +
+    'cp "$tbbbind" @OUTPUT2@'],
   install : true,
-  install_dir : [false, py.get_install_dir()],
+  install_dir : [false, py.get_install_dir(), py.get_install_dir()],
 )
 
 tbb_install_dir = tbb_build[0].full_path()
