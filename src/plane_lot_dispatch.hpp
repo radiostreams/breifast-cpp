@@ -23,6 +23,12 @@
 #include <string>
 #include <vector>
 
+#include <oneapi/tbb/concurrent_unordered_map.h>
+#include <oneapi/tbb/enumerable_thread_specific.h>
+#include <oneapi/tbb/mutex.h>
+#include <oneapi/tbb/parallel_for.h>
+#include <oneapi/tbb/task_arena.h>
+
 #include <xtensor/containers/xarray.hpp>
 #include <xtensor/core/xmath.hpp>
 #include <xtensor/core/xshape.hpp>
