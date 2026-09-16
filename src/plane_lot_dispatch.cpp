@@ -1,11 +1,5 @@
 #include <ittnotify.h>
-#include <sched.h>
 #include <span>
-#include <oneapi/tbb/concurrent_unordered_map.h>
-#include <oneapi/tbb/enumerable_thread_specific.h>
-#include <oneapi/tbb/mutex.h>
-#include <oneapi/tbb/parallel_for.h>
-#include <oneapi/tbb/task_arena.h>
 #include <xtensor/core/xnoalias.hpp>
 #include <xtensor/core/xtensor_forward.hpp>
 #include <xtensor/misc/xsort.hpp>
@@ -18,7 +12,8 @@ namespace breifast
 {
 namespace detail
 {
-template <typename T> float median_of_abs(std::span<const T> values, std::vector<T> &scratch)
+template<typename T>
+float median_of_abs(std::span<const T> values, std::vector<T> &scratch)
 {
   scratch.assign(values.begin(), values.end());
   const size_t n = scratch.size();
@@ -36,7 +31,8 @@ template <typename T> float median_of_abs(std::span<const T> values, std::vector
   return (hi + lo) / 2.F;
 }
 
-template <typename T> float median_of(std::span<const T> values, std::vector<T> &scratch)
+template<typename T>
+float median_of(std::span<const T> values, std::vector<T> &scratch)
 {
   scratch.assign(values.begin(), values.end());
   const size_t n = scratch.size();
@@ -52,25 +48,6 @@ template <typename T> float median_of(std::span<const T> values, std::vector<T> 
   std::nth_element(scratch.begin(), scratch.begin() + mid - 1, scratch.begin() + mid, cmp);
   const T lo = scratch[mid - 1];
   return (hi + lo) / 2.F;
-}
-
-// Diagnostic: logs the calling OS thread's CPU affinity mask once per (phase, thread), so we can tell whether
-// task_group::run()/task_arena::execute() actually restrict a thread's hardware affinity to the target NUMA
-// node, or merely schedule work onto it logically while the thread stays free to run anywhere.
-inline void log_thread_affinity(int node, const char *phase)
-{
-  thread_local std::vector<std::string> logged_phases;
-  if (std::find(logged_phases.begin(), logged_phases.end(), phase) != logged_phases.end())
-  {
-    return;
-  }
-  logged_phases.emplace_back(phase);
-
-  cpu_set_t mask;
-  CPU_ZERO(&mask);
-  sched_getaffinity(0, sizeof(mask), &mask);
-  std::cerr << "[numa-check] node=" << node << " phase=" << phase << " cpu=" << sched_getcpu()
-            << " affinity_count=" << CPU_COUNT(&mask) << " thread=" << std::this_thread::get_id() << "\n";
 }
 } // namespace detail
 
@@ -214,68 +191,68 @@ xt::xtensor<float, 2> compute_snr_and_apply_filters(const xt::xtensor<float, 2> 
   const float *const flux_cutoff_ptr = flux_cutoff_enabled ? group.flux_cutoff->data() : nullptr;
 
   for (size_t i_pixel = 0; i_pixel < n_y * n_x; ++i_pixel)
-  {
+    {
     const auto noise = noise_map_ptr[i_pixel];
-    const bool valid = noise != 0 && std::isfinite(noise);
+      const bool valid = noise != 0 && std::isfinite(noise);
     snr_ptr[i_pixel] = valid ? plane_ptr[i_pixel] / noise : 0;
     image_mask_ptr[i_pixel] &= valid;
 
     const auto mask0 = image_mask_ptr[i_pixel];
 
-    float snr_cutoff_threshold = 0.F;
-    if (snr_cutoff_enabled)
-    {
-      for (auto i_channel = band.start; i_channel < band.stop; ++i_channel)
+      float snr_cutoff_threshold = 0.F;
+      if (snr_cutoff_enabled)
       {
+        for (auto i_channel = band.start; i_channel < band.stop; ++i_channel)
+        {
         snr_cutoff_threshold += snr_cutoff_ptr[i_channel * n_y * n_x + i_pixel];
+        }
+        snr_cutoff_threshold *= inv_band_size;
       }
-      snr_cutoff_threshold *= inv_band_size;
-    }
 
-    float flux_cutoff_threshold = 0.F;
-    if (flux_cutoff_enabled)
-    {
-      for (auto i_channel = band.start; i_channel < band.stop; ++i_channel)
+      float flux_cutoff_threshold = 0.F;
+      if (flux_cutoff_enabled)
       {
+        for (auto i_channel = band.start; i_channel < band.stop; ++i_channel)
+        {
         flux_cutoff_threshold += flux_cutoff_ptr[i_channel * n_y * n_x + i_pixel];
+        }
+        flux_cutoff_threshold *= inv_band_size;
       }
-      flux_cutoff_threshold *= inv_band_size;
-    }
 
     const auto mask1 = mask0 && (!snr_cutoff_enabled || std::abs(snr_ptr[i_pixel]) >= snr_cutoff_threshold);
     const auto mask2 = mask1 && (!flux_cutoff_enabled || std::abs(plane_ptr[i_pixel]) >= flux_cutoff_threshold);
-    const auto mask3 = mask2 && (config.reject_noise_threshold == 0.F ||
+      const auto mask3 = mask2 && (config.reject_noise_threshold == 0.F ||
                                  noise_map_ptr[i_pixel] <= median_noise * config.reject_noise_threshold);
 
     image_mask_ptr[i_pixel] = mask3;
 
     long bin_index = std::floor(snr_ptr[i_pixel] + config.max_sigma_bin);
-    if (bin_index == 2 * config.max_sigma_bin)
-    {
-      bin_index = 2 * config.max_sigma_bin - 1;
-    }
-    if (0 <= bin_index && bin_index < 2 * config.max_sigma_bin)
-    {
-      if (mask0 && config.histogram_detail > 1)
+      if (bin_index == 2 * config.max_sigma_bin)
       {
-        result.histogram0[bin_index]++;
+        bin_index = 2 * config.max_sigma_bin - 1;
       }
-      if (mask1 && config.histogram_detail > 1)
+      if (0 <= bin_index && bin_index < 2 * config.max_sigma_bin)
       {
-        result.histogram1[bin_index]++;
+        if (mask0 && config.histogram_detail > 1)
+        {
+          result.histogram0[bin_index]++;
+        }
+        if (mask1 && config.histogram_detail > 1)
+        {
+          result.histogram1[bin_index]++;
+        }
+        if (mask2 && config.histogram_detail > 0)
+        {
+          result.histogram2[bin_index]++;
+        }
       }
-      if (mask2 && config.histogram_detail > 0)
-      {
-        result.histogram2[bin_index]++;
-      }
-    }
 
-    if (mask3)
-    {
+      if (mask3)
+      {
       const float value = snr_ptr[i_pixel];
-      local_min_sigma = std::min(local_min_sigma, value);
-      local_max_sigma = std::max(local_max_sigma, value);
-    }
+        local_min_sigma = std::min(local_min_sigma, value);
+        local_max_sigma = std::max(local_max_sigma, value);
+      }
 
     const float thresholded_abs_snr = mask3 ? std::abs(snr_ptr[i_pixel]) : 0.F;
     image_mask_ptr[i_pixel] = thresholded_abs_snr >= config.threshold;
@@ -632,63 +609,7 @@ std::vector<ProcessPlaneResult> run_batch_core(std::vector<PlaneBatchItem> &item
 {
   std::vector<ProcessPlaneResult> results(items.size());
 
-  const auto numa_nodes = tbb::info::numa_nodes();
-
-  std::vector<int> node_concurrency(numa_nodes.size());
-  int total_natural = 0;
-  for (size_t i = 0; i < numa_nodes.size(); ++i)
-  {
-    node_concurrency[i] = tbb::info::default_concurrency(numa_nodes[i]);
-    total_natural += node_concurrency[i];
-  }
-
-  std::vector<int> arena_concurrency = node_concurrency;
-  if (num_threads > 0 && num_threads < total_natural)
-  {
-    int assigned = 0;
-    std::vector<double> remainders(numa_nodes.size());
-    for (size_t i = 0; i < numa_nodes.size(); ++i)
-    {
-      const double share = static_cast<double>(num_threads) * node_concurrency[i] / total_natural;
-      arena_concurrency[i] = static_cast<int>(share);
-      remainders[i] = share - arena_concurrency[i];
-      assigned += arena_concurrency[i];
-    }
-    std::vector<size_t> order(numa_nodes.size());
-    std::iota(order.begin(), order.end(), 0);
-    std::sort(order.begin(), order.end(), [&](size_t a, size_t b) { return remainders[a] > remainders[b]; });
-    for (int i = 0; i < num_threads - assigned; ++i)
-    {
-      arena_concurrency[order[i]]++;
-    }
-  }
-
-  std::cerr << "[numa-check] numa_nodes().size()=" << numa_nodes.size() << "\n";
-  for (size_t i = 0; i < numa_nodes.size(); ++i)
-  {
-    std::cerr << "[numa-check]   arena[" << i << "] numa_id=" << numa_nodes[i] << " natural_concurrency=" << node_concurrency[i]
-               << " assigned_concurrency=" << arena_concurrency[i] << "\n";
-  }
-
-  std::vector<tbb::task_arena> arenas;
-  arenas.reserve(numa_nodes.size());
-  for (size_t i = 0; i < numa_nodes.size(); ++i)
-  {
-    arenas.emplace_back(
-        tbb::task_arena::constraints{}.set_numa_id(numa_nodes[i]).set_max_concurrency(arena_concurrency[i]));
-  }
-
-  const int total_concurrency = std::accumulate(arena_concurrency.begin(), arena_concurrency.end(), 0);
-
-  std::vector<size_t> item_offsets(numa_nodes.size() + 1, 0);
-  size_t assigned_items = 0;
-  for (size_t i = 0; i < numa_nodes.size(); ++i)
-  {
-    const size_t count = (i + 1 == numa_nodes.size()) ? items.size() - assigned_items
-                                                      : items.size() * arena_concurrency[i] / total_concurrency;
-    item_offsets[i + 1] = item_offsets[i] + count;
-    assigned_items += count;
-  }
+  tbb::task_arena task_arena(num_threads > 0 ? num_threads : tbb::task_arena::automatic);
 
   // One scratch buffer set per worker thread, reused across every item that thread processes.
   tbb::enumerable_thread_specific<ProcessBandScratch> scratches;
@@ -712,31 +633,10 @@ std::vector<ProcessPlaneResult> run_batch_core(std::vector<PlaneBatchItem> &item
       }
     }
   };
-
-  const auto run_slice = [&](size_t node)
-  {
-    detail::log_thread_affinity(static_cast<int>(node), "task-group-thread");
-    arenas[node].execute(
-        [&]()
-        {
-          detail::log_thread_affinity(static_cast<int>(node), "arena-execute-thread");
-          tbb::parallel_for(tbb::blocked_range<size_t>(item_offsets[node], item_offsets[node + 1]),
-                             [&](const tbb::blocked_range<size_t> &range)
-                             {
-                               detail::log_thread_affinity(static_cast<int>(node), "worker-thread");
-                               main_iteration(range);
-                             });
-        });
-  };
+  const auto main_execution = [&]() { tbb::parallel_for(tbb::blocked_range<size_t>(0, items.size()), main_iteration); };
 
   __itt_resume();
-  tbb::task_group task_group;
-  for (size_t node = 0; node + 1 < arenas.size(); ++node)
-  {
-    task_group.run([&, node]() { run_slice(node); });
-  }
-  run_slice(arenas.size() - 1); // calling thread does the last node's slice itself, instead of sitting idle
-  task_group.wait();
+  task_arena.execute(main_execution);
   __itt_pause();
 
   return results;
