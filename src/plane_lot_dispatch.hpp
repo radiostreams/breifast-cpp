@@ -18,6 +18,7 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <numeric>
 #include <optional>
 #include <ranges>
 #include <string>
@@ -28,6 +29,7 @@
 #include <oneapi/tbb/mutex.h>
 #include <oneapi/tbb/parallel_for.h>
 #include <oneapi/tbb/task_arena.h>
+#include <oneapi/tbb/task_group.h>
 
 #include <xtensor/containers/xarray.hpp>
 #include <xtensor/core/xmath.hpp>
@@ -361,6 +363,7 @@ struct ProcessBandScratch
 {
   xt::xtensor<float, 2> row_window_sums;
   std::vector<double> column_accumulators;
+  xt::xtensor<float, 2> snr;
   xt::xtensor<float, 2> windows_sums;
   xt::xtensor<float, 2> plane;
   std::vector<float> median_scratch;
@@ -403,13 +406,12 @@ const xt::xtensor<float, 2> &compute_rms_noise_map(ProcessBandScratch &scratch, 
  * @param band Supplies the channel range to average cutoff arrays over.
  * @param config Supplies `max_sigma_bin`, `histogram_detail`, `threshold`, `reject_noise_threshold`.
  * @param result Histogram and min/max-sigma outputs are written here.
- * @return SNR image, same shape as `plane` (needed later for peak/island work).
+ * FIXME: UPDATE DOC
  */
-xt::xtensor<float, 2> compute_snr_and_apply_filters(const xt::xtensor<float, 2> &plane,
-                                                    const xt::xtensor<float, 2> &noise_map, float median_noise,
-                                                    float inv_band_size, xt::xtensor<bool, 2> &image_mask,
-                                                    const PlaneBatchGroup &group, const BandSlice &band,
-                                                    const PlaneConfig &config, ProcessPlaneResult &result);
+void compute_snr_and_apply_filters(xt::xtensor<float, 2> &snr, const xt::xtensor<float, 2> &plane,
+                                   const xt::xtensor<float, 2> &noise_map, float median_noise, float inv_band_size,
+                                   xt::xtensor<bool, 2> &image_mask, const PlaneBatchGroup &group,
+                                   const BandSlice &band, const PlaneConfig &config, ProcessPlaneResult &result);
 
 /**
  * @brief Build a centred, rotated, unit-sum-normalized 2D anisotropic Gaussian kernel.
