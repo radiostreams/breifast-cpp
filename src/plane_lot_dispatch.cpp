@@ -17,19 +17,24 @@ namespace detail
 template <typename T> float median_of_abs(std::span<const T> values, std::vector<T> &scratch)
 {
   ZoneScoped;
-  scratch.assign(values.begin(), values.end());
+  scratch.resize(values.size());
+  std::transform(values.begin(), values.end(), scratch.begin(), [](T x) { return std::abs(x); });
   const size_t n = scratch.size();
   const size_t mid = n / 2;
-  const auto cmp = [](T a, T b) { return std::abs(a) < std::abs(b); };
+  const auto cmp = [](T a, T b) { return a < b; };
 
   std::nth_element(scratch.begin(), scratch.begin() + mid, scratch.end(), cmp);
-  const T hi = std::abs(scratch[mid]);
+  const T hi = scratch[mid];
   if (n % 2 == 1)
   {
     return hi;
   }
-  std::nth_element(scratch.begin(), scratch.begin() + mid - 1, scratch.begin() + mid, cmp);
-  const T lo = std::abs(scratch[mid - 1]);
+
+  T lo = scratch[0];
+  for (size_t i = 1; i < mid; ++i)
+  {
+    lo = std::max(lo, scratch[i]);
+  }
   return (hi + lo) / 2.F;
 }
 
@@ -47,8 +52,12 @@ template <typename T> float median_of(std::span<const T> values, std::vector<T> 
   {
     return hi;
   }
-  std::nth_element(scratch.begin(), scratch.begin() + mid - 1, scratch.begin() + mid, cmp);
-  const T lo = scratch[mid - 1];
+
+  T lo = scratch[0];
+  for (size_t i = 1; i < mid; ++i)
+  {
+    lo = std::max(lo, scratch[i]);
+  }
   return (hi + lo) / 2.F;
 }
 } // namespace detail
@@ -421,7 +430,7 @@ inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, cons
 
   const float noise_global_mad = detail::median_of_abs({plane.data(), plane.size()}, scratch.median_scratch) * 1.4826F;
 
-  const auto combine = [&](auto &noisemap, auto &excess_noise_factor, const auto &noisemap0)
+  const auto combine = [&](auto &noisemap, const auto &noisemap0)
   {
     ZoneScopedN("combine");
     // Precondition: group.selfnoise_offset/dde_noise must match the plane's shape.
@@ -445,7 +454,6 @@ inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, cons
     };
 
     noisemap.resize({n_y, n_x});
-    excess_noise_factor.resize({n_y, n_x});
 
     for (size_t i_y = 0; i_y < n_y; ++i_y)
     {
@@ -457,28 +465,19 @@ inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, cons
                                        config.ddenoise_scaling_factor * group.dde_noise(i_y, i_x));
       }
     }
-    for (size_t i_y = 0; i_y < n_y; ++i_y)
-    {
-      for (size_t i_x = 0; i_x < n_x; ++i_x)
-      {
-        excess_noise_factor(i_y, i_x) = noisemap(i_y, i_x) / noisemap0_at(i_y, i_x);
-      }
-    }
     const float mednoise = detail::median_of({noisemap.data(), noisemap.size()}, scratch.median_scratch);
     return mednoise;
   };
 
   auto &noise_map = scratch.noise_map;
-  auto &excess_noise_factor = scratch.excess_noise_factor;
   float median_noise = 0.F;
   if (config.use_rms_noise_estimator)
   {
-    median_noise =
-        combine(scratch.noise_map, scratch.excess_noise_factor, compute_rms_noise_map(scratch, plane, config.boxsize));
+    median_noise = combine(scratch.noise_map, compute_rms_noise_map(scratch, plane, config.boxsize));
   }
   else
   {
-    median_noise = combine(scratch.noise_map, scratch.excess_noise_factor, noise_global_mad);
+    median_noise = combine(scratch.noise_map, noise_global_mad);
   }
   result.median_noises.push_back(median_noise);
 
@@ -608,12 +607,17 @@ inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, cons
       boost_value = ratio(max_abs_index);
     }
 
-    detection_arrays.add(
-        island.coordinates.first, island.coordinates.second, island.island_size, item.stokes_label, band.label, flux,
-        island.local_noise, island.local_noise / median_noise, island.value, rms != 0.F ? flux / rms : 0.F,
-        signal_to_noise_extended_box, lmad != 0.F ? flux / lmad : 0.F, flux / noise_global_mad,
-        group.selfnoise_raw(island.coordinates.first, island.coordinates.second),
-        excess_noise_factor(island.coordinates.first, island.coordinates.second), beam_chi2_value, boost_value);
+    const float noisemap0_at_peak = config.use_rms_noise_estimator
+                                        ? scratch.windows_sums(island.coordinates.first, island.coordinates.second)
+                                        : noise_global_mad;
+
+    detection_arrays.add(island.coordinates.first, island.coordinates.second, island.island_size, item.stokes_label,
+                         band.label, flux, island.local_noise, island.local_noise / median_noise, island.value,
+                         rms != 0.F ? flux / rms : 0.F, signal_to_noise_extended_box, lmad != 0.F ? flux / lmad : 0.F,
+                         flux / noise_global_mad,
+                         group.selfnoise_raw(island.coordinates.first, island.coordinates.second),
+                         noise_map(island.coordinates.first, island.coordinates.second) / noisemap0_at_peak,
+                         beam_chi2_value, boost_value);
   }
 }
 
