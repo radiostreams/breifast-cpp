@@ -1,5 +1,7 @@
+#include <algorithm>
 #include <ittnotify.h>
 #include <span>
+#include <tracy/Tracy.hpp>
 #include <xtensor/core/xnoalias.hpp>
 #include <xtensor/core/xtensor_forward.hpp>
 #include <xtensor/misc/xsort.hpp>
@@ -12,9 +14,9 @@ namespace breifast
 {
 namespace detail
 {
-template<typename T>
-float median_of_abs(std::span<const T> values, std::vector<T> &scratch)
+template <typename T> float median_of_abs(std::span<const T> values, std::vector<T> &scratch)
 {
+  ZoneScoped;
   scratch.assign(values.begin(), values.end());
   const size_t n = scratch.size();
   const size_t mid = n / 2;
@@ -31,9 +33,9 @@ float median_of_abs(std::span<const T> values, std::vector<T> &scratch)
   return (hi + lo) / 2.F;
 }
 
-template<typename T>
-float median_of(std::span<const T> values, std::vector<T> &scratch)
+template <typename T> float median_of(std::span<const T> values, std::vector<T> &scratch)
 {
+  ZoneScoped;
   scratch.assign(values.begin(), values.end());
   const size_t n = scratch.size();
   const size_t mid = n / 2;
@@ -107,45 +109,101 @@ float PlaneConfig::max_to_std_ratio_value() const
 inline const xt::xtensor<float, 2> &compute_rms_noise_map(ProcessBandScratch &scratch,
                                                           const xt::xtensor<float, 2> &plane, long boxsize)
 {
+  ZoneScoped;
   const long n_y = static_cast<long>(plane.shape(0));
   const long n_x = static_cast<long>(plane.shape(1));
 
-  auto &parts_sums = scratch.parts_sums;
-  parts_sums.resize({static_cast<size_t>(n_y + 1), static_cast<size_t>(n_x + 1)});
-  for (long i_y = 0; i_y <= n_y; ++i_y)
-  {
-    parts_sums(i_y, 0) = 0.F;
-  }
-  for (long i_x = 0; i_x <= n_x; ++i_x)
-  {
-    parts_sums(0, i_x) = 0.F;
-  }
-  for (long i_y = 0; i_y < n_y; ++i_y)
-  {
-    for (long i_x = 0; i_x < n_x; ++i_x)
-    {
-      parts_sums(i_y + 1, i_x + 1) = plane(i_y, i_x) * plane(i_y, i_x) + parts_sums(i_y, i_x + 1) +
-                                     parts_sums(i_y + 1, i_x) - parts_sums(i_y, i_x);
-    }
-  }
+  const long radius = boxsize / 2;
+  const long window_size = std::max(boxsize, 1L);
+
+  const auto min_x_of = [&](long i_x) { return std::max(i_x - radius, 0L); };
+  const auto max_x_of = [&](long i_x) { return std::min(i_x + window_size - radius, n_x); };
+  const auto min_y_of = [&](long i_y) { return std::max(i_y - radius, 0L); };
+  const auto max_y_of = [&](long i_y) { return std::min(i_y + window_size - radius, n_y); };
 
   auto &windows_sums = scratch.windows_sums;
   windows_sums.resize({static_cast<size_t>(n_y), static_cast<size_t>(n_x)});
 
+  auto &row_window_sums = scratch.row_window_sums;
+  row_window_sums.resize({static_cast<size_t>(n_y), static_cast<size_t>(n_x)});
+
   for (long i_y = 0; i_y < n_y; ++i_y)
   {
+    double accumulator = 0.;
+    for (long i_x = 0; i_x < max_x_of(0); ++i_x)
+    {
+      const double value = plane(i_y, i_x);
+      accumulator += value * value;
+    }
+
     for (long i_x = 0; i_x < n_x; ++i_x)
     {
-      const long min_x = std::max(i_x - boxsize / 2, 0L);
-      const long max_x = std::min(i_x + std::max(boxsize, 1L) - boxsize / 2, n_x);
-      const long min_y = std::max(i_y - boxsize / 2, 0L);
-      const long max_y = std::min(i_y + std::max(boxsize, 1L) - boxsize / 2, n_y);
+      row_window_sums(i_y, i_x) = accumulator;
 
-      const float window_sum =
-          parts_sums(max_y, max_x) - parts_sums(min_y, max_x) - parts_sums(max_y, min_x) + parts_sums(min_y, min_x);
-      const float count = static_cast<float>(max_y - min_y) * static_cast<float>(max_x - min_x);
+      const auto entering_column = i_x + window_size - radius;
+      const auto leaving_column = i_x - radius;
+      if (entering_column < n_x)
+      {
+        const double value = plane(i_y, entering_column);
+        accumulator += value * value;
+      }
 
-      windows_sums(i_y, i_x) = std::sqrt(window_sum / count);
+      if (leaving_column >= 0)
+      {
+        const double value = plane(i_y, leaving_column);
+        accumulator -= value * value;
+      }
+    }
+  }
+
+  static const long block_size = []
+  {
+    const char *env = std::getenv("BREIFAST_BLOCK_SIZE");
+    return env != nullptr ? std::strtol(env, nullptr, 10) : 512L;
+  }();
+  auto &column_accumulators = scratch.column_accumulators;
+  column_accumulators.resize(static_cast<size_t>(block_size));
+
+  for (long block_start = 0; block_start < n_x; block_start += block_size)
+  {
+    const long block_width = std::min(block_start + block_size, n_x) - block_start;
+
+    std::fill_n(column_accumulators.begin(), block_width, 0.);
+
+    for (long i_y = 0; i_y < max_y_of(0); ++i_y)
+    {
+      for (long i = 0; i < block_width; ++i)
+      {
+        column_accumulators[i] += row_window_sums(i_y, block_start + i);
+      }
+    }
+
+    for (long i_y = 0; i_y < n_y; ++i_y)
+    {
+      const long rows_in_window = max_y_of(i_y) - min_y_of(i_y);
+      for (long i = 0; i < block_width; ++i)
+      {
+        const long i_x = block_start + i;
+        const long count = rows_in_window * (max_x_of(i_x) - min_x_of(i_x));
+        windows_sums(i_y, i_x) = static_cast<float>(std::sqrt(column_accumulators[i] / static_cast<double>(count)));
+      }
+
+      const long entering_row = i_y + window_size - radius;
+      const long leaving_row = i_y - radius;
+      if (entering_row < n_y)
+      {
+        for (long i = 0; i < block_width; ++i)
+        {
+          column_accumulators[i] += row_window_sums(entering_row, block_start + i);
+        }
+      }
+      if (leaving_row >= 0)
+      {
+        for (long i = 0; i < block_width; ++i)
+        {
+          column_accumulators[i] -= row_window_sums(leaving_row, block_start + i);
+        }
+      }
     }
   }
 
@@ -167,6 +225,7 @@ xt::xtensor<float, 2> compute_snr_and_apply_filters(const xt::xtensor<float, 2> 
                                                     const PlaneBatchGroup &group, const BandSlice &band,
                                                     const PlaneConfig &config, ProcessPlaneResult &result)
 {
+  ZoneScoped;
   const size_t n_y = plane.shape(0);
   const size_t n_x = plane.shape(1);
 
@@ -191,68 +250,68 @@ xt::xtensor<float, 2> compute_snr_and_apply_filters(const xt::xtensor<float, 2> 
   const float *const flux_cutoff_ptr = flux_cutoff_enabled ? group.flux_cutoff->data() : nullptr;
 
   for (size_t i_pixel = 0; i_pixel < n_y * n_x; ++i_pixel)
-    {
+  {
     const auto noise = noise_map_ptr[i_pixel];
-      const bool valid = noise != 0 && std::isfinite(noise);
+    const bool valid = noise != 0 && std::isfinite(noise);
     snr_ptr[i_pixel] = valid ? plane_ptr[i_pixel] / noise : 0;
     image_mask_ptr[i_pixel] &= valid;
 
     const auto mask0 = image_mask_ptr[i_pixel];
 
-      float snr_cutoff_threshold = 0.F;
-      if (snr_cutoff_enabled)
+    float snr_cutoff_threshold = 0.F;
+    if (snr_cutoff_enabled)
+    {
+      for (auto i_channel = band.start; i_channel < band.stop; ++i_channel)
       {
-        for (auto i_channel = band.start; i_channel < band.stop; ++i_channel)
-        {
         snr_cutoff_threshold += snr_cutoff_ptr[i_channel * n_y * n_x + i_pixel];
-        }
-        snr_cutoff_threshold *= inv_band_size;
       }
+      snr_cutoff_threshold *= inv_band_size;
+    }
 
-      float flux_cutoff_threshold = 0.F;
-      if (flux_cutoff_enabled)
+    float flux_cutoff_threshold = 0.F;
+    if (flux_cutoff_enabled)
+    {
+      for (auto i_channel = band.start; i_channel < band.stop; ++i_channel)
       {
-        for (auto i_channel = band.start; i_channel < band.stop; ++i_channel)
-        {
         flux_cutoff_threshold += flux_cutoff_ptr[i_channel * n_y * n_x + i_pixel];
-        }
-        flux_cutoff_threshold *= inv_band_size;
       }
+      flux_cutoff_threshold *= inv_band_size;
+    }
 
     const auto mask1 = mask0 && (!snr_cutoff_enabled || std::abs(snr_ptr[i_pixel]) >= snr_cutoff_threshold);
     const auto mask2 = mask1 && (!flux_cutoff_enabled || std::abs(plane_ptr[i_pixel]) >= flux_cutoff_threshold);
-      const auto mask3 = mask2 && (config.reject_noise_threshold == 0.F ||
+    const auto mask3 = mask2 && (config.reject_noise_threshold == 0.F ||
                                  noise_map_ptr[i_pixel] <= median_noise * config.reject_noise_threshold);
 
     image_mask_ptr[i_pixel] = mask3;
 
     long bin_index = std::floor(snr_ptr[i_pixel] + config.max_sigma_bin);
-      if (bin_index == 2 * config.max_sigma_bin)
+    if (bin_index == 2 * config.max_sigma_bin)
+    {
+      bin_index = 2 * config.max_sigma_bin - 1;
+    }
+    if (0 <= bin_index && bin_index < 2 * config.max_sigma_bin)
+    {
+      if (mask0 && config.histogram_detail > 1)
       {
-        bin_index = 2 * config.max_sigma_bin - 1;
+        result.histogram0[bin_index]++;
       }
-      if (0 <= bin_index && bin_index < 2 * config.max_sigma_bin)
+      if (mask1 && config.histogram_detail > 1)
       {
-        if (mask0 && config.histogram_detail > 1)
-        {
-          result.histogram0[bin_index]++;
-        }
-        if (mask1 && config.histogram_detail > 1)
-        {
-          result.histogram1[bin_index]++;
-        }
-        if (mask2 && config.histogram_detail > 0)
-        {
-          result.histogram2[bin_index]++;
-        }
+        result.histogram1[bin_index]++;
       }
+      if (mask2 && config.histogram_detail > 0)
+      {
+        result.histogram2[bin_index]++;
+      }
+    }
 
-      if (mask3)
-      {
+    if (mask3)
+    {
       const float value = snr_ptr[i_pixel];
-        local_min_sigma = std::min(local_min_sigma, value);
-        local_max_sigma = std::max(local_max_sigma, value);
-      }
+      local_min_sigma = std::min(local_min_sigma, value);
+      local_max_sigma = std::max(local_max_sigma, value);
+    }
 
     const float thresholded_abs_snr = mask3 ? std::abs(snr_ptr[i_pixel]) : 0.F;
     image_mask_ptr[i_pixel] = thresholded_abs_snr >= config.threshold;
@@ -295,6 +354,7 @@ xt::xtensor<float, 2> build_gaussian_beam_kernel(long halfsize, float sigma_majo
 inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, const PlaneBatchGroup &group,
                          const BandSlice &band, const PlaneConfig &config, ProcessPlaneResult &result)
 {
+  ZoneScoped;
   if (!xt::any(xt::view(item.nonzero_channels, band.xrange())))
   {
     return;
@@ -305,17 +365,21 @@ inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, cons
 
   // Masking
   auto &image_mask = scratch.image_mask;
-  xt::noalias(image_mask) = xt::view(group.accept_mask, band.start, xt::all(), xt::all());
-  bool any_mask = xt::any(image_mask);
-  for (long i_band = band.start + 1; i_band < band.stop; ++i_band)
+  bool any_mask = false;
   {
-    for (size_t i_y = 0; i_y < n_y; ++i_y)
+    ZoneScopedN("mask_accumulate");
+    xt::noalias(image_mask) = xt::view(group.accept_mask, band.start, xt::all(), xt::all());
+    any_mask = xt::any(image_mask);
+    for (long i_band = band.start + 1; i_band < band.stop; ++i_band)
     {
-      for (size_t i_x = 0; i_x < n_x; ++i_x)
+      for (size_t i_y = 0; i_y < n_y; ++i_y)
       {
-        const bool mask = group.accept_mask(i_band, i_y, i_x) || image_mask(i_y, i_x);
-        any_mask |= mask;
-        image_mask(i_y, i_x) = mask;
+        for (size_t i_x = 0; i_x < n_x; ++i_x)
+        {
+          const bool mask = group.accept_mask(i_band, i_y, i_x) || image_mask(i_y, i_x);
+          any_mask |= mask;
+          image_mask(i_y, i_x) = mask;
+        }
       }
     }
   }
@@ -335,18 +399,21 @@ inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, cons
   const float inv_weights_sum = 1.F / weights_sum;
 
   auto &plane = scratch.plane;
-  plane.resize({n_y, n_x});
-  plane.fill(0);
-  for (auto i_channel = band.start; i_channel < band.stop; ++i_channel)
   {
-    for (size_t i_y = 0; i_y < n_y; ++i_y)
+    ZoneScopedN("band_accumulate");
+    plane.resize({n_y, n_x});
+    plane.fill(0);
+    for (auto i_channel = band.start; i_channel < band.stop; ++i_channel)
     {
-      for (size_t i_x = 0; i_x < n_x; ++i_x)
+      for (size_t i_y = 0; i_y < n_y; ++i_y)
       {
-        plane(i_y, i_x) += item.stokes_cube(i_channel, i_y, i_x) * weights(i_channel) * inv_weights_sum;
-        if (do_subtract_mean)
+        for (size_t i_x = 0; i_x < n_x; ++i_x)
         {
-          plane(i_y, i_x) -= (*group.mean_image)(i_channel, i_y, i_x) * inv_band_size;
+          plane(i_y, i_x) += item.stokes_cube(i_channel, i_y, i_x) * weights(i_channel) * inv_weights_sum;
+          if (do_subtract_mean)
+          {
+            plane(i_y, i_x) -= (*group.mean_image)(i_channel, i_y, i_x) * inv_band_size;
+          }
         }
       }
     }
@@ -356,6 +423,7 @@ inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, cons
 
   const auto combine = [&](auto &noisemap, auto &excess_noise_factor, const auto &noisemap0)
   {
+    ZoneScopedN("combine");
     // Precondition: group.selfnoise_offset/dde_noise must match the plane's shape.
     if (group.selfnoise_offset.shape() != std::array<size_t, 2>{n_y, n_x} ||
         group.dde_noise.shape() != std::array<size_t, 2>{n_y, n_x})
@@ -452,15 +520,18 @@ inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, cons
   }
 
   auto &padded_image = scratch.padded_image;
-  padded_image.resize({plane.shape(0) + pad * 2, plane.shape(1) + pad * 2});
-  const size_t padded_ny = static_cast<size_t>(padded_image.shape(0));
-  const size_t padded_nx = static_cast<size_t>(padded_image.shape(1));
-  for (size_t i_y = 0; i_y < padded_ny; ++i_y)
   {
-    for (size_t i_x = 0; i_x < padded_nx; ++i_x)
+    ZoneScopedN("pad_image");
+    padded_image.resize({plane.shape(0) + pad * 2, plane.shape(1) + pad * 2});
+    const size_t padded_ny = static_cast<size_t>(padded_image.shape(0));
+    const size_t padded_nx = static_cast<size_t>(padded_image.shape(1));
+    for (size_t i_y = 0; i_y < padded_ny; ++i_y)
     {
-      const bool in_padding = i_y < pad || i_x < pad || i_y >= pad + n_y || i_x >= pad + n_x;
-      padded_image(i_y, i_x) = in_padding ? 0 : plane(i_y - pad, i_x - pad);
+      for (size_t i_x = 0; i_x < padded_nx; ++i_x)
+      {
+        const bool in_padding = i_y < pad || i_x < pad || i_y >= pad + n_y || i_x >= pad + n_x;
+        padded_image(i_y, i_x) = in_padding ? 0 : plane(i_y - pad, i_x - pad);
+      }
     }
   }
 
@@ -488,6 +559,7 @@ inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, cons
 
   auto &detection_arrays = result.detections;
   detection_arrays.reserve(result.detections.size() + islands.peak_per_label.size());
+  ZoneNamedN(detections_zone, "detections", true);
   for (const auto &[label, island] : islands.peak_per_label)
   {
     const auto padded_y = island.coordinates.first + pad;
@@ -548,6 +620,7 @@ inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, cons
 SpectralVarianceStats compute_spectral_variance_stats(const PlaneBatchItem &item, const PlaneBatchGroup &group,
                                                       const PlaneConfig &config)
 {
+  ZoneScoped;
   SpectralVarianceStats stats;
   const auto n_channels = item.stokes_cube.shape(0);
   const auto n_y = item.stokes_cube.shape(1);
@@ -590,6 +663,7 @@ SpectralVarianceStats compute_spectral_variance_stats(const PlaneBatchItem &item
 ProcessPlaneResult process_plane(ProcessBandScratch &scratch, const PlaneConfig &config, PlaneBatchItem &item,
                                  const PlaneBatchGroup &group)
 {
+  ZoneScoped;
   ProcessPlaneResult result;
   for (auto it = config.band_slices.rbegin(); it != config.band_slices.rend(); ++it)
   {

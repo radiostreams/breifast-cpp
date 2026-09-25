@@ -7,3 +7,4 @@ tests/fixtures/*.npz
 profiling
 manual_bench_deps
 optimization/*/results
+tracy
