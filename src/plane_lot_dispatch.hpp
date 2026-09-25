@@ -359,7 +359,8 @@ struct ProcessPlaneResult
 
 struct ProcessBandScratch
 {
-  xt::xtensor<double, 2> parts_sums;
+  xt::xtensor<float, 2> row_window_sums;
+  std::vector<double> column_accumulators;
   xt::xtensor<float, 2> windows_sums;
   xt::xtensor<float, 2> plane;
   std::vector<float> median_scratch;
@@ -405,10 +406,11 @@ const xt::xtensor<float, 2> &compute_rms_noise_map(ProcessBandScratch &scratch, 
  * @param result Histogram and min/max-sigma outputs are written here.
  * @return SNR image, same shape as `plane` (needed later for peak/island work).
  */
-xt::xtensor<float, 2> compute_snr_and_apply_filters(const xt::xtensor<float, 2> &plane, const xt::xtensor<float, 2> &noise_map,
-                                                float median_noise, float inv_band_size, xt::xtensor<bool, 2> &image_mask,
-                                                const PlaneBatchGroup &group, const BandSlice &band,
-                                                const PlaneConfig &config, ProcessPlaneResult &result);
+xt::xtensor<float, 2> compute_snr_and_apply_filters(const xt::xtensor<float, 2> &plane,
+                                                    const xt::xtensor<float, 2> &noise_map, float median_noise,
+                                                    float inv_band_size, xt::xtensor<bool, 2> &image_mask,
+                                                    const PlaneBatchGroup &group, const BandSlice &band,
+                                                    const PlaneConfig &config, ProcessPlaneResult &result);
 
 /**
  * @brief Build a centred, rotated, unit-sum-normalized 2D anisotropic Gaussian kernel.

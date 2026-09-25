@@ -10,6 +10,7 @@
  */
 #include <cassert>
 #include <numeric>
+#include <tracy/Tracy.hpp>
 
 #include "islands.hpp"
 
@@ -187,6 +188,7 @@ IslandLabels IslandsLabeler::operator()(const xt::xtensor<bool, 2> &masks, const
 IslandLabels label_islands(const xt::xtensor<bool, 2> &masks, const xt::xtensor<float, 2> &image,
                            const xt::xtensor<float, 2> &local_noise)
 {
+  ZoneScoped;
   return IslandsLabeler{}(masks, image, local_noise);
 }
 } // namespace breifast::islands

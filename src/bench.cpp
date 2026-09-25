@@ -1,12 +1,9 @@
-// Standalone executable that replays one real process_lot()/run_batch_core() call, for profiling under VTune. Loads a
-// lot dumped by breifast.py's BREIFAST_DUMP_LOT hook and converted to a manifest.json + raw-array directory by
-// small_test/dump_lot_for_cpp.py.
+// Standalone executable that replays one real process_lot()/run_batch_core() call. Loads a lot dumped by breifast.py's
+// BREIFAST_DUMP_LOT hook and converted to a manifest.json + raw-array directory by small_test/dump_lot_for_cpp.py.
 //
 // Usage: bench <manifest_dir> [num_threads] [repeat]
-//   num_threads: TBB arena size, <=0 means automatic (all CPUs). Default 0.
-//   repeat: number of times to re-run run_batch_core(). Each iteration gets a fresh deep copy of
-//           the loaded planes (process_band() mutates single-channel bands' stokes_cube in
-//           place), matching the pybind11 binding's per-call fresh-copy semantics. Default 1.
+//   num_threads: number of threads to bused by compute loops, <=0 means automatic (all CPUs). Default 0.
+//   repeat: number of times to re-run run_batch_core().
 
 #include <algorithm>
 #include <chrono>
@@ -21,6 +18,7 @@
 
 #include <nlohmann/json.hpp>
 #include <oneapi/tbb/info.h>
+#include <tracy/Tracy.hpp>
 
 #include "plane_lot_dispatch.hpp"
 
@@ -169,9 +167,6 @@ int main(int argc, char **argv)
   std::printf("hardware_concurrency=%u, tbb::info::default_concurrency=%d\n", std::thread::hardware_concurrency(),
               tbb::info::default_concurrency());
 
-  // Single-threaded per-item cost distribution over one unique pass (bench.cpp's loader
-  // duplicates the manifest N times into base_lot, so timing beyond the first manifest-sized
-  // chunk would just repeat the same distribution).
   {
     const size_t n_sample = std::min<size_t>(36, base_lot.planes.size());
     std::vector<double> item_times;
@@ -198,10 +193,11 @@ int main(int argc, char **argv)
   double total = 0.0;
   for (int i = 0; i < repeat; ++i)
   {
-    LotBatch lot = base_lot; // deep copy: process_band() mutates single-channel bands in place
+    LotBatch lot = base_lot;
     const auto t0 = std::chrono::steady_clock::now();
     const auto results = run_lot_core(lot, config, num_threads);
     const auto t1 = std::chrono::steady_clock::now();
+    FrameMark;
     const double elapsed = std::chrono::duration<double>(t1 - t0).count();
     total += elapsed;
     size_t n_detections = 0;
