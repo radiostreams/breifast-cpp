@@ -66,3 +66,10 @@ Ranked:
 | 3 | `combine` | 9.96% | two branchless elementwise loops; `excess_noise_factor` half already slated for deletion (step 8) |
 | 4 | `band_accumulate` | 8.00% | elementwise multiply-add, hoistable loop-invariant branch |
 | 5 | `compute_snr_and_apply_filters` | 16.63% | biggest dense loop, hardest (histogram scatter) |
+
+## Vectorization work
+After further analysis, Claude pointed out a few vectorization sites and suggested adapting them and compile options to allow GCC to auto-vectorize.
+We suggested using xsimd where relevant instead of only relying on GCC (results can vary from a version to another).
+
+Claude also suggesting rolling the intermediate array excess_noise_factor to compute it on the fly only where needed.
+It made refactoring suggestions to remove the portions of code involved but also made a useless suggestion to keep a pointer to a function result that wasn't needed for no good reason.
