@@ -73,3 +73,12 @@ We suggested using xsimd where relevant instead of only relying on GCC (results 
 
 Claude also suggesting rolling the intermediate array excess_noise_factor to compute it on the fly only where needed.
 It made refactoring suggestions to remove the portions of code involved but also made a useless suggestion to keep a pointer to a function result that wasn't needed for no good reason.
+
+Before vecotrizing, we benchmark that steps fusion and find that again, UPI is the highest waiting reason. We try reapplying a thread pinning solution but we find threads activity to be very erratic and CPU usage to be rather low overall.
+Performance degraded for that reason.
+
+We provide Claude with a screenshot of the threads activity and ask it to query the profiling data to find the mean reason for threads inactivity.
+=> we find out that one of the main reasons for thread inactivity is allocation wait.
+Two repeated allocations in compute that were left:
+- snr in compute_snr_and_apply_filters
+- label_islands

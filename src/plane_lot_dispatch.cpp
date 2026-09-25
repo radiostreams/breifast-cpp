@@ -228,17 +228,15 @@ inline const xt::xtensor<float, 2> &compute_rms_noise_map(ProcessBandScratch &sc
   return windows_sums;
 }
 
-xt::xtensor<float, 2> compute_snr_and_apply_filters(const xt::xtensor<float, 2> &plane,
-                                                    const xt::xtensor<float, 2> &noise_map, float median_noise,
-                                                    float inv_band_size, xt::xtensor<bool, 2> &image_mask,
-                                                    const PlaneBatchGroup &group, const BandSlice &band,
-                                                    const PlaneConfig &config, ProcessPlaneResult &result)
+void compute_snr_and_apply_filters(xt::xtensor<float, 2> &snr, const xt::xtensor<float, 2> &plane,
+                                   const xt::xtensor<float, 2> &noise_map, float median_noise, float inv_band_size,
+                                   xt::xtensor<bool, 2> &image_mask, const PlaneBatchGroup &group,
+                                   const BandSlice &band, const PlaneConfig &config, ProcessPlaneResult &result)
 {
   ZoneScoped;
   const size_t n_y = plane.shape(0);
   const size_t n_x = plane.shape(1);
 
-  xt::xtensor<float, 2> snr;
   snr.resize(plane.shape());
   result.histogram0.clear();
   result.histogram0.resize(config.max_sigma_bin * 2, 0);
@@ -330,7 +328,6 @@ xt::xtensor<float, 2> compute_snr_and_apply_filters(const xt::xtensor<float, 2> 
     result.min_sigma = result.min_sigma ? std::min(*result.min_sigma, local_min_sigma) : local_min_sigma;
     result.max_sigma = result.max_sigma ? std::max(*result.max_sigma, local_max_sigma) : local_max_sigma;
   }
-  return snr;
 }
 
 xt::xtensor<float, 2> build_gaussian_beam_kernel(long halfsize, float sigma_major, float sigma_minor, float rotate)
@@ -481,8 +478,9 @@ inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, cons
   }
   result.median_noises.push_back(median_noise);
 
-  const auto snr = compute_snr_and_apply_filters(plane, noise_map, median_noise, inv_band_size, image_mask, group, band,
-                                                 config, result);
+  auto &snr = scratch.snr;
+  compute_snr_and_apply_filters(snr, plane, noise_map, median_noise, inv_band_size, image_mask, group, band, config,
+                                result);
   if (band.size() == 1)
   {
     xt::view(item.stokes_cube, band.start) = snr;
@@ -687,7 +685,69 @@ std::vector<ProcessPlaneResult> run_batch_core(std::vector<PlaneBatchItem> &item
 {
   std::vector<ProcessPlaneResult> results(items.size());
 
-  tbb::task_arena task_arena(num_threads > 0 ? num_threads : tbb::task_arena::automatic);
+  // One task_arena per NUMA node, each pinned to it, so a thread's scratch buffers land on the same
+  // socket as the thread (first-touch). Needs libtbbbind, which needs hwloc at TBB build time; without
+  // it numa_nodes() returns a single sentinel node and every arena below is silently unconstrained.
+  const auto numa_nodes = tbb::info::numa_nodes();
+
+  std::vector<int> node_concurrency(numa_nodes.size());
+  int total_natural = 0;
+  for (size_t i = 0; i < numa_nodes.size(); ++i)
+  {
+    node_concurrency[i] = tbb::info::default_concurrency(numa_nodes[i]);
+    total_natural += node_concurrency[i];
+  }
+
+  // Split num_threads across nodes in proportion to their natural concurrency (largest remainder).
+  std::vector<int> arena_concurrency = node_concurrency;
+  if (num_threads > 0 && num_threads < total_natural)
+  {
+    int assigned = 0;
+    std::vector<double> remainders(numa_nodes.size());
+    for (size_t i = 0; i < numa_nodes.size(); ++i)
+    {
+      const double share = static_cast<double>(num_threads) * node_concurrency[i] / total_natural;
+      arena_concurrency[i] = static_cast<int>(share);
+      remainders[i] = share - arena_concurrency[i];
+      assigned += arena_concurrency[i];
+    }
+    std::vector<size_t> order(numa_nodes.size());
+    std::iota(order.begin(), order.end(), 0);
+    std::sort(order.begin(), order.end(), [&](size_t a, size_t b) { return remainders[a] > remainders[b]; });
+    for (int i = 0; i < num_threads - assigned; ++i)
+    {
+      arena_concurrency[order[i]]++;
+    }
+  }
+
+  std::cerr << "[numa] nodes=" << numa_nodes.size();
+  for (size_t i = 0; i < numa_nodes.size(); ++i)
+  {
+    std::cerr << " [" << numa_nodes[i] << "]=" << arena_concurrency[i];
+  }
+  std::cerr << std::endl;
+
+  std::vector<tbb::task_arena> arenas;
+  arenas.reserve(numa_nodes.size());
+  for (size_t i = 0; i < numa_nodes.size(); ++i)
+  {
+    arenas.emplace_back(
+        tbb::task_arena::constraints{}.set_numa_id(numa_nodes[i]).set_max_concurrency(arena_concurrency[i]));
+  }
+
+  const int total_concurrency = std::accumulate(arena_concurrency.begin(), arena_concurrency.end(), 0);
+
+  // Fixed contiguous item range per node. Arenas are separate scheduling domains, so this split is
+  // also the load-balancing boundary: a node that finishes early cannot steal from a slower one.
+  std::vector<size_t> item_offsets(numa_nodes.size() + 1, 0);
+  size_t assigned_items = 0;
+  for (size_t i = 0; i < numa_nodes.size(); ++i)
+  {
+    const size_t count = (i + 1 == numa_nodes.size()) ? items.size() - assigned_items
+                                                      : items.size() * arena_concurrency[i] / total_concurrency;
+    item_offsets[i + 1] = item_offsets[i] + count;
+    assigned_items += count;
+  }
 
   // One scratch buffer set per worker thread, reused across every item that thread processes.
   tbb::enumerable_thread_specific<ProcessBandScratch> scratches;
@@ -711,10 +771,21 @@ std::vector<ProcessPlaneResult> run_batch_core(std::vector<PlaneBatchItem> &item
       }
     }
   };
-  const auto main_execution = [&]() { tbb::parallel_for(tbb::blocked_range<size_t>(0, items.size()), main_iteration); };
+  const auto run_slice = [&](size_t node)
+  {
+    arenas[node].execute(
+        [&]()
+        { tbb::parallel_for(tbb::blocked_range<size_t>(item_offsets[node], item_offsets[node + 1]), main_iteration); });
+  };
 
   __itt_resume();
-  task_arena.execute(main_execution);
+  tbb::task_group task_group;
+  for (size_t node = 0; node + 1 < arenas.size(); ++node)
+  {
+    task_group.run([&, node]() { run_slice(node); });
+  }
+  run_slice(arenas.size() - 1); // the calling thread takes the last node's slice instead of sitting idle
+  task_group.wait();
   __itt_pause();
 
   return results;
