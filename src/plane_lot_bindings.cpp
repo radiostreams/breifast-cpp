@@ -75,9 +75,9 @@ pybind11::object to_python_result(const ProcessPlaneResult &result)
   out["any_data"] = result.any_data;
   out["min_sigma"] = result.min_sigma;
   out["max_sigma"] = result.max_sigma;
-  out["histogram0"] = result.histogram0;
-  out["histogram1"] = result.histogram1;
-  out["histogram2"] = result.histogram2;
+  out["histogram0"] = result.histograms[0];
+  out["histogram1"] = result.histograms[1];
+  out["histogram2"] = result.histograms[2];
   out["median_noises"] = result.median_noises;
 
   pybind11::dict detections;

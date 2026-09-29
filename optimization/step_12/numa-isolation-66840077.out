@@ -1,0 +1,85 @@
+jst037
+Thread(s) per core:                   1
+Core(s) per socket:                   36
+Socket(s):                            2
+NUMA node(s):                         4
+NUMA node0 CPU(s):                    0-17
+NUMA node1 CPU(s):                    18-35
+NUMA node2 CPU(s):                    36-53
+NUMA node3 CPU(s):                    54-71
+available: 4 nodes (0-3)
+node 0 cpus: 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17
+=== one NUMA domain, cpu+mem bound, single arena ===
+--- bound threads=1 items=15 ---
+[numa] nodes=1 [-1]=1
+  iteration 0: 15 items, 1 detections, compute time = 5.286s
+[numa] nodes=1 [-1]=1
+  iteration 1: 15 items, 1 detections, compute time = 5.278s
+run_batch_core: 2 iterations, total = 10.564s, mean = 5.282s
+--- bound threads=2 items=30 ---
+[numa] nodes=1 [-1]=2
+  iteration 0: 30 items, 5 detections, compute time = 5.554s
+[numa] nodes=1 [-1]=2
+  iteration 1: 30 items, 5 detections, compute time = 5.565s
+run_batch_core: 2 iterations, total = 11.120s, mean = 5.560s
+--- bound threads=4 items=60 ---
+[numa] nodes=1 [-1]=4
+  iteration 0: 60 items, 6 detections, compute time = 5.659s
+[numa] nodes=1 [-1]=4
+  iteration 1: 60 items, 6 detections, compute time = 5.671s
+run_batch_core: 2 iterations, total = 11.330s, mean = 5.665s
+--- bound threads=9 items=135 ---
+[numa] nodes=1 [-1]=9
+  iteration 0: 135 items, 17 detections, compute time = 6.334s
+[numa] nodes=1 [-1]=9
+  iteration 1: 135 items, 17 detections, compute time = 6.101s
+run_batch_core: 2 iterations, total = 12.435s, mean = 6.218s
+--- bound threads=18 items=270 ---
+[numa] nodes=1 [-1]=18
+  iteration 0: 270 items, 36 detections, compute time = 8.059s
+[numa] nodes=1 [-1]=18
+  iteration 1: 270 items, 36 detections, compute time = 8.010s
+run_batch_core: 2 iterations, total = 16.068s, mean = 8.034s
+=== whole node, unbound ===
+--- single-arena threads=1 items=15 ---
+[numa] nodes=1 [-1]=1
+  iteration 0: 15 items, 1 detections, compute time = 5.299s
+[numa] nodes=1 [-1]=1
+  iteration 1: 15 items, 1 detections, compute time = 5.295s
+run_batch_core: 2 iterations, total = 10.594s, mean = 5.297s
+--- single-arena threads=18 items=270 ---
+[numa] nodes=1 [-1]=18
+  iteration 0: 270 items, 36 detections, compute time = 8.473s
+[numa] nodes=1 [-1]=18
+  iteration 1: 270 items, 36 detections, compute time = 6.074s
+run_batch_core: 2 iterations, total = 14.547s, mean = 7.274s
+--- numa4-arenas threads=18 items=270 ---
+[numa] nodes=4 [0]=5 [1]=5 [2]=4 [3]=4
+  iteration 0: 270 items, 36 detections, compute time = 10.095s
+[numa] nodes=4 [0]=5 [1]=5 [2]=4 [3]=4
+  iteration 1: 270 items, 36 detections, compute time = 8.546s
+run_batch_core: 2 iterations, total = 18.641s, mean = 9.321s
+--- single-arena threads=36 items=540 ---
+[numa] nodes=1 [-1]=36
+  iteration 0: 540 items, 75 detections, compute time = 8.521s
+[numa] nodes=1 [-1]=36
+  iteration 1: 540 items, 75 detections, compute time = 7.261s
+run_batch_core: 2 iterations, total = 15.782s, mean = 7.891s
+--- numa4-arenas threads=36 items=540 ---
+[numa] nodes=4 [0]=9 [1]=9 [2]=9 [3]=9
+  iteration 0: 540 items, 75 detections, compute time = 8.166s
+[numa] nodes=4 [0]=9 [1]=9 [2]=9 [3]=9
+  iteration 1: 540 items, 75 detections, compute time = 8.120s
+run_batch_core: 2 iterations, total = 16.286s, mean = 8.143s
+--- single-arena threads=72 items=1080 ---
+[numa] nodes=1 [-1]=72
+  iteration 0: 1080 items, 150 detections, compute time = 10.073s
+[numa] nodes=1 [-1]=72
+  iteration 1: 1080 items, 150 detections, compute time = 10.569s
+run_batch_core: 2 iterations, total = 20.643s, mean = 10.321s
+--- numa4-arenas threads=72 items=1080 ---
+[numa] nodes=4 [0]=18 [1]=18 [2]=18 [3]=18
+  iteration 0: 1080 items, 150 detections, compute time = 10.859s
+[numa] nodes=4 [0]=18 [1]=18 [2]=18 [3]=18
+  iteration 1: 1080 items, 150 detections, compute time = 9.848s
+run_batch_core: 2 iterations, total = 20.707s, mean = 10.354s

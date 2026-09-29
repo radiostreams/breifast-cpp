@@ -7,7 +7,6 @@
  */
 #pragma once
 #include <limits>
-#include <unordered_map>
 #include <xtensor/containers/xtensor.hpp>
 
 namespace breifast::islands
@@ -27,8 +26,27 @@ struct IslandLabels
     std::pair<size_t, size_t> coordinates;
     size_t island_size = 0;
   };
-  std::unordered_map<size_t, PeakInfo> peak_per_label;
+  std::vector<PeakInfo> peak_per_label;
+
+private:
+  std::vector<size_t> parents;
+  std::vector<size_t> root_to_compact_id;
+
+  friend void label_islands(IslandLabels &out, const xt::xtensor<bool, 2> &masks, const xt::xtensor<float, 2> &image,
+                            const xt::xtensor<float, 2> &local_noise);
 };
+
+/**
+ * @brief Label every 4-connected group of `true` pixels in `image` with a unique ID.
+ *
+ * @param out IslandLabels with `labels` sized like `image` and `count` set to the number of distinct islands found by
+ * this function.
+ * @param masks 2D boolean mask (row index = axis 0 / Y, column index = axis 1 / X).
+ * @param image 2D double image (row index = axis 0 / Y, column index = axis 1 / X).
+ * @param local_noise 2D local noise image (row index = axis 0 / Y, column index = axis 1 / X).
+ */
+void label_islands(IslandLabels &out, const xt::xtensor<bool, 2> &masks, const xt::xtensor<float, 2> &image,
+                   const xt::xtensor<float, 2> &local_noise);
 
 /**
  * @brief Label every 4-connected group of `true` pixels in `image` with a unique ID.

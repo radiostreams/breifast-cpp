@@ -1,14 +1,16 @@
 // Standalone executable that replays one real process_lot()/run_batch_core() call. Loads a lot dumped by breifast.py's
 // BREIFAST_DUMP_LOT hook and converted to a manifest.json + raw-array directory by small_test/dump_lot_for_cpp.py.
 //
-// Usage: bench <manifest_dir> [num_threads] [repeat]
+// Usage: bench <manifest_dir> [num_threads] [repeat] [max_items]
 //   num_threads: number of threads to bused by compute loops, <=0 means automatic (all CPUs). Default 0.
 //   repeat: number of times to re-run run_batch_core().
+//   max_items: keep only the first max_items planes, <=0 means all. Default 0.
 
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <fstream>
+#include <map>
 #include <numeric>
 #include <optional>
 #include <stdexcept>
@@ -16,6 +18,9 @@
 #include <thread>
 #include <vector>
 
+#include <sys/resource.h>
+
+#include <ittnotify.h>
 #include <nlohmann/json.hpp>
 #include <oneapi/tbb/info.h>
 #include <tracy/Tracy.hpp>
@@ -137,18 +142,67 @@ LotBatch load_lot(const nlohmann::json &m, const std::string &base_dir)
   }
   return lot;
 }
+
+struct ProcCounters
+{
+  rusage usage{};
+  std::map<std::string, long> vmstat;
+};
+
+ProcCounters read_proc_counters()
+{
+  ProcCounters counters;
+  getrusage(RUSAGE_SELF, &counters.usage);
+  std::ifstream vmstat("/proc/vmstat");
+  std::string key;
+  long value = 0;
+  while (vmstat >> key >> value)
+  {
+    counters.vmstat[key] = value;
+  }
+  return counters;
+}
+
+double to_seconds(const timeval &tv)
+{
+  return static_cast<double>(tv.tv_sec) + static_cast<double>(tv.tv_usec) * 1e-6;
+}
+
+// vmstat counters are system-wide; on an exclusive node they are effectively this process's.
+void print_proc_counters_delta(const ProcCounters &before, const ProcCounters &after, double elapsed, int threads)
+{
+  const double user = to_seconds(after.usage.ru_utime) - to_seconds(before.usage.ru_utime);
+  const double sys = to_seconds(after.usage.ru_stime) - to_seconds(before.usage.ru_stime);
+  std::printf("    cpu: util=%.1f%% user=%.1fs sys=%.1fs minflt=%ld majflt=%ld nvcsw=%ld nivcsw=%ld\n",
+              100.0 * (user + sys) / (elapsed * threads), user, sys,
+              after.usage.ru_minflt - before.usage.ru_minflt, after.usage.ru_majflt - before.usage.ru_majflt,
+              after.usage.ru_nvcsw - before.usage.ru_nvcsw, after.usage.ru_nivcsw - before.usage.ru_nivcsw);
+  std::printf("    vmstat:");
+  for (const char *key : {"pgfault", "thp_fault_alloc", "numa_hint_faults", "numa_hint_faults_local",
+                          "numa_pages_migrated"})
+  {
+    const auto b = before.vmstat.find(key);
+    const auto a = after.vmstat.find(key);
+    if (b != before.vmstat.end() && a != after.vmstat.end())
+    {
+      std::printf(" %s=%ld", key, a->second - b->second);
+    }
+  }
+  std::printf("\n");
+}
 } // namespace
 
 int main(int argc, char **argv)
 {
   if (argc < 2)
   {
-    std::fprintf(stderr, "usage: %s <manifest_dir> [num_threads] [repeat]\n", argv[0]);
+    std::fprintf(stderr, "usage: %s <manifest_dir> [num_threads] [repeat] [max_items]\n", argv[0]);
     return 1;
   }
   const std::string base_dir = argv[1];
   const int num_threads = argc > 2 ? std::atoi(argv[2]) : 0;
   const int repeat = argc > 3 ? std::atoi(argv[3]) : 1;
+  const int max_items = argc > 4 ? std::atoi(argv[4]) : 0;
 
   std::ifstream manifest_file(base_dir + "/manifest.json");
   if (!manifest_file)
@@ -160,7 +214,11 @@ int main(int argc, char **argv)
   manifest_file >> manifest;
 
   const PlaneConfig config = load_config(manifest, base_dir);
-  const LotBatch base_lot = load_lot(manifest, base_dir);
+  LotBatch base_lot = load_lot(manifest, base_dir);
+  if (max_items > 0 && static_cast<size_t>(max_items) < base_lot.planes.size())
+  {
+    base_lot.planes.resize(max_items);
+  }
 
   std::printf("loaded %zu planes, %zu groups from %s, num_threads=%d, repeat=%d\n", base_lot.planes.size(),
               base_lot.groups.size(), base_dir.c_str(), num_threads, repeat);
@@ -190,13 +248,19 @@ int main(int argc, char **argv)
                sorted_times[3 * n_sample / 4], sorted_times.back(), sum / static_cast<double>(n_sample));
   }
 
+  __itt_pause();
+
   double total = 0.0;
   for (int i = 0; i < repeat; ++i)
   {
     LotBatch lot = base_lot;
+    const auto counters_before = read_proc_counters();
     const auto t0 = std::chrono::steady_clock::now();
+    __itt_resume();
     const auto results = run_lot_core(lot, config, num_threads);
+    __itt_pause();
     const auto t1 = std::chrono::steady_clock::now();
+    const auto counters_after = read_proc_counters();
     FrameMark;
     const double elapsed = std::chrono::duration<double>(t1 - t0).count();
     total += elapsed;
@@ -207,6 +271,8 @@ int main(int argc, char **argv)
     }
     std::printf("  iteration %d: %zu items, %zu detections, compute time = %.3fs\n", i, results.size(), n_detections,
                 elapsed);
+    print_proc_counters_delta(counters_before, counters_after, elapsed,
+                              num_threads > 0 ? num_threads : tbb::info::default_concurrency());
   }
   std::printf("run_batch_core: %d iterations, total = %.3fs, mean = %.3fs\n", repeat, total, total / repeat);
 

@@ -1,0 +1,61 @@
+jst247
+--- bound-local threads=1 items=15 ---
+[numa] nodes=1 [-1]=1
+  iteration 0: 15 items, 1 detections, compute time = 5.225s
+    cpu: util=99.8% user=5.2s sys=0.0s minflt=5959 majflt=0 nvcsw=0 nivcsw=8
+    vmstat: pgfault=5986 thp_fault_alloc=164 numa_hint_faults=0 numa_hint_faults_local=0 numa_pages_migrated=0
+[numa] nodes=1 [-1]=1
+  iteration 1: 15 items, 1 detections, compute time = 5.183s
+    cpu: util=99.8% user=5.2s sys=0.0s minflt=1344 majflt=0 nvcsw=0 nivcsw=7
+    vmstat: pgfault=1639 thp_fault_alloc=1 numa_hint_faults=0 numa_hint_faults_local=0 numa_pages_migrated=0
+run_batch_core: 2 iterations, total = 10.408s, mean = 5.204s
+--- bound-local threads=18 items=270 ---
+[numa] nodes=1 [-1]=18
+  iteration 0: 270 items, 36 detections, compute time = 8.057s
+    cpu: util=94.6% user=135.4s sys=1.8s minflt=91908 majflt=0 nvcsw=1036 nivcsw=648
+    vmstat: pgfault=94206 thp_fault_alloc=2667 numa_hint_faults=1384 numa_hint_faults_local=931 numa_pages_migrated=339
+[numa] nodes=1 [-1]=18
+  iteration 1: 270 items, 36 detections, compute time = 7.767s
+    cpu: util=97.5% user=136.2s sys=0.1s minflt=2516 majflt=0 nvcsw=17 nivcsw=423
+    vmstat: pgfault=2961 thp_fault_alloc=58 numa_hint_faults=69 numa_hint_faults_local=49 numa_pages_migrated=15
+run_batch_core: 2 iterations, total = 15.824s, mean = 7.912s
+--- bound-interleaved threads=18 items=270 ---
+[numa] nodes=1 [-1]=18
+  iteration 0: 270 items, 36 detections, compute time = 6.129s
+    cpu: util=96.0% user=104.4s sys=1.5s minflt=94149 majflt=0 nvcsw=1100 nivcsw=364
+    vmstat: pgfault=94723 thp_fault_alloc=2600 numa_hint_faults=1 numa_hint_faults_local=1 numa_pages_migrated=0
+[numa] nodes=1 [-1]=18
+  iteration 1: 270 items, 36 detections, compute time = 6.244s
+    cpu: util=93.5% user=104.9s sys=0.1s minflt=9659 majflt=0 nvcsw=18 nivcsw=326
+    vmstat: pgfault=21308 thp_fault_alloc=232 numa_hint_faults=7 numa_hint_faults_local=5 numa_pages_migrated=2
+run_batch_core: 2 iterations, total = 12.374s, mean = 6.187s
+--- unbound-single-arena threads=18 items=270 ---
+[numa] nodes=1 [-1]=18
+  iteration 0: 270 items, 36 detections, compute time = 8.232s
+    cpu: util=96.4% user=140.7s sys=2.1s minflt=129394 majflt=0 nvcsw=1219 nivcsw=260
+    vmstat: pgfault=129402 thp_fault_alloc=2660 numa_hint_faults=20750 numa_hint_faults_local=7915 numa_pages_migrated=343963
+[numa] nodes=1 [-1]=18
+  iteration 1: 270 items, 36 detections, compute time = 7.173s
+    cpu: util=96.2% user=123.0s sys=1.2s minflt=170178 majflt=0 nvcsw=119 nivcsw=177
+    vmstat: pgfault=170578 thp_fault_alloc=233 numa_hint_faults=91994 numa_hint_faults_local=28004 numa_pages_migrated=957156
+run_batch_core: 2 iterations, total = 15.404s, mean = 7.702s
+--- unbound-single-arena threads=72 items=1080 ---
+[numa] nodes=1 [-1]=72
+  iteration 0: 1080 items, 150 detections, compute time = 10.452s
+    cpu: util=91.6% user=677.2s sys=12.0s minflt=401423 majflt=0 nvcsw=19000 nivcsw=4777
+    vmstat: pgfault=402655 thp_fault_alloc=10774 numa_hint_faults=31167 numa_hint_faults_local=6873 numa_pages_migrated=1745853
+[numa] nodes=1 [-1]=72
+  iteration 1: 1080 items, 150 detections, compute time = 10.365s
+    cpu: util=95.0% user=708.0s sys=0.8s minflt=35486 majflt=0 nvcsw=134 nivcsw=2995
+    vmstat: pgfault=47366 thp_fault_alloc=872 numa_hint_faults=8 numa_hint_faults_local=3 numa_pages_migrated=2
+run_batch_core: 2 iterations, total = 20.817s, mean = 10.408s
+--- unbound-numa4-arenas threads=72 items=1080 ---
+[numa] nodes=4 [0]=18 [1]=18 [2]=18 [3]=18
+  iteration 0: 1080 items, 150 detections, compute time = 10.680s
+    cpu: util=75.4% user=572.7s sys=7.5s minflt=398078 majflt=0 nvcsw=15193 nivcsw=7070
+    vmstat: pgfault=398554 thp_fault_alloc=10314 numa_hint_faults=54362 numa_hint_faults_local=54358 numa_pages_migrated=2048
+[numa] nodes=4 [0]=18 [1]=18 [2]=18 [3]=18
+  iteration 1: 1080 items, 150 detections, compute time = 10.476s
+    cpu: util=86.8% user=652.0s sys=3.1s minflt=128736 majflt=0 nvcsw=133 nivcsw=5291
+    vmstat: pgfault=129198 thp_fault_alloc=872 numa_hint_faults=46472 numa_hint_faults_local=0 numa_pages_migrated=805818
+run_batch_core: 2 iterations, total = 21.156s, mean = 10.578s

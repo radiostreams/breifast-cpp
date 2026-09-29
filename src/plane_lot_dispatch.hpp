@@ -8,17 +8,12 @@
  * calling `process_band()` for each; `process_band()` computes the band's weighted image, noise map, SNR, and
  * (eventually) per-island detections into a shared `ProcessPlaneResult&`.
  *
- * Most numeric steps have two implementations selected by the `USE_XTENSOR` preprocessor macro: an
- * xtensor-expression version and a manual-loop version, kept side by side so the faster one can be benchmarked and
- * the other dropped later. Axis convention throughout: axis 0 of every 2D plane/image array is Y (rows), axis 1 is
- * X (columns), matching breifast.py's own xaxis/yaxis definitions -- array accesses are consistently written
- * array(i_y, i_x).
  */
 #pragma once
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <limits>
-#include <numeric>
 #include <optional>
 #include <ranges>
 #include <string>
@@ -39,6 +34,8 @@
 #include <xtensor/reducers/xreducer.hpp>
 #include <xtensor/views/xslice.hpp>
 #include <xtensor/views/xview.hpp>
+
+#include "islands.hpp"
 
 namespace breifast
 {
@@ -352,9 +349,7 @@ struct ProcessPlaneResult
   DetectionArrays detections;
   std::optional<float> min_sigma;
   std::optional<float> max_sigma;
-  std::vector<long> histogram0;
-  std::vector<long> histogram1;
-  std::vector<long> histogram2;
+  std::array<std::vector<long>, 3> histograms;
   std::vector<double> median_noises;
   std::optional<SpectralVarianceStats> variance_stats;
 };
@@ -364,12 +359,14 @@ struct ProcessBandScratch
   xt::xtensor<float, 2> row_window_sums;
   std::vector<double> column_accumulators;
   xt::xtensor<float, 2> snr;
+  std::array<std::vector<long>, 3> histograms;
   xt::xtensor<float, 2> windows_sums;
   xt::xtensor<float, 2> plane;
   std::vector<float> median_scratch;
   xt::xtensor<bool, 2> image_mask;
   xt::xtensor<float, 2> noise_map;
   xt::xtensor<float, 2> padded_image;
+  islands::IslandLabels islands;
 };
 
 /**
@@ -393,10 +390,12 @@ const xt::xtensor<float, 2> &compute_rms_noise_map(ProcessBandScratch &scratch, 
  *        `reject_noise_threshold` filters, histogram accumulation, plane-level min/max sigma tracking, and finally
  *        the `threshold` mask.
  *
- * `image_mask` is refined in place through four cumulative (never-widening) stages per pixel;
- * `result.histogram0`/`1`/`2` are overwritten (not accumulated) each call, deliberately matching breifast.py:750's
- * per-band reset — the caller only ever sees the last band processed, not a sum across bands.
+ * `image_mask` is refined in place through four cumulative (never-widening) stages per pixel. `scratch.snr` and
+ * `scratch.histograms` are resized-and-reused scratch buffers; `result.histograms` is overwritten from
+ * `scratch.histograms` each call.
  * `result.min_sigma`/`max_sigma` persist and combine across every `process_band()` call for the plane.
+ * @param scratch Supplies `scratch.snr` (resized to `plane`'s shape) and `scratch.histograms` (resized to
+ *        `config.max_sigma_bin * 2`), both reused across calls to avoid a per-call allocation.
  * @param plane Band's weighted (or raw, for single-channel bands) image.
  * @param noise_map Combined noise map for this band (see process_band()).
  * @param median_noise Median of `noise_map`, used by the `reject_noise_threshold` filter.
@@ -406,9 +405,8 @@ const xt::xtensor<float, 2> &compute_rms_noise_map(ProcessBandScratch &scratch, 
  * @param band Supplies the channel range to average cutoff arrays over.
  * @param config Supplies `max_sigma_bin`, `histogram_detail`, `threshold`, `reject_noise_threshold`.
  * @param result Histogram and min/max-sigma outputs are written here.
- * FIXME: UPDATE DOC
  */
-void compute_snr_and_apply_filters(xt::xtensor<float, 2> &snr, const xt::xtensor<float, 2> &plane,
+void compute_snr_and_apply_filters(ProcessBandScratch &scratch, const xt::xtensor<float, 2> &plane,
                                    const xt::xtensor<float, 2> &noise_map, float median_noise, float inv_band_size,
                                    xt::xtensor<bool, 2> &image_mask, const PlaneBatchGroup &group,
                                    const BandSlice &band, const PlaneConfig &config, ProcessPlaneResult &result);

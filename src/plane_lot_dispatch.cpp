@@ -8,60 +8,11 @@
 #include <xtensor/reducers/xreducer.hpp>
 
 #include "islands.hpp"
+#include "median.hpp"
 #include "plane_lot_dispatch.hpp"
 
 namespace breifast
 {
-namespace detail
-{
-template <typename T> float median_of_abs(std::span<const T> values, std::vector<T> &scratch)
-{
-  ZoneScoped;
-  scratch.resize(values.size());
-  std::transform(values.begin(), values.end(), scratch.begin(), [](T x) { return std::abs(x); });
-  const size_t n = scratch.size();
-  const size_t mid = n / 2;
-  const auto cmp = [](T a, T b) { return a < b; };
-
-  std::nth_element(scratch.begin(), scratch.begin() + mid, scratch.end(), cmp);
-  const T hi = scratch[mid];
-  if (n % 2 == 1)
-  {
-    return hi;
-  }
-
-  T lo = scratch[0];
-  for (size_t i = 1; i < mid; ++i)
-  {
-    lo = std::max(lo, scratch[i]);
-  }
-  return (hi + lo) / 2.F;
-}
-
-template <typename T> float median_of(std::span<const T> values, std::vector<T> &scratch)
-{
-  ZoneScoped;
-  scratch.assign(values.begin(), values.end());
-  const size_t n = scratch.size();
-  const size_t mid = n / 2;
-  const auto cmp = [](T a, T b) { return a < b; };
-
-  std::nth_element(scratch.begin(), scratch.begin() + mid, scratch.end(), cmp);
-  const T hi = scratch[mid];
-  if (n % 2 == 1)
-  {
-    return hi;
-  }
-
-  T lo = scratch[0];
-  for (size_t i = 1; i < mid; ++i)
-  {
-    lo = std::max(lo, scratch[i]);
-  }
-  return (hi + lo) / 2.F;
-}
-} // namespace detail
-
 float PlaneConfig::max_to_std_ratio(const size_t n)
 {
   const auto compute = [](const size_t n)
@@ -216,7 +167,7 @@ inline const xt::xtensor<float, 2> &compute_rms_noise_map(ProcessBandScratch &sc
     }
   }
 
-  const auto median = detail::median_of({windows_sums.data(), windows_sums.size()}, scratch.median_scratch);
+  const auto median = detail::median::radix_median_of({windows_sums.data(), windows_sums.size()});
   for (long i_y = 0; i_y < n_y; ++i_y)
   {
     for (long i_x = 0; i_x < n_x; ++i_x)
@@ -228,7 +179,7 @@ inline const xt::xtensor<float, 2> &compute_rms_noise_map(ProcessBandScratch &sc
   return windows_sums;
 }
 
-void compute_snr_and_apply_filters(xt::xtensor<float, 2> &snr, const xt::xtensor<float, 2> &plane,
+void compute_snr_and_apply_filters(ProcessBandScratch &scratch, const xt::xtensor<float, 2> &plane,
                                    const xt::xtensor<float, 2> &noise_map, float median_noise, float inv_band_size,
                                    xt::xtensor<bool, 2> &image_mask, const PlaneBatchGroup &group,
                                    const BandSlice &band, const PlaneConfig &config, ProcessPlaneResult &result)
@@ -237,19 +188,20 @@ void compute_snr_and_apply_filters(xt::xtensor<float, 2> &snr, const xt::xtensor
   const size_t n_y = plane.shape(0);
   const size_t n_x = plane.shape(1);
 
-  snr.resize(plane.shape());
-  result.histogram0.clear();
-  result.histogram0.resize(config.max_sigma_bin * 2, 0);
-  result.histogram1.clear();
-  result.histogram1.resize(config.max_sigma_bin * 2, 0);
-  result.histogram2.clear();
-  result.histogram2.resize(config.max_sigma_bin * 2, 0);
+  scratch.snr.resize(plane.shape());
+  scratch.histograms[0].resize(config.max_sigma_bin * 2, 0);
+  scratch.histograms[1].resize(config.max_sigma_bin * 2, 0);
+  scratch.histograms[2].resize(config.max_sigma_bin * 2, 0);
+  std::fill(scratch.histograms[0].begin(), scratch.histograms[0].end(), 0);
+  std::fill(scratch.histograms[1].begin(), scratch.histograms[1].end(), 0);
+  std::fill(scratch.histograms[2].begin(), scratch.histograms[2].end(), 0);
+
   float local_min_sigma = std::numeric_limits<float>::infinity();
   float local_max_sigma = std::numeric_limits<float>::lowest();
 
   const float *const plane_ptr = plane.data();
   const float *const noise_map_ptr = noise_map.data();
-  float *const snr_ptr = snr.data();
+  float *const snr_ptr = scratch.snr.data();
   bool *const image_mask_ptr = image_mask.data();
   const bool snr_cutoff_enabled = group.snr_cutoff.has_value();
   const float *const snr_cutoff_ptr = snr_cutoff_enabled ? group.snr_cutoff->data() : nullptr;
@@ -301,15 +253,15 @@ void compute_snr_and_apply_filters(xt::xtensor<float, 2> &snr, const xt::xtensor
     {
       if (mask0 && config.histogram_detail > 1)
       {
-        result.histogram0[bin_index]++;
+        scratch.histograms[0][bin_index]++;
       }
       if (mask1 && config.histogram_detail > 1)
       {
-        result.histogram1[bin_index]++;
+        scratch.histograms[1][bin_index]++;
       }
       if (mask2 && config.histogram_detail > 0)
       {
-        result.histogram2[bin_index]++;
+        scratch.histograms[2][bin_index]++;
       }
     }
 
@@ -323,6 +275,7 @@ void compute_snr_and_apply_filters(xt::xtensor<float, 2> &snr, const xt::xtensor
     const float thresholded_abs_snr = mask3 ? std::abs(snr_ptr[i_pixel]) : 0.F;
     image_mask_ptr[i_pixel] = thresholded_abs_snr >= config.threshold;
   }
+  result.histograms = scratch.histograms;
   if (local_min_sigma < std::numeric_limits<float>::infinity())
   {
     result.min_sigma = result.min_sigma ? std::min(*result.min_sigma, local_min_sigma) : local_min_sigma;
@@ -425,7 +378,7 @@ inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, cons
     }
   }
 
-  const float noise_global_mad = detail::median_of_abs({plane.data(), plane.size()}, scratch.median_scratch) * 1.4826F;
+  const float noise_global_mad = detail::median::radix_median_of_abs({plane.data(), plane.size()}) * 1.4826F;
 
   const auto combine = [&](auto &noisemap, const auto &noisemap0)
   {
@@ -462,7 +415,7 @@ inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, cons
                                        config.ddenoise_scaling_factor * group.dde_noise(i_y, i_x));
       }
     }
-    const float mednoise = detail::median_of({noisemap.data(), noisemap.size()}, scratch.median_scratch);
+    const float mednoise = detail::median::radix_median_of({noisemap.data(), noisemap.size()});
     return mednoise;
   };
 
@@ -478,12 +431,11 @@ inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, cons
   }
   result.median_noises.push_back(median_noise);
 
-  auto &snr = scratch.snr;
-  compute_snr_and_apply_filters(snr, plane, noise_map, median_noise, inv_band_size, image_mask, group, band, config,
+  compute_snr_and_apply_filters(scratch, plane, noise_map, median_noise, inv_band_size, image_mask, group, band, config,
                                 result);
   if (band.size() == 1)
   {
-    xt::view(item.stokes_cube, band.start) = snr;
+    xt::view(item.stokes_cube, band.start) = scratch.snr;
   }
   if (!xt::any(image_mask))
   {
@@ -532,8 +484,9 @@ inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, cons
     }
   }
 
-  const auto islands = breifast::islands::label_islands(image_mask, snr, noise_map);
+  breifast::islands::label_islands(scratch.islands, image_mask, scratch.snr, noise_map);
 
+  const auto &islands = scratch.islands;
   std::optional<xt::xtensor<float, 2>> beam_kernel;
   if (config.beam_size_enabled)
   {
@@ -555,10 +508,11 @@ inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, cons
   }
 
   auto &detection_arrays = result.detections;
-  detection_arrays.reserve(result.detections.size() + islands.peak_per_label.size());
+  detection_arrays.reserve(result.detections.size() + scratch.islands.peak_per_label.size());
   ZoneNamedN(detections_zone, "detections", true);
-  for (const auto &[label, island] : islands.peak_per_label)
+  for (size_t label = 1; label <= islands.peak_per_label.size(); ++label)
   {
+    const auto &island = islands.peak_per_label[label - 1];
     const auto padded_y = island.coordinates.first + pad;
     const auto padded_x = island.coordinates.second + pad;
 
@@ -750,7 +704,7 @@ std::vector<ProcessPlaneResult> run_batch_core(std::vector<PlaneBatchItem> &item
   }
 
   // One scratch buffer set per worker thread, reused across every item that thread processes.
-  tbb::enumerable_thread_specific<ProcessBandScratch> scratches;
+  static tbb::enumerable_thread_specific<ProcessBandScratch> scratches;
 
   const auto main_iteration = [&](const tbb::blocked_range<size_t> &range)
   {

@@ -26,10 +26,15 @@ tbb_build = custom_target('tbb-build',
     'if [ ! -f "$src/tbb.tar.gz" ]; then curl -sL "' + tbb_tarball_url + '" -o "$src/tbb.tar.gz"; fi; ' +
     'echo "' + tbb_tarball_sha256 + '  $src/tbb.tar.gz" | sha256sum -c -; ' +
     'tar -xzf "$src/tbb.tar.gz" -C "$src" --strip-components=1; ' +
+    # oneTBB's tbbbind CMakeLists links PkgConfig::HWLOC but its include dir never reaches the tbb_bind.cpp
+    # compile command. Pass it only when pkg-config finds hwloc: a bare "-I" swallows the next flag as its argument.
+    # Without hwloc, tbbbind_2_5 isn't built and TBB falls back to a single sentinel NUMA node.
+    'hwloc_inc="$(pkg-config --variable=includedir hwloc 2>/dev/null || true)"; ' +
     'CC=/usr/bin/gcc CXX=/usr/bin/g++ cmake -S "$src" -B "$build" ' +
     '-DCMAKE_INSTALL_PREFIX=@OUTPUT0@ -DCMAKE_BUILD_TYPE=Release ' +
     '-DTBB_TEST=OFF -DTBB_EXAMPLES=OFF -DBUILD_SHARED_LIBS=ON ' +
-    '-DCMAKE_CXX_COMPILER=/usr/bin/g++ -DCMAKE_C_COMPILER=/usr/bin/gcc; ' +
+    '-DCMAKE_CXX_COMPILER=/usr/bin/g++ -DCMAKE_C_COMPILER=/usr/bin/gcc ' +
+    '${hwloc_inc:+-DCMAKE_CXX_FLAGS=-I$hwloc_inc}; ' +
     'cmake --build "$build" -j$(nproc); ' +
     'cmake --install "$build"; ' +
     'real="$(find @OUTPUT0@/lib* -maxdepth 1 -name "libtbb.so.12.*" ! -type l | head -1)"; ' +
@@ -37,9 +42,11 @@ tbb_build = custom_target('tbb-build',
     # TBB resolves tbbbind next to wherever libtbb.so actually loaded from (via dladdr, ignoring
     # LD_LIBRARY_PATH), so it has to sit in the same flat directory as the libtbb.so.12 copy above.
     # Needs hwloc >= 2.5 plus its Requires.private (libxml-2.0, pciaccess) findable via pkg-config
-    # when tbb-install is configured, otherwise tbbbind_2_5 is never built and this cp fails.
+    # when tbb-install is configured, otherwise tbbbind_2_5 is never built. TBB loads tbbbind via
+    # dlopen and treats a load failure as "unavailable" (single sentinel NUMA node), the same as a
+    # missing file, so an empty placeholder here is a safe stand-in when the real one wasn\'t built.
     'tbbbind="$(find @OUTPUT0@/lib* -maxdepth 1 -name "libtbbbind_2_5.so.3.*" ! -type l | head -1)"; ' +
-    'cp "$tbbbind" @OUTPUT2@'],
+    'if [ -n "$tbbbind" ]; then cp "$tbbbind" @OUTPUT2@; else : > @OUTPUT2@; fi'],
   install : true,
   install_dir : [false, py.get_install_dir(), py.get_install_dir()],
 )
@@ -151,12 +158,14 @@ test_breifast_core_sources = [
   'tests/cpp/group1_pure_functions/test_max_to_std_ratio.cpp',
   'tests/cpp/group1_pure_functions/test_compute_spectral_variance_stats.cpp',
   'tests/cpp/group1_pure_functions/test_label_islands.cpp',
+  'tests/cpp/group1_pure_functions/test_median.cpp',
   'tests/cpp/group2_snr_filters/test_compute_snr_and_apply_filters.cpp',
   'tests/cpp/group3_integration/test_process_band.cpp',
   'tests/cpp/group3_integration/test_process_plane.cpp',
   'tests/cpp/group3_integration/test_process_band_random.cpp',
   'tests/cpp/group4_dispatch/test_run_batch_core.cpp',
   'tests/cpp/group4_dispatch/test_run_batch_core_random.cpp',
+  'tests/cpp/group4_dispatch/test_run_batch_core_scratch_persistence.cpp',
 ]
 
 test_breifast_core = executable(

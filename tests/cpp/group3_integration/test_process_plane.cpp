@@ -162,9 +162,9 @@ TEST_CASE("process_plane's histograms reflect only the last band processed, not 
   std::vector<long> expected(20, 0);
   expected[10] = 3;
   expected[13] = 1;
-  CHECK(result.histogram0 == expected);
-  CHECK(result.histogram1 == expected);
-  CHECK(result.histogram2 == expected);
+  CHECK(result.histograms[0] == expected);
+  CHECK(result.histograms[1] == expected);
+  CHECK(result.histograms[2] == expected);
 }
 
 TEST_CASE("process_plane only computes variance_stats for multi-channel items", "[process_plane]")
