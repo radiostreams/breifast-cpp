@@ -35,7 +35,7 @@ TEST_CASE("label_islands on a single rectangular island reports correct size, pe
   const auto result = label_islands(mask, image, local_noise);
 
   REQUIRE(result.peak_per_label.size() == 1);
-  const auto &peak = result.peak_per_label.begin()->second;
+  const auto &peak = result.peak_per_label.front();
   CHECK(peak.island_size == 4);
   CHECK(peak.value == Catch::Approx(9.F)); // |-9| is the largest abs value in the island
   CHECK(peak.coordinates.first == 0);      // y
@@ -70,14 +70,14 @@ TEST_CASE("label_islands assigns two disjoint islands independent, distinct labe
   CHECK(label_a != label_b);
   CHECK(result.labels(0, 1) == label_a);
 
-  const auto &peak_a = result.peak_per_label.at(label_a);
+  const auto &peak_a = result.peak_per_label.at(label_a - 1);
   CHECK(peak_a.island_size == 2);
   CHECK(peak_a.value == Catch::Approx(5.F));
   CHECK(peak_a.coordinates.first == 0);
   CHECK(peak_a.coordinates.second == 1);
   CHECK(peak_a.local_noise == Catch::Approx(2.F));
 
-  const auto &peak_b = result.peak_per_label.at(label_b);
+  const auto &peak_b = result.peak_per_label.at(label_b - 1);
   CHECK(peak_b.island_size == 1);
   CHECK(peak_b.value == Catch::Approx(7.F));
   CHECK(peak_b.local_noise == Catch::Approx(9.F));
@@ -94,7 +94,7 @@ TEST_CASE("label_islands does not merge diagonally-adjacent pixels (4-connectivi
   const auto result = label_islands(mask, image, local_noise);
 
   CHECK(result.peak_per_label.size() == 5);
-  for (const auto &[label, peak] : result.peak_per_label)
+  for (const auto &peak : result.peak_per_label)
   {
     CHECK(peak.island_size == 1);
   }
@@ -112,7 +112,7 @@ TEST_CASE("label_islands merges a bridge shape into a single island via union-fi
   const auto result = label_islands(mask, image, local_noise);
 
   REQUIRE(result.peak_per_label.size() == 1);
-  const auto &peak = result.peak_per_label.begin()->second;
+  const auto &peak = result.peak_per_label.front();
   CHECK(peak.island_size == 5);
   CHECK(peak.value == Catch::Approx(8.F));
   CHECK(peak.coordinates.first == 0);
@@ -171,7 +171,7 @@ TEST_CASE("label_islands matches a seeded-random 5x6 mask against a Python refer
   };
   for (const auto &e : expected)
   {
-    const auto &peak = result.peak_per_label.at(e.label);
+    const auto &peak = result.peak_per_label.at(e.label - 1);
     CHECK(peak.island_size == e.size);
     CHECK(peak.coordinates.first == e.y);
     CHECK(peak.coordinates.second == e.x);
@@ -236,7 +236,7 @@ TEST_CASE("label_islands matches a seeded-random 8x8 mask against a Python refer
   };
   for (const auto &e : expected)
   {
-    const auto &peak = result.peak_per_label.at(e.label);
+    const auto &peak = result.peak_per_label.at(e.label - 1);
     CHECK(peak.island_size == e.size);
     CHECK(peak.coordinates.first == e.y);
     CHECK(peak.coordinates.second == e.x);

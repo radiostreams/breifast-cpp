@@ -25,9 +25,11 @@ TEST_CASE("compute_snr_and_apply_filters computes plane/noise_map elementwise an
   PlaneConfig config;
   config.threshold = 1.5F;
   ProcessPlaneResult result;
+  ProcessBandScratch scratch;
 
-  const auto snr = compute_snr_and_apply_filters(plane, noise_map, /*median_noise=*/0.F, /*inv_band_size=*/1.F,
-                                                 image_mask, group, band, config, result);
+  compute_snr_and_apply_filters(scratch, plane, noise_map, /*median_noise=*/0.F, /*inv_band_size=*/1.F, image_mask,
+                                group, band, config, result);
+  const auto &snr = scratch.snr;
 
   const float expected_snr[2][4] = {{2.F, -2.F, 0.5F, 1.5F}, {3.F, -0.5F, 0.5F, -1.5F}};
   const bool expected_mask[2][4] = {{true, true, false, true}, {true, false, false, true}};
@@ -69,9 +71,11 @@ TEST_CASE("compute_snr_and_apply_filters matches a seeded-random 5x6 plane again
   PlaneConfig config;
   config.threshold = 1.2F;
   ProcessPlaneResult result;
+  ProcessBandScratch scratch;
 
-  const auto snr = compute_snr_and_apply_filters(plane, noise_map, /*median_noise=*/0.F, /*inv_band_size=*/1.F,
-                                                 image_mask, group, band, config, result);
+  compute_snr_and_apply_filters(scratch, plane, noise_map, /*median_noise=*/0.F, /*inv_band_size=*/1.F, image_mask,
+                                group, band, config, result);
+  const auto &snr = scratch.snr;
 
   const float expected_snr[5][6] = {{3.884584F, -1.368209F, 0.405146F, -2.158401F, -1.722118F, -0.688196F},
                                     {-0.553154F, 1.555603F, 1.492290F, -4.002572F, -1.498024F, 0.761832F},
@@ -113,9 +117,11 @@ TEST_CASE("compute_snr_and_apply_filters masks out invalid noise pixels (zero, +
   // satisfy `0 >= 0` and the final image_mask would read true, which would defeat this test's purpose.
   config.threshold = 0.1F;
   ProcessPlaneResult result;
+  ProcessBandScratch scratch;
 
-  const auto snr = compute_snr_and_apply_filters(plane, noise_map, /*median_noise=*/0.F, /*inv_band_size=*/1.F,
-                                                 image_mask, group, band, config, result);
+  compute_snr_and_apply_filters(scratch, plane, noise_map, /*median_noise=*/0.F, /*inv_band_size=*/1.F, image_mask,
+                                group, band, config, result);
+  const auto &snr = scratch.snr;
 
   const float expected_snr[2][5] = {{5.F, 0.F, 0.F, 0.F, 0.F}, {-5.F, 0.F, 0.F, 0.F, 0.F}};
   const bool expected_mask[2][5] = {{true, false, false, false, false}, {true, false, false, false, false}};
@@ -156,9 +162,11 @@ TEST_CASE("compute_snr_and_apply_filters applies snr_cutoff as the inv_band_size
   // snr_cutoff outcome rather than the threshold=0 quirk (0 >= 0 is true).
   config.threshold = 0.05F;
   ProcessPlaneResult result;
+  ProcessBandScratch scratch;
 
-  const auto snr = compute_snr_and_apply_filters(plane, noise_map, /*median_noise=*/0.F, /*inv_band_size=*/0.5F,
-                                                 image_mask, group, band, config, result);
+  compute_snr_and_apply_filters(scratch, plane, noise_map, /*median_noise=*/0.F, /*inv_band_size=*/0.5F, image_mask,
+                                group, band, config, result);
+  const auto &snr = scratch.snr;
 
   // snr_cutoff never affects the returned snr array itself, only image_mask.
   const float expected_snr[2][3] = {{3.F, -1.F, 2.F}, {0.5F, -4.F, 1.F}};
@@ -199,9 +207,11 @@ TEST_CASE("compute_snr_and_apply_filters applies flux_cutoff against |plane|, no
   PlaneConfig config;
   config.threshold = 0.05F;
   ProcessPlaneResult result;
+  ProcessBandScratch scratch;
 
-  const auto snr = compute_snr_and_apply_filters(plane, noise_map, /*median_noise=*/0.F, /*inv_band_size=*/0.5F,
-                                                 image_mask, group, band, config, result);
+  compute_snr_and_apply_filters(scratch, plane, noise_map, /*median_noise=*/0.F, /*inv_band_size=*/0.5F, image_mask,
+                                group, band, config, result);
+  const auto &snr = scratch.snr;
 
   const float expected_snr[2][3] = {{1.5F, -0.5F, 1.F}, {0.25F, -2.F, 0.5F}};
   // Per-pixel threshold is the average of channels 1 and 2: {2.5, 1.0, 2.5} / {1.0, 3.5, 1.0}, compared against
@@ -241,9 +251,11 @@ TEST_CASE("compute_snr_and_apply_filters rejects noise_map > median_noise * reje
     config.threshold = 0.05F;
     config.reject_noise_threshold = 1.5F;
     ProcessPlaneResult result;
+    ProcessBandScratch scratch;
 
-    const auto snr = compute_snr_and_apply_filters(plane, noise_map, median_noise, /*inv_band_size=*/1.F, image_mask,
-                                                   group, band, config, result);
+    compute_snr_and_apply_filters(scratch, plane, noise_map, median_noise, /*inv_band_size=*/1.F, image_mask, group,
+                                  band, config, result);
+    const auto &snr = scratch.snr;
 
     const bool expected_mask[2][3] = {{true, true, true}, {true, false, false}};
     for (size_t i_y = 0; i_y < 2; ++i_y)
@@ -264,9 +276,11 @@ TEST_CASE("compute_snr_and_apply_filters rejects noise_map > median_noise * reje
     config.threshold = 0.05F;
     config.reject_noise_threshold = 0.F;
     ProcessPlaneResult result;
+    ProcessBandScratch scratch;
 
-    const auto snr = compute_snr_and_apply_filters(plane, noise_map, median_noise, /*inv_band_size=*/1.F, image_mask,
-                                                   group, band, config, result);
+    compute_snr_and_apply_filters(scratch, plane, noise_map, median_noise, /*inv_band_size=*/1.F, image_mask, group,
+                                  band, config, result);
+    const auto &snr = scratch.snr;
 
     for (size_t i_y = 0; i_y < 2; ++i_y)
     {
@@ -294,23 +308,24 @@ TEST_CASE("compute_snr_and_apply_filters bins snr into histogram_detail-gated bu
   config.max_sigma_bin = 3;
   config.histogram_detail = 2;
   ProcessPlaneResult result;
+  ProcessBandScratch scratch;
 
-  compute_snr_and_apply_filters(plane, noise_map, /*median_noise=*/0.F, /*inv_band_size=*/1.F, image_mask, group, band,
-                                config, result);
+  compute_snr_and_apply_filters(scratch, plane, noise_map, /*median_noise=*/0.F, /*inv_band_size=*/1.F, image_mask,
+                                group, band, config, result);
 
   // -3.5 -> floor(-0.5)=-1: dropped (no clamp on the low side).
   // -3.0 -> bin 0 (lower boundary).       -0.5 -> bin 2.        0.5 -> bin 3.
   //  2.5 -> bin 5 (normal top bin).        3.7 -> floor(6.7)=6 == 2*max_sigma_bin: clamped into bin 5.
   //  4.5 -> floor(7.5)=7, >= 6: dropped (only the exact ==2*max_sigma_bin case clamps).
   const std::vector<long> expected_histogram = {1, 0, 1, 1, 0, 2};
-  REQUIRE(result.histogram0.size() == 6);
-  REQUIRE(result.histogram1.size() == 6);
-  REQUIRE(result.histogram2.size() == 6);
+  REQUIRE(result.histograms[0].size() == 6);
+  REQUIRE(result.histograms[1].size() == 6);
+  REQUIRE(result.histograms[2].size() == 6);
   for (size_t bin = 0; bin < 6; ++bin)
   {
-    CHECK(result.histogram0[bin] == expected_histogram[bin]);
-    CHECK(result.histogram1[bin] == expected_histogram[bin]);
-    CHECK(result.histogram2[bin] == expected_histogram[bin]);
+    CHECK(result.histograms[0][bin] == expected_histogram[bin]);
+    CHECK(result.histograms[1][bin] == expected_histogram[bin]);
+    CHECK(result.histograms[2][bin] == expected_histogram[bin]);
   }
 }
 
@@ -331,28 +346,29 @@ TEST_CASE("compute_snr_and_apply_filters gates histogram0/1 on histogram_detail>
     config.max_sigma_bin = 3;
     config.histogram_detail = detail;
     ProcessPlaneResult result;
-    compute_snr_and_apply_filters(plane, noise_map, /*median_noise=*/0.F, /*inv_band_size=*/1.F, image_mask, group,
-                                  band, config, result);
+    ProcessBandScratch scratch;
+    compute_snr_and_apply_filters(scratch, plane, noise_map, /*median_noise=*/0.F, /*inv_band_size=*/1.F, image_mask,
+                                  group, band, config, result);
     return result;
   };
 
   {
     const auto result = run_with_detail(0);
-    CHECK(result.histogram0[3] == 0);
-    CHECK(result.histogram1[3] == 0);
-    CHECK(result.histogram2[3] == 0); // detail=0 disables histogram2 too, not just 0/1.
+    CHECK(result.histograms[0][3] == 0);
+    CHECK(result.histograms[1][3] == 0);
+    CHECK(result.histograms[2][3] == 0); // detail=0 disables histogram2 too, not just 0/1.
   }
   {
     const auto result = run_with_detail(1);
-    CHECK(result.histogram0[3] == 0);
-    CHECK(result.histogram1[3] == 0);
-    CHECK(result.histogram2[3] == 1);
+    CHECK(result.histograms[0][3] == 0);
+    CHECK(result.histograms[1][3] == 0);
+    CHECK(result.histograms[2][3] == 1);
   }
   {
     const auto result = run_with_detail(2);
-    CHECK(result.histogram0[3] == 1);
-    CHECK(result.histogram1[3] == 1);
-    CHECK(result.histogram2[3] == 1);
+    CHECK(result.histograms[0][3] == 1);
+    CHECK(result.histograms[1][3] == 1);
+    CHECK(result.histograms[2][3] == 1);
   }
 }
 
@@ -374,18 +390,20 @@ TEST_CASE("compute_snr_and_apply_filters histograms are computed from mask0/mask
   config.threshold = 0.05F;
   config.reject_noise_threshold = 2.F;
   ProcessPlaneResult result;
+  ProcessBandScratch scratch;
 
-  const auto snr = compute_snr_and_apply_filters(plane, noise_map, /*median_noise=*/1.F, /*inv_band_size=*/1.F,
-                                                 image_mask, group, band, config, result);
+  compute_snr_and_apply_filters(scratch, plane, noise_map, /*median_noise=*/1.F, /*inv_band_size=*/1.F, image_mask,
+                                group, band, config, result);
+  const auto &snr = scratch.snr;
 
   // snr = [5, -0.5] -> bin_index = floor(snr+200) = [205, 199], both counted in every histogram regardless of the
   // rejection, even though pixel 2 ends up excluded from the final image_mask.
-  CHECK(result.histogram0[205] == 1);
-  CHECK(result.histogram1[205] == 1);
-  CHECK(result.histogram2[205] == 1);
-  CHECK(result.histogram0[199] == 1);
-  CHECK(result.histogram1[199] == 1);
-  CHECK(result.histogram2[199] == 1);
+  CHECK(result.histograms[0][205] == 1);
+  CHECK(result.histograms[1][205] == 1);
+  CHECK(result.histograms[2][205] == 1);
+  CHECK(result.histograms[0][199] == 1);
+  CHECK(result.histograms[1][199] == 1);
+  CHECK(result.histograms[2][199] == 1);
 
   CHECK(snr(0, 0) == Catch::Approx(5.F).epsilon(1e-6));
   CHECK(snr(0, 1) == Catch::Approx(-0.5F).epsilon(1e-6));
@@ -405,18 +423,19 @@ TEST_CASE("compute_snr_and_apply_filters resets histograms (not accumulates) acr
   config.max_sigma_bin = 3; // snr=0.5 -> bin 3, same bin on both calls below.
   config.histogram_detail = 2;
   ProcessPlaneResult result;
+  ProcessBandScratch scratch;
 
   auto image_mask1 = make_mask({{true}});
-  compute_snr_and_apply_filters(plane, noise_map, /*median_noise=*/0.F, /*inv_band_size=*/1.F, image_mask1, group, band,
-                                config, result);
-  CHECK(result.histogram2[3] == 1);
+  compute_snr_and_apply_filters(scratch, plane, noise_map, /*median_noise=*/0.F, /*inv_band_size=*/1.F, image_mask1,
+                                group, band, config, result);
+  CHECK(result.histograms[2][3] == 1);
 
   // Same result object, same max_sigma_bin: the second call starts this bin fresh at 1 again rather than
   // accumulating, matching the "per-band reset, not accumulate" behavior documented on the function.
   auto image_mask2 = make_mask({{true}});
-  compute_snr_and_apply_filters(plane, noise_map, /*median_noise=*/0.F, /*inv_band_size=*/1.F, image_mask2, group, band,
-                                config, result);
-  CHECK(result.histogram2[3] == 1);
+  compute_snr_and_apply_filters(scratch, plane, noise_map, /*median_noise=*/0.F, /*inv_band_size=*/1.F, image_mask2,
+                                group, band, config, result);
+  CHECK(result.histograms[2][3] == 1);
 }
 
 TEST_CASE("compute_snr_and_apply_filters combines min_sigma/max_sigma via running min/max across calls, leaving "
@@ -429,14 +448,15 @@ TEST_CASE("compute_snr_and_apply_filters combines min_sigma/max_sigma via runnin
   PlaneConfig config;
   config.threshold = 0.05F;
   ProcessPlaneResult result;
+  ProcessBandScratch scratch;
 
   // Call 1: result.min_sigma/max_sigma start nullopt, so this call sets them directly.
   {
     const auto plane = make_plane({{-2.F, 5.F, 1.F}});
     const auto noise_map = make_plane({{1.F, 1.F, 1.F}});
     auto image_mask = make_mask({{true, true, true}});
-    compute_snr_and_apply_filters(plane, noise_map, /*median_noise=*/0.F, /*inv_band_size=*/1.F, image_mask, group,
-                                  band, config, result);
+    compute_snr_and_apply_filters(scratch, plane, noise_map, /*median_noise=*/0.F, /*inv_band_size=*/1.F, image_mask,
+                                  group, band, config, result);
     REQUIRE(result.min_sigma.has_value());
     REQUIRE(result.max_sigma.has_value());
     CHECK(*result.min_sigma == Catch::Approx(-2.F));
@@ -449,8 +469,8 @@ TEST_CASE("compute_snr_and_apply_filters combines min_sigma/max_sigma via runnin
     const auto plane = make_plane({{-10.F, 3.F}});
     const auto noise_map = make_plane({{1.F, 1.F}});
     auto image_mask = make_mask({{true, true}});
-    compute_snr_and_apply_filters(plane, noise_map, /*median_noise=*/0.F, /*inv_band_size=*/1.F, image_mask, group,
-                                  band, config, result);
+    compute_snr_and_apply_filters(scratch, plane, noise_map, /*median_noise=*/0.F, /*inv_band_size=*/1.F, image_mask,
+                                  group, band, config, result);
     CHECK(*result.min_sigma == Catch::Approx(-10.F));
     CHECK(*result.max_sigma == Catch::Approx(5.F));
   }
@@ -462,8 +482,8 @@ TEST_CASE("compute_snr_and_apply_filters combines min_sigma/max_sigma via runnin
     const auto plane = make_plane({{100.F, -100.F}});
     const auto noise_map = make_plane({{0.F, 0.F}});
     auto image_mask = make_mask({{true, true}});
-    compute_snr_and_apply_filters(plane, noise_map, /*median_noise=*/0.F, /*inv_band_size=*/1.F, image_mask, group,
-                                  band, config, result);
+    compute_snr_and_apply_filters(scratch, plane, noise_map, /*median_noise=*/0.F, /*inv_band_size=*/1.F, image_mask,
+                                  group, band, config, result);
     CHECK(*result.min_sigma == Catch::Approx(-10.F));
     CHECK(*result.max_sigma == Catch::Approx(5.F));
   }
@@ -486,9 +506,11 @@ TEST_CASE("compute_snr_and_apply_filters never resurrects a caller-supplied imag
     PlaneConfig config;
     config.threshold = 0.05F;
     ProcessPlaneResult result;
+    ProcessBandScratch scratch;
 
-    const auto snr = compute_snr_and_apply_filters(plane, noise_map, /*median_noise=*/0.F, /*inv_band_size=*/1.F,
-                                                   image_mask, group, band, config, result);
+    compute_snr_and_apply_filters(scratch, plane, noise_map, /*median_noise=*/0.F, /*inv_band_size=*/1.F, image_mask,
+                                  group, band, config, result);
+    const auto &snr = scratch.snr;
 
     CHECK(snr(0, 0) == Catch::Approx(100.F));
     CHECK(snr(0, 1) == Catch::Approx(4.F));
@@ -512,9 +534,11 @@ TEST_CASE("compute_snr_and_apply_filters never resurrects a caller-supplied imag
     PlaneConfig config;
     config.threshold = 0.05F;
     ProcessPlaneResult result;
+    ProcessBandScratch scratch;
 
-    const auto snr = compute_snr_and_apply_filters(plane, noise_map, /*median_noise=*/0.F, /*inv_band_size=*/1.F,
-                                                   image_mask, group_with_cutoff, band, config, result);
+    compute_snr_and_apply_filters(scratch, plane, noise_map, /*median_noise=*/0.F, /*inv_band_size=*/1.F, image_mask,
+                                  group_with_cutoff, band, config, result);
+    const auto &snr = scratch.snr;
 
     CHECK(snr(0, 0) == Catch::Approx(100.F));
     CHECK(image_mask(0, 0) == false);
