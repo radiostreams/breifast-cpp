@@ -1,0 +1,177 @@
+Elapsed Time: 84.404s
+    Clockticks: 3,895,668,000,000
+    Instructions Retired: 11,329,656,000,000
+    CPI Rate: 0.344
+    Retiring: 82.6% of Pipeline Slots
+     | A high fraction of pipeline slots was utilized by useful work. While the
+     | goal is to make this metric value as big as possible, a high Retiring
+     | value for non-vectorized code could prompt you to consider code
+     | vectorization. Vectorization enables doing more computations without
+     | significantly increasing the number of instructions, thus improving the
+     | performance. Note that this metric value may be highlighted due to
+     | Microcode Sequencer (MS) issue, so the performance can be improved by
+     | avoiding using the MS.
+     |
+        Light Operations: 82.0% of Pipeline Slots
+         | CPU retired light-weight operations (ones which require no more than
+         | one uop) in a significant fraction of cycles. This correlates with
+         | total number of instructions used by the program. Optimum value of
+         | uops-per-instruction ratio is 1. While this is the most desirable
+         | metric, high values can also provide opportunities for performance
+         | optimizations.
+         |
+            FP Arithmetic: 0.0% of uOps
+                FP x87: 0.0% of uOps
+                FP Scalar: 0.0% of uOps
+                FP Vector: 0.0% of uOps
+                    128-bit FP Vector: 0.0% of uOps
+                    256-bit FP Vector: 0.0% of uOps
+                    512-bit FP Vector: 0.0% of uOps
+            Memory Operations: 20.6% of Pipeline Slots
+             | For a significant fraction of pipeline slots the CPU was retiring
+             | memory operations - uops for memory load or store accesses.
+             |
+            Branch Instructions: 15.3% of Pipeline Slots
+             | For a significant fraction of pipeline slots the CPU was retiring
+             | branch instructions.
+             |
+            Nop Instructions: 0.3% of Pipeline Slots
+            Other: 45.7% of Pipeline Slots
+             | This metric represents a non-floating-point (FP) uop fraction the
+             | CPU has executed. If your application has no FP operations, this
+             | is likely to be the biggest fraction.
+             |
+        Heavy Operations: 0.6% of Pipeline Slots
+            Few Uops Instructions: 0.6% of Pipeline Slots
+            Microcode Sequencer: 0.1% of Pipeline Slots
+                Assists: 0.0% of Pipeline Slots
+                CISC: 0.1% of Pipeline Slots
+    Front-End Bound: 7.6% of Pipeline Slots
+        Front-End Latency: 1.0% of Pipeline Slots
+            ICache Misses: 0.1% of Clockticks
+            ITLB Overhead: 0.1% of Clockticks
+            Branch Resteers: 0.7% of Clockticks
+                Mispredicts Resteers: 0.6% of Clockticks
+                Clears Resteers: 0.1% of Clockticks
+                Unknown Branches: 0.0% of Clockticks
+            DSB Switches: 0.0% of Clockticks
+            Length Changing Prefixes: 0.0% of Clockticks
+            MS Switches: 0.2% of Clockticks
+        Front-End Bandwidth: 6.6% of Pipeline Slots
+            Front-End Bandwidth MITE: 0.0% of Pipeline Slots
+                Decoder-0 Alone: 0.0% of Pipeline Slots
+                %MITE_4wide: 0.0% of Clockticks
+            Front-End Bandwidth DSB: 17.3% of Pipeline Slots
+            (Info) DSB Coverage: 98.4%
+            (Info) DSB Misses: 1.1% of Pipeline Slots
+    Bad Speculation: 0.0% of Pipeline Slots
+        Branch Mispredict: 0.0% of Pipeline Slots
+        Machine Clears: 0.0% of Pipeline Slots
+    Back-End Bound: 46.7% of Pipeline Slots
+     | A significant portion of pipeline slots are remaining empty. When
+     | operations take too long in the back-end, they introduce bubbles in the
+     | pipeline that ultimately cause fewer pipeline slots containing useful
+     | work to be retired per cycle than the machine is capable to support. This
+     | opportunity cost results in slower execution. Long-latency operations
+     | like divides and memory operations can cause this, as can too many
+     | operations being directed to a single execution port (for example, more
+     | multiply operations arriving in the back-end per cycle than the execution
+     | unit can support).
+     |
+        Memory Bound: 24.0% of Pipeline Slots
+         | The metric value is high. This can indicate that the significant
+         | fraction of execution pipeline slots could be stalled due to demand
+         | memory load and stores. Use Memory Access analysis to have the metric
+         | breakdown by memory hierarchy, memory bandwidth information,
+         | correlation by memory objects.
+         |
+            L1 Bound: 2.3% of Clockticks
+                DTLB Overhead: 100.0% of Clockticks
+                    Load STLB Hit: 100.0% of Clockticks
+                    Load STLB Miss: 0.0% of Clockticks
+                Loads Blocked by Store Forwarding: 0.0% of Clockticks
+                Lock Latency: 0.0% of Clockticks
+                Split Loads: 0.0% of Clockticks
+                4K Aliasing: 4.4% of Clockticks
+                FB Full: 1.0% of Clockticks
+            L2 Bound: 12.6% of Clockticks
+             | This metric shows how often machine was stalled on L2 cache.
+             | Avoiding cache misses (L1 misses/L2 hits) will improve the
+             | latency and increase performance.
+             |
+            L3 Bound: 1.0% of Clockticks
+                Contested Accesses: 0.0% of Clockticks
+                Data Sharing: 0.0% of Clockticks
+                L3 Latency: 1.9% of Clockticks
+                SQ Full: 1.0% of Clockticks
+            DRAM Bound: 1.5% of Clockticks
+                Memory Bandwidth: 49.3% of Clockticks
+                Memory Latency: 30.3% of Clockticks
+                    Local Memory: 0.0% of Clockticks
+                    Remote Memory: 0.0% of Clockticks
+                    Remote Cache: 0.0% of Clockticks
+            Store Bound: 2.7% of Clockticks
+                Store Latency: 16.8% of Clockticks
+                False Sharing: 0.0% of Clockticks
+                Split Stores: 0.0%
+                Streaming Stores: 0.0% of Clockticks
+                DTLB Store Overhead: 1.4% of Clockticks
+                    Store STLB Hit: 1.4% of Clockticks
+                    Store STLB Miss: 0.0% of Clockticks
+        Core Bound: 22.7% of Pipeline Slots
+         | This metric represents how much Core non-memory issues were of a
+         | bottleneck. Shortage in hardware compute resources, or dependencies
+         | software's instructions are both categorized under Core Bound. Hence
+         | it may indicate the machine ran out of an OOO resources, certain
+         | execution units are overloaded or dependencies in program's data- or
+         | instruction- flow are limiting the performance (e.g. FP-chained long-
+         | latency arithmetic operations).
+         |
+            Divider: 18.6% of Clockticks
+            Port Utilization: 14.3% of Clockticks
+                Cycles of 0 Ports Utilized: 0.0% of Clockticks
+                    Serializing Operations: 1.0% of Clockticks
+                        Slow Pause: 0.0% of Clockticks
+                    Mixing Vectors: 0.0% of Clockticks
+                Cycles of 1 Port Utilized: 5.3% of Clockticks
+                Cycles of 2 Ports Utilized: 10.9% of Clockticks
+                Cycles of 3+ Ports Utilized: 76.4% of Clockticks
+                    ALU Operation Utilization: 75.1% of Clockticks
+                        Port 0: 70.3% of Clockticks
+                        Port 1: 76.6% of Clockticks
+                        Port 5: 62.6% of Clockticks
+                        Port 6: 90.9% of Clockticks
+                    Load Operation Utilization: 51.9% of Clockticks
+                    Store Operation Utilization: 18.6% of Clockticks
+    Average CPU Frequency: 3.456 GHz
+    Total Thread Count: 72
+    Paused Time: 63.612s
+Effective CPU Utilization: 75.3%
+ | The metric value is low, which may signal a poor logical CPU cores
+ | utilization caused by load imbalance, threading runtime overhead, contended
+ | synchronization, or thread/process underutilization. Explore sub-metrics to
+ | estimate the efficiency of MPI and OpenMP parallelism or run the Locks and
+ | Waits analysis to identify parallel bottlenecks for other parallel runtimes.
+ |
+    Average Effective CPU Utilization: 54.217 out of 72
+Collection and Platform Info
+    Application Command Line: /home/chouh/work/src/breifast-cpp/profiling/assess-bin/current/bench "/scratch/chouh/breifast_small_test/lot_diff36_cpp" "72" "3" 
+    Operating System: 5.14.0-427.42.1.el9_4.x86_64 Red Hat Enterprise Linux release 9.4 (Plow)
+    Computer Name: jst234
+    Result Size: 436.7 MB 
+    Collection start time: 13:43:03 30/09/2026 UTC
+    Collection stop time: 13:44:27 30/09/2026 UTC
+    Collector Type: Driverless Perf system-wide sampling
+    CPU
+        Name: Intel(R) Xeon(R) Processor code named Icelake
+        Frequency: 2.394 GHz
+        Logical CPU Count: 72
+        LLC size: 56.6 MB 
+        Cache Allocation Technology
+            Level 2 capability: not detected
+            Level 3 capability: available
+
+If you want to skip descriptions of detected performance issues in the report,
+enter: vtune -report summary -report-knob show-issues=false -r <my_result_dir>.
+Alternatively, you may view the report in the csv format: vtune -report
+<report_name> -format=csv.

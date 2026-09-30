@@ -1,0 +1,16 @@
+jst246
+=== whole node, 72 threads, spread ===
+Array size = 100000000 (elements), Offset = 0 (elements)
+Memory per array = 762.9 MiB (= 0.7 GiB).
+Number of Threads counted = 72
+Copy:          299619.9     0.005386     0.005340     0.005460
+Scale:         288702.4     0.005651     0.005542     0.006460
+Add:           299406.0     0.008057     0.008016     0.008159
+Triad:         300075.4     0.008086     0.007998     0.008148
+=== domain 0, 18 threads, local memory ===
+Array size = 100000000 (elements), Offset = 0 (elements)
+Number of Threads counted = 18
+Copy:           80976.0     0.019809     0.019759     0.019853
+Scale:          72693.9     0.022119     0.022010     0.022302
+Add:            76159.1     0.031627     0.031513     0.031735
+Triad:          76192.5     0.031624     0.031499     0.031710

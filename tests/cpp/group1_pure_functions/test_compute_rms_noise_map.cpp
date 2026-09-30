@@ -1,17 +1,36 @@
+#include <algorithm>
+
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include "median.hpp"
 #include "plane_lot_dispatch.hpp"
 
 #include "../test_helpers.hpp"
 
 using namespace breifast;
 
+namespace
+{
+// make_noise_map(method='std'): compute_rms_noise_map() plus the median floor process_band() applies.
+xt::xtensor<float, 2> floored_rms_noise_map(ProcessBandScratch &scratch, const xt::xtensor<float, 2> &plane,
+                                            long boxsize)
+{
+  xt::xtensor<float, 2> noise_map = compute_rms_noise_map(scratch, plane, boxsize);
+  const float floor = detail::median::radix_median_of({noise_map.data(), noise_map.size()});
+  for (auto &value : noise_map)
+  {
+    value = std::max(value, floor);
+  }
+  return noise_map;
+}
+} // namespace
+
 TEST_CASE("compute_rms_noise_map matches a hand-computed 3x3 grid at boxsize=3", "[compute_rms_noise_map]")
 {
   ProcessBandScratch scratch;
   const auto plane = make_plane({{1.F, 2.F, 3.F}, {4.F, 5.F, 6.F}, {7.F, 8.F, 9.F}});
-  const auto noise_map = compute_rms_noise_map(scratch, plane, 3);
+  const auto noise_map = floored_rms_noise_map(scratch, plane, 3);
 
   // Computed independently in Python with the same clamped-window formula, floored to the map's own median
   // (matching breifast.py's make_noise_map(method='std')).
@@ -31,7 +50,7 @@ TEST_CASE("compute_rms_noise_map matches a hand-computed rectangular (non-square
 {
   ProcessBandScratch scratch;
   const auto plane = make_plane({{1.F, -2.F, 3.F, -4.F}, {5.F, -6.F, 7.F, -8.F}});
-  const auto noise_map = compute_rms_noise_map(scratch, plane, 3);
+  const auto noise_map = floored_rms_noise_map(scratch, plane, 3);
 
   const float expected[2][4] = {{4.99638606F, 4.99638606F, 5.44671155F, 5.87367006F},
                                 {4.99638606F, 4.99638606F, 5.44671155F, 5.87367006F}};
@@ -58,7 +77,7 @@ TEST_CASE("compute_rms_noise_map matches a seeded-random 6x7 plane against a Pyt
       {-6.91F, 3.66F, 4.90F, 9.35F, -3.48F, -2.59F, -0.61F},
       {-6.21F, -7.40F, -0.49F, -5.46F, 3.40F, -1.26F, 6.65F},
   });
-  const auto noise_map = compute_rms_noise_map(scratch, plane, 5);
+  const auto noise_map = floored_rms_noise_map(scratch, plane, 5);
 
   const float expected[6][7] = {
       {5.81943484F, 5.81943484F, 5.81943484F, 5.92141819F, 5.97159889F, 6.33326403F, 6.52367909F},
@@ -81,7 +100,7 @@ TEST_CASE("compute_rms_noise_map is uniform when boxsize covers the whole plane"
 {
   ProcessBandScratch scratch;
   const auto plane = make_plane({{1.F, 2.F, 3.F}, {4.F, 5.F, 6.F}, {7.F, 8.F, 9.F}});
-  const auto noise_map = compute_rms_noise_map(scratch, plane, 5);
+  const auto noise_map = floored_rms_noise_map(scratch, plane, 5);
 
   const auto expected = Catch::Approx(5.627314338711377).epsilon(1e-5);
   for (size_t i_y = 0; i_y < 3; ++i_y)
@@ -99,7 +118,7 @@ TEST_CASE("compute_rms_noise_map with boxsize=1 is abs(plane) floored to its own
   ProcessBandScratch scratch;
   // boxsize=1 gives a 1x1 window (== abs(plane)) before the median floor; the floor still applies on top.
   const auto plane = make_plane({{-3.F, 0.F}, {4.F, -5.F}});
-  const auto noise_map = compute_rms_noise_map(scratch, plane, 1);
+  const auto noise_map = floored_rms_noise_map(scratch, plane, 1);
 
   // median(abs(plane)) = median({0, 3, 4, 5}) = 3.5 -> the two values below it (0 and 3) get floored to 3.5.
   const float expected[2][2] = {{3.5F, 3.5F}, {4.F, 5.F}};
@@ -117,8 +136,8 @@ TEST_CASE("compute_rms_noise_map boxsize=0 behaves the same as boxsize=1", "[com
   ProcessBandScratch scratch;
   // boxsize/2 truncates, so boxsize=0 and boxsize=1 both give radius=0 (a 1x1 window == abs(plane), pre-floor).
   const auto plane = make_plane({{-3.F, 0.F, 2.5F}, {4.F, -5.F, 1.F}});
-  const auto noise_map_0 = compute_rms_noise_map(scratch, plane, 0);
-  const auto noise_map_1 = compute_rms_noise_map(scratch, plane, 1);
+  const auto noise_map_0 = floored_rms_noise_map(scratch, plane, 0);
+  const auto noise_map_1 = floored_rms_noise_map(scratch, plane, 1);
 
   // median(abs(plane)) = median({0, 1, 2.5, 3, 4, 5}) = 2.75 -> values below it get floored to 2.75.
   const float expected[2][3] = {{3.F, 2.75F, 2.75F}, {4.F, 5.F, 2.75F}};
@@ -141,7 +160,7 @@ TEST_CASE("compute_rms_noise_map even boxsize windows are one pixel narrower tha
   // trailing side than a symmetric radius=boxsize/2 window would have). So boxsize=2 is genuinely narrower
   // than boxsize=3, not equivalent to it.
   const auto plane = make_plane({{1.F, 2.F, 3.F}, {4.F, 5.F, 6.F}, {7.F, 8.F, 9.F}});
-  const auto noise_map_2 = compute_rms_noise_map(scratch, plane, 2);
+  const auto noise_map_2 = floored_rms_noise_map(scratch, plane, 2);
 
   // Computed independently in Python with the same clamped-window formula, floored to the map's own median.
   const float expected[3][3] = {{3.39116499F, 3.39116499F, 3.39116499F},
@@ -165,7 +184,7 @@ TEST_CASE("compute_rms_noise_map on a uniform-value plane returns that constant 
     xt::xarray<float> plane;
     plane.resize({n_y, n_x});
     plane.fill(value);
-    const auto noise_map = compute_rms_noise_map(scratch, plane, boxsize);
+    const auto noise_map = floored_rms_noise_map(scratch, plane, boxsize);
     for (size_t i_y = 0; i_y < n_y; ++i_y)
     {
       for (size_t i_x = 0; i_x < n_x; ++i_x)
@@ -198,7 +217,7 @@ TEST_CASE("compute_rms_noise_map should floor below-median values up to the medi
       {9.F, 9.F, 1.F, 1.F, 1.F},
       {9.F, 9.F, 1.F, 1.F, 1.F},
   });
-  const auto noise_map = compute_rms_noise_map(scratch, plane, 3);
+  const auto noise_map = floored_rms_noise_map(scratch, plane, 3);
 
   const float expected[5][5] = {
       {4.33333333F, 4.33333333F, 5.25991128F, 7.37111480F, 9.00000000F},

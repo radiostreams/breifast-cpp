@@ -1,0 +1,143 @@
+jst012
+exe /home/chouh/work/src/breifast-cpp/profiling/assess-bin/release/bench (2026-09-30 14:51:44.820220442 +0200)
+=== strong scaling (1080 items) ===
+--- strong threads=1 items=1080 ---
+  iteration 0: 1080 items, 150 detections, compute time = 249.317s
+    cpu: util=99.8% user=248.7s sys=0.1s minflt=27276 majflt=0 nvcsw=0 nivcsw=233
+    vmstat: pgfault=178932 thp_fault_alloc=147 numa_hint_faults=19127 numa_hint_faults_local=19057 numa_pages_migrated=62
+  iteration 1: 1080 items, 150 detections, compute time = 249.085s
+    cpu: util=99.8% user=248.5s sys=0.0s minflt=23077 majflt=0 nvcsw=1 nivcsw=100
+    vmstat: pgfault=201111 thp_fault_alloc=3 numa_hint_faults=23962 numa_hint_faults_local=23953 numa_pages_migrated=6
+run_batch_core: 2 iterations, total = 498.402s, mean = 249.201s
+--- strong threads=2 items=1080 ---
+  iteration 0: 1080 items, 150 detections, compute time = 125.010s
+    cpu: util=99.6% user=248.9s sys=0.2s minflt=153118 majflt=0 nvcsw=12 nivcsw=235
+    vmstat: pgfault=325171 thp_fault_alloc=341 numa_hint_faults=139008 numa_hint_faults_local=139002 numa_pages_migrated=3
+  iteration 1: 1080 items, 150 detections, compute time = 125.040s
+    cpu: util=99.7% user=249.1s sys=0.3s minflt=645237 majflt=0 nvcsw=6 nivcsw=147
+    vmstat: pgfault=701067 thp_fault_alloc=1 numa_hint_faults=643237 numa_hint_faults_local=643234 numa_pages_migrated=2
+run_batch_core: 2 iterations, total = 250.051s, mean = 125.025s
+--- strong threads=4 items=1080 ---
+  iteration 0: 1080 items, 150 detections, compute time = 63.895s
+    cpu: util=99.6% user=251.8s sys=2.8s minflt=347132 majflt=0 nvcsw=47 nivcsw=871
+    vmstat: pgfault=374232 thp_fault_alloc=585 numa_hint_faults=307221 numa_hint_faults_local=151552 numa_pages_migrated=3091963
+  iteration 1: 1080 items, 150 detections, compute time = 63.876s
+    cpu: util=99.7% user=249.8s sys=4.8s minflt=597425 majflt=0 nvcsw=142 nivcsw=743
+    vmstat: pgfault=656929 thp_fault_alloc=1 numa_hint_faults=565131 numa_hint_faults_local=204072 numa_pages_migrated=5975752
+run_batch_core: 2 iterations, total = 127.770s, mean = 63.885s
+--- strong threads=9 items=1080 ---
+  iteration 0: 1080 items, 150 detections, compute time = 29.965s
+    cpu: util=99.2% user=267.1s sys=0.6s minflt=52790 majflt=0 nvcsw=282 nivcsw=652
+    vmstat: pgfault=66968 thp_fault_alloc=1322 numa_hint_faults=4 numa_hint_faults_local=3 numa_pages_migrated=1
+  iteration 1: 1080 items, 150 detections, compute time = 28.532s
+    cpu: util=99.3% user=252.7s sys=2.2s minflt=277604 majflt=0 nvcsw=166 nivcsw=533
+    vmstat: pgfault=292754 thp_fault_alloc=1 numa_hint_faults=248746 numa_hint_faults_local=99714 numa_pages_migrated=2510873
+run_batch_core: 2 iterations, total = 58.498s, mean = 29.249s
+--- strong threads=18 items=1080 ---
+  iteration 0: 1080 items, 150 detections, compute time = 17.539s
+    cpu: util=98.7% user=310.2s sys=1.5s minflt=102392 majflt=0 nvcsw=964 nivcsw=646
+    vmstat: pgfault=102627 thp_fault_alloc=2647 numa_hint_faults=1 numa_hint_faults_local=1 numa_pages_migrated=0
+  iteration 1: 1080 items, 150 detections, compute time = 14.876s
+    cpu: util=98.6% user=262.3s sys=1.7s minflt=243502 majflt=0 nvcsw=182 nivcsw=306
+    vmstat: pgfault=243939 thp_fault_alloc=1 numa_hint_faults=181788 numa_hint_faults_local=68575 numa_pages_migrated=1834707
+run_batch_core: 2 iterations, total = 32.416s, mean = 16.208s
+--- strong threads=36 items=1080 ---
+  iteration 0: 1080 items, 150 detections, compute time = 9.047s
+    cpu: util=95.5% user=307.9s sys=3.1s minflt=195292 majflt=0 nvcsw=4143 nivcsw=421
+    vmstat: pgfault=209557 thp_fault_alloc=5307 numa_hint_faults=1387 numa_hint_faults_local=1095 numa_pages_migrated=765
+  iteration 1: 1080 items, 150 detections, compute time = 8.473s
+    cpu: util=95.8% user=290.4s sys=1.8s minflt=264303 majflt=0 nvcsw=117 nivcsw=437
+    vmstat: pgfault=264567 thp_fault_alloc=1 numa_hint_faults=176293 numa_hint_faults_local=79998 numa_pages_migrated=1500521
+run_batch_core: 2 iterations, total = 17.520s, mean = 8.760s
+--- strong threads=72 items=1080 ---
+  iteration 0: 1080 items, 150 detections, compute time = 6.160s
+    cpu: util=88.6% user=386.4s sys=6.7s minflt=331008 majflt=0 nvcsw=18580 nivcsw=2017
+    vmstat: pgfault=351309 thp_fault_alloc=9344 numa_hint_faults=245 numa_hint_faults_local=226 numa_pages_migrated=18
+  iteration 1: 1080 items, 150 detections, compute time = 5.814s
+    cpu: util=94.0% user=392.6s sys=1.0s minflt=50734 majflt=0 nvcsw=153 nivcsw=1392
+    vmstat: pgfault=50979 thp_fault_alloc=988 numa_hint_faults=5821 numa_hint_faults_local=2521 numa_pages_migrated=61042
+run_batch_core: 2 iterations, total = 11.974s, mean = 5.987s
+=== weak scaling (15 items/thread) ===
+--- weak threads=1 items=15 ---
+  iteration 0: 15 items, 1 detections, compute time = 3.428s
+    cpu: util=99.8% user=3.4s sys=0.0s minflt=5553 majflt=0 nvcsw=0 nivcsw=5
+    vmstat: pgfault=5556 thp_fault_alloc=147 numa_hint_faults=85 numa_hint_faults_local=85 numa_pages_migrated=0
+  iteration 1: 15 items, 1 detections, compute time = 3.392s
+    cpu: util=99.8% user=3.4s sys=0.0s minflt=1574 majflt=0 nvcsw=0 nivcsw=4
+    vmstat: pgfault=1584 thp_fault_alloc=1 numa_hint_faults=231 numa_hint_faults_local=231 numa_pages_migrated=0
+run_batch_core: 2 iterations, total = 6.820s, mean = 3.410s
+--- weak threads=2 items=30 ---
+  iteration 0: 30 items, 5 detections, compute time = 3.614s
+    cpu: util=97.6% user=7.0s sys=0.1s minflt=13170 majflt=0 nvcsw=11 nivcsw=8
+    vmstat: pgfault=13175 thp_fault_alloc=293 numa_hint_faults=1029 numa_hint_faults_local=1029 numa_pages_migrated=0
+  iteration 1: 30 items, 5 detections, compute time = 3.571s
+    cpu: util=97.6% user=7.0s sys=0.0s minflt=9722 majflt=0 nvcsw=2 nivcsw=11
+    vmstat: pgfault=9735 thp_fault_alloc=1 numa_hint_faults=7879 numa_hint_faults_local=7879 numa_pages_migrated=0
+run_batch_core: 2 iterations, total = 7.185s, mean = 3.592s
+--- weak threads=4 items=60 ---
+  iteration 0: 60 items, 6 detections, compute time = 3.646s
+    cpu: util=96.9% user=14.0s sys=0.2s minflt=21874 majflt=0 nvcsw=43 nivcsw=51
+    vmstat: pgfault=21916 thp_fault_alloc=529 numa_hint_faults=1175 numa_hint_faults_local=806 numa_pages_migrated=2923
+  iteration 1: 60 items, 6 detections, compute time = 3.618s
+    cpu: util=96.3% user=13.8s sys=0.1s minflt=29823 majflt=0 nvcsw=3 nivcsw=42
+    vmstat: pgfault=29849 thp_fault_alloc=1 numa_hint_faults=22684 numa_hint_faults_local=14067 numa_pages_migrated=143010
+run_batch_core: 2 iterations, total = 7.264s, mean = 3.632s
+--- weak threads=9 items=135 ---
+  iteration 0: 135 items, 17 detections, compute time = 3.867s
+    cpu: util=97.2% user=33.1s sys=0.7s minflt=47027 majflt=0 nvcsw=207 nivcsw=110
+    vmstat: pgfault=47254 thp_fault_alloc=1209 numa_hint_faults=2749 numa_hint_faults_local=188 numa_pages_migrated=285144
+  iteration 1: 135 items, 17 detections, compute time = 3.923s
+    cpu: util=94.6% user=33.2s sys=0.2s minflt=29955 majflt=0 nvcsw=25 nivcsw=95
+    vmstat: pgfault=31618 thp_fault_alloc=119 numa_hint_faults=23142 numa_hint_faults_local=2477 numa_pages_migrated=190827
+run_batch_core: 2 iterations, total = 7.790s, mean = 3.895s
+--- weak threads=18 items=270 ---
+  iteration 0: 270 items, 36 detections, compute time = 4.592s
+    cpu: util=95.3% user=77.4s sys=1.3s minflt=88648 majflt=0 nvcsw=898 nivcsw=294
+    vmstat: pgfault=90410 thp_fault_alloc=2420 numa_hint_faults=1478 numa_hint_faults_local=588 numa_pages_migrated=2422
+  iteration 1: 270 items, 36 detections, compute time = 3.812s
+    cpu: util=96.3% user=64.0s sys=2.1s minflt=229245 majflt=0 nvcsw=20 nivcsw=136
+    vmstat: pgfault=230085 thp_fault_alloc=59 numa_hint_faults=173614 numa_hint_faults_local=54569 numa_pages_migrated=1967843
+run_batch_core: 2 iterations, total = 8.404s, mean = 4.202s
+--- weak threads=36 items=540 ---
+  iteration 0: 540 items, 75 detections, compute time = 4.745s
+    cpu: util=91.7% user=152.8s sys=3.9s minflt=182998 majflt=0 nvcsw=4745 nivcsw=364
+    vmstat: pgfault=183162 thp_fault_alloc=4616 numa_hint_faults=22628 numa_hint_faults_local=4898 numa_pages_migrated=923733
+  iteration 1: 540 items, 75 detections, compute time = 4.590s
+    cpu: util=93.1% user=153.5s sys=0.4s minflt=39123 majflt=0 nvcsw=1464 nivcsw=221
+    vmstat: pgfault=39367 thp_fault_alloc=407 numa_hint_faults=13389 numa_hint_faults_local=10520 numa_pages_migrated=50898
+run_batch_core: 2 iterations, total = 9.335s, mean = 4.667s
+--- weak threads=72 items=1080 ---
+  iteration 0: 1080 items, 150 detections, compute time = 5.624s
+    cpu: util=89.9% user=357.8s sys=6.4s minflt=328494 majflt=0 nvcsw=17656 nivcsw=1605
+    vmstat: pgfault=329142 thp_fault_alloc=9344 numa_hint_faults=2 numa_hint_faults_local=1 numa_pages_migrated=512
+  iteration 1: 1080 items, 150 detections, compute time = 5.183s
+    cpu: util=94.6% user=352.5s sys=0.6s minflt=37472 majflt=0 nvcsw=93 nivcsw=1278
+    vmstat: pgfault=37483 thp_fault_alloc=872 numa_hint_faults=0 numa_hint_faults_local=0 numa_pages_migrated=0
+run_batch_core: 2 iterations, total = 10.808s, mean = 5.404s
+=== vtune hpc-performance, 72 threads, 3 iterations ===
+vtune: Warning: Access to /proc/kallsyms file is limited. Consider changing /proc/sys/kernel/kptr_restrict to 0 to enable resolution of OS kernel and kernel module symbols.
+vtune: Warning: To profile kernel modules during the session, make sure they are available in the /lib/modules/kernel_version/ location.
+vtune: Warning: Pause command is not supported for managed code profiling. Runtime overhead is still possible. Data size limit may be exceeded.
+vtune: Error: Cannot load data file `/home/chouh/work/src/breifast-cpp/profiling/assess-release-66905301/hpc-performance/data.0/userapicollector-1565838-6088b684.trace' (Data file is corrupted).
+vtune: Warning: Cannot locate debugging information for file `/ssoft/spack/pinot-noir/jed/v2/spack/opt/spack/linux-rhel9-x86_64_v3/gcc-11.4.1/intel-oneapi-vtune-2024.1.0-ggpuzpx5nqydg76zoguizove2pgh4c4i/vtune/2024.1/lib64/runtime/libittnotify_collector.so'.
+vtune: Warning: Cannot locate debugging information for file `/usr/lib64/libc.so.6'.
+vtune: Using result path `/home/chouh/work/src/breifast-cpp/profiling/assess-release-66905301/hpc-performance'
+vtune: Executing actions  0 %                                                  vtune: Executing actions  0 % Finalizing results                               vtune: Executing actions 50 % Finalizing results                               vtune: Executing actions 50 % Generating a report                              vtune: Executing actions 50 % Setting data model parameters                    vtune: Executing actions 75 % Setting data model parameters                    vtune: Executing actions 75 % Generating a report                              vtune: Executing actions 100 % Generating a report                             vtune: Executing actions 100 % done                                            
+vtune: Using result path `/home/chouh/work/src/breifast-cpp/profiling/assess-release-66905301/hpc-performance'
+vtune: Executing actions  0 %                                                  vtune: Executing actions  0 % Finalizing results                               vtune: Executing actions 50 % Finalizing results                               vtune: Executing actions 50 % Generating a report                              vtune: Executing actions 50 % Setting data model parameters                    vtune: Executing actions 75 % Setting data model parameters                    vtune: Executing actions 75 % Generating a report                              vtune: Executing actions 100 % Generating a report                             vtune: Executing actions 100 % done                                            
+=== vtune uarch-exploration, 72 threads, 3 iterations ===
+vtune: Warning: Access to /proc/kallsyms file is limited. Consider changing /proc/sys/kernel/kptr_restrict to 0 to enable resolution of OS kernel and kernel module symbols.
+vtune: Warning: To profile kernel modules during the session, make sure they are available in the /lib/modules/kernel_version/ location.
+vtune: Warning: Pause command is not supported for managed code profiling. Runtime overhead is still possible. Data size limit may be exceeded.
+  iteration 0: 1080 items, 150 detections, compute time = 5.854s
+  iteration 1: 1080 items, 150 detections, compute time = 5.663s
+  iteration 2: 1080 items, 150 detections, compute time = 5.986s
+run_batch_core: 3 iterations, total = 17.503s, mean = 5.834s
+vtune: Warning: Cannot locate debugging information for file `/work/ska/hchouh/src/breifast-cpp/profiling/assess-bin/release/libtbb.so.12'.
+vtune: Warning: Cannot locate debugging information for file `/usr/lib64/libm.so.6'.
+vtune: Warning: Cannot locate debugging information for file `/ssoft/spack/pinot-noir/jed/v2/spack/opt/spack/linux-rhel9-x86_64_v3/gcc-11.4.1/intel-oneapi-vtune-2024.1.0-ggpuzpx5nqydg76zoguizove2pgh4c4i/vtune/2024.1/lib64/runtime/libittnotify_collector.so'.
+vtune: Warning: Cannot locate debugging information for file `/usr/lib64/libc.so.6'.
+vtune: Using result path `/home/chouh/work/src/breifast-cpp/profiling/assess-release-66905301/uarch-exploration'
+vtune: Executing actions  0 %                                                  vtune: Executing actions  0 % Finalizing results                               vtune: Executing actions 50 % Finalizing results                               vtune: Executing actions 50 % Generating a report                              vtune: Executing actions 50 % Setting data model parameters                    vtune: Executing actions 75 % Setting data model parameters                    vtune: Executing actions 75 % Generating a report                              vtune: Executing actions 100 % Generating a report                             vtune: Executing actions 100 % done                                            
+vtune: Using result path `/home/chouh/work/src/breifast-cpp/profiling/assess-release-66905301/uarch-exploration'
+vtune: Executing actions  0 %                                                  vtune: Executing actions  0 % Finalizing results                               vtune: Executing actions 50 % Finalizing results                               vtune: Executing actions 50 % Generating a report                              vtune: Executing actions 50 % Setting data model parameters                    vtune: Executing actions 75 % Setting data model parameters                    vtune: Executing actions 75 % Generating a report                              vtune: Executing actions 100 % Generating a report                             vtune: Executing actions 100 % done                                            

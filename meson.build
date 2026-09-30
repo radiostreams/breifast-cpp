@@ -1,13 +1,17 @@
 project('breifast-helpers-cpp', 'cpp',
   version : '0.1.0',
-  default_options : ['cpp_std=c++23', 'buildtype=debugoptimized',
+  default_options : ['cpp_std=c++23', 'buildtype=release', 'debug=true', 'b_ndebug=true',
                       'cpp_args=-B/usr/bin', 'cpp_link_args=-B/usr/bin'])
+
+# Step 14: -O2 without -march ran scalar SSE2 on an AVX-512 part; -O3 -march is 19% faster on one thread.
+add_project_arguments('-march=' + get_option('march'), '-fno-math-errno', language : 'cpp')
 
 py = import('python').find_installation()
 
 pybind11_dep = dependency('pybind11').as_system('system')
 xtl_dep = dependency('xtl').as_system('system')
 xtensor_dep = dependency('xtensor').as_system('system')
+xsimd_dep = dependency('xsimd').as_system('system')
 xtensor_python_dep = dependency('xtensor-python').as_system('system')
 numpy_dep = dependency('numpy').as_system('system')
 json_dep = dependency('nlohmann_json').as_system('system')
@@ -125,8 +129,8 @@ endif
 ext_module = py.extension_module(
   'breifast_helpers',
   ['src/plane_lot_bindings.cpp', 'src/plane_lot_dispatch.cpp', 'src/islands.cpp', tbb_build],
-  dependencies : [py.dependency(), pybind11_dep, xtl_dep, xtensor_dep, xtensor_python_dep, numpy_dep, tbb_dep,
-                  itt_dep, tracy_headers_dep],
+  dependencies : [py.dependency(), pybind11_dep, xtl_dep, xtensor_dep, xsimd_dep, xtensor_python_dep, numpy_dep,
+                  tbb_dep, itt_dep, tracy_headers_dep],
   link_args : ['-static-libstdc++', '-static-libgcc'],
   install : true,
 )
@@ -143,7 +147,7 @@ bench = executable(
   'bench',
   ['src/bench.cpp', 'src/plane_lot_dispatch.cpp', 'src/islands.cpp', tbb_build],
   include_directories : include_directories('src'),
-  dependencies : [xtl_dep, xtensor_dep, tbb_dep, itt_dep, json_dep, tracy_dep],
+  dependencies : [xtl_dep, xtensor_dep, xsimd_dep, tbb_dep, itt_dep, json_dep, tracy_dep],
   cpp_args : get_option('box_version') ? ['-DBOX_VERSION'] : [],
   link_args : ['-static-libstdc++', '-static-libgcc'],
   build_by_default : false,
@@ -172,7 +176,7 @@ test_breifast_core = executable(
   'test_breifast_core',
   test_breifast_core_sources + [tbb_build, catch2_build],
   include_directories : include_directories('src'),
-  dependencies : [xtl_dep, xtensor_dep, tbb_dep, catch2_dep, itt_dep, json_dep, tracy_headers_dep],
+  dependencies : [xtl_dep, xtensor_dep, xsimd_dep, tbb_dep, catch2_dep, itt_dep, json_dep, tracy_headers_dep],
   cpp_args : ['-DFIXTURES_DIR="' + meson.project_source_root() / 'tests' / 'fixtures' + '"'],
   link_args : ['-static-libstdc++', '-static-libgcc'],
 )

@@ -2,3 +2,5 @@ option('tracy', type : 'boolean', value : false,
   description : 'Compile the Tracy client into bench (instrumentation is a no-op when off)')
 option('box_version', type : 'boolean', value : false,
   description : 'Build compute_rms_noise_map with the BOX_VERSION (ring-buffer) branch instead of the default separable box filter')
+option('march', type : 'string', value : 'native',
+  description : 'Target CPU for -march. The binaries only run on CPUs with the build machine\'s ISA')

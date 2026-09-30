@@ -225,3 +225,63 @@ TEST_CASE("process_plane only computes variance_stats for multi-channel items", 
     CHECK(result.variance_stats.has_value());
   }
 }
+
+TEST_CASE("process_plane computes multi-channel variance_stats on the SNR cube left by the single-channel bands",
+          "[process_plane]")
+{
+  // breifast.py writes each single-channel band's snr back into stokes_cube, then computes the spectral variance
+  // stats from that cube "in units of SNR". Global-MAD noise with zero selfnoise/dde makes each channel's noise
+  // median(|channel|) * 1.4826. Expected sums come from numpy on the same float32 inputs.
+  ProcessBandScratch scratch;
+  PlaneBatchGroup group;
+  group.accept_mask.resize({2, 3, 3});
+  group.accept_mask.fill(true);
+  group.selfnoise_offset = xt::zeros<float>({3, 3});
+  group.selfnoise_raw = xt::zeros<float>({3, 3});
+  group.dde_noise = xt::zeros<float>({3, 3});
+
+  PlaneBatchItem item;
+  item.stokes_cube.resize({2, 3, 3});
+  xt::view(item.stokes_cube, 0) = xt::xarray<float>({{1.F, -2.F, 3.F}, {-4.F, 5.F, -6.F}, {7.F, -8.F, 9.F}});
+  xt::view(item.stokes_cube, 1) =
+      xt::xarray<float>({{0.5F, 1.5F, -2.5F}, {3.5F, -4.5F, 5.5F}, {-6.5F, 7.5F, 8.5F}});
+  item.weights = xt::xarray<float>({1.F, 1.F});
+  item.nonzero_channels = xt::xarray<bool>({true, true});
+  item.stokes_label = "I";
+
+  PlaneConfig config;
+  config.subtract_mean = false;
+  config.use_rms_noise_estimator = false;
+  config.boxsize = 1;
+  config.inner_boxsize = 0;
+  config.reject_noise_threshold = 0.F;
+  config.threshold = 100.F;
+  config.beam_size_enabled = false;
+  // Same order as breifast.py builds them: single channels first, aggregated band last (processed first).
+  config.band_slices = {
+      BandSlice{.start = 0, .stop = 1, .selfnoise_scale_factor = 1.F, .label = "B0"},
+      BandSlice{.start = 1, .stop = 2, .selfnoise_scale_factor = 1.F, .label = "B1"},
+      BandSlice{.start = 0, .stop = 2, .selfnoise_scale_factor = 1.F, .label = "B0~1"},
+  };
+
+  const auto result = process_plane(scratch, config, item, group);
+  REQUIRE(result.variance_stats.has_value());
+  const auto &stats = *result.variance_stats;
+
+  const float expected_pow2[9] = {0.0238140281F, 0.123338692F, 0.304190487F, 0.566369414F, 0.909875572F,
+                                  1.33470881F,   1.84086919F,  2.42835665F,  3.09717131F};
+  const float expected_pow3[9] = {0.00287573156F, -0.00827362202F, 0.0136647634F, -0.0127320439F, 0.F,
+                                  0.0300066471F,  -0.082763195F,   0.163744688F,  3.85754108F};
+  const float expected_pow4[9] = {0.000362694729F, 0.00785355642F, 0.0465388782F, 0.160514385F, 0.413936764F,
+                                  0.891023576F,    1.69605374F,    2.95336628F,   4.8073616F};
+  for (size_t i = 0; i < 9; ++i)
+  {
+    INFO("pixel " << i);
+    const size_t i_y = i / 3;
+    const size_t i_x = i % 3;
+    // Margin covers the center pixel of pow3, where the two channels cancel to float rounding noise.
+    CHECK(stats.sum_pow2(i_y, i_x) == Catch::Approx(expected_pow2[i]).epsilon(1e-5).margin(1e-6));
+    CHECK(stats.sum_pow3(i_y, i_x) == Catch::Approx(expected_pow3[i]).epsilon(1e-5).margin(1e-6));
+    CHECK(stats.sum_pow4(i_y, i_x) == Catch::Approx(expected_pow4[i]).epsilon(1e-5).margin(1e-6));
+  }
+}
