@@ -371,14 +371,13 @@ struct ProcessBandScratch
 
 /**
  * @brief Local RMS noise estimate: a sliding `boxsize x boxsize` box filter over `plane`, edge-corrected so border
- *        windows use only their true (in-bounds) pixel count rather than being pulled down by phantom padding.
- *        Equivalent to `make_noise_map(..., method='std')` in breifast.py.
+ *        windows use only their true (in-bounds) pixel count.
  *
- * Implemented via a summed-area table (2D prefix sum of `plane^2`, padded with a zero row/column at index 0) so
- * each pixel's windowed sum is four O(1) lookups instead of re-summing up to `boxsize^2` values per pixel.
+ * Two separable passes: running sums of `plane^2` along each row into `scratch.row_window_sums`, then along each
+ * column into `scratch.windows_sums`. The caller applies `make_noise_map(method='std')`'s median floor.
  * @param plane 2D image to compute the noise map over.
- * @param boxsize Full window width/height (not radius).
- * @return Noise map, same shape as `plane`: `sqrt(mean of plane^2 within each pixel's window)`. Refers to
+ * @param boxsize Full window width/height.
+ * @return `sqrt(mean of plane^2 within each pixel's window)`, same shape as `plane`. Refers to
  *         `scratch.windows_sums`, so it stays valid only until the next call sharing that scratch.
  */
 const xt::xtensor<float, 2> &compute_rms_noise_map(ProcessBandScratch &scratch, const xt::xtensor<float, 2> &plane,

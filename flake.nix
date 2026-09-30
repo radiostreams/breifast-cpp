@@ -22,6 +22,7 @@
           pythonEnv
           pkgs.xtensor
           pkgs.xtl
+          pkgs.xsimd
           pkgs.nlohmann_json
         ];
         shellHook = ''

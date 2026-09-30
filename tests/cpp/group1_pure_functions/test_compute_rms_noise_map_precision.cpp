@@ -1,11 +1,29 @@
+#include <algorithm>
 #include <cstdint>
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include "median.hpp"
 #include "plane_lot_dispatch.hpp"
 
 using namespace breifast;
+
+namespace
+{
+// make_noise_map(method='std'): compute_rms_noise_map() plus the median floor process_band() applies.
+xt::xtensor<float, 2> floored_rms_noise_map(ProcessBandScratch &scratch, const xt::xtensor<float, 2> &plane,
+                                            long boxsize)
+{
+  xt::xtensor<float, 2> noise_map = compute_rms_noise_map(scratch, plane, boxsize);
+  const float floor = detail::median::radix_median_of({noise_map.data(), noise_map.size()});
+  for (auto &value : noise_map)
+  {
+    value = std::max(value, floor);
+  }
+  return noise_map;
+}
+} // namespace
 
 namespace
 {
@@ -46,7 +64,7 @@ TEST_CASE("compute_rms_noise_map matches a float64 Python reference on a large r
   const long boxsize = 400;
   const auto plane = splitmix64_plane(n, n, 0xC0FFEEULL, 0.001F);
 
-  const auto noise_map = compute_rms_noise_map(scratch, plane, boxsize);
+  const auto noise_map = floored_rms_noise_map(scratch, plane, boxsize);
 
   // Expected values computed in Python
   struct ExpectedPoint

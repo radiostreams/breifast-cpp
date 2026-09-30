@@ -9,4 +9,4 @@ description = "C++-accelerated helper routines for breifast (pybind11/xtensor bi
 requires-python = ">=3.9"
 
 [tool.meson-python.args]
-setup = ["-Dbuildtype=debugoptimized"]
+setup = ["-Dbuildtype=release", "-Db_ndebug=true"]
