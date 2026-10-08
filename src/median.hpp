@@ -14,6 +14,7 @@
 #include <vector>
 
 #include <tracy/Tracy.hpp>
+#include <xsimd/xsimd.hpp>
 
 namespace breifast::detail::median
 {
@@ -33,60 +34,65 @@ inline std::vector<uint32_t> &histogram_scratch()
 }
 
 /**
- * @brief Order-preserving map: `signed_key(a) < signed_key(b)` iff `a < b`.
- *
- * -0 sorts just below +0, NaN beyond +-inf.
- * @param value Any float.
- * @return Key of `value`.
+ * @brief Order-preserving key of a float: `key(a) < key(b)` iff `a < b`. -0 sorts just below +0, NaN beyond +-inf.
  */
-inline uint32_t signed_key(float value)
+struct SignedKey
 {
-  const auto bits = std::bit_cast<uint32_t>(value);
-  const auto mask = static_cast<uint32_t>(static_cast<int32_t>(bits) >> 31) | 0x80000000U;
-  return bits ^ mask;
-}
-
-/**
- * @brief Inverse of signed_key().
- * @param key Key produced by signed_key().
- * @return The original float.
- */
-inline float from_signed_key(uint32_t key)
-{
-  return std::bit_cast<float>(key ^ ((key & 0x80000000U) ? 0x80000000U : 0xFFFFFFFFU));
-}
+  /// @brief Key of `value`.
+  static uint32_t key(float value)
+  {
+    const auto bits = std::bit_cast<uint32_t>(value);
+    const auto mask = static_cast<uint32_t>(static_cast<int32_t>(bits) >> 31) | 0x80000000U;
+    return bits ^ mask;
+  }
+  /// @brief Keys of a batch, lane by lane the same as the scalar key().
+  static xsimd::batch<uint32_t> key(xsimd::batch<float> value)
+  {
+    const auto bits = xsimd::bitwise_cast<int32_t>(value);
+    const auto mask = xsimd::bitwise_or(bits >> 31, xsimd::batch<int32_t>(0x80000000U));
+    return xsimd::bitwise_cast<uint32_t>(bits ^ mask);
+  }
+  /// @brief Inverse of key(): the float a key was made from.
+  static float value(uint32_t key)
+  {
+    return std::bit_cast<float>(key ^ ((key & 0x80000000U) ? 0x80000000U : 0xFFFFFFFFU));
+  }
+};
 
 /**
  * @brief Key of `|value|`: the bits of a non-negative float already sort like its value.
- * @param value Any float.
- * @return Bits of `|value|`.
  */
-inline uint32_t abs_key(float value)
+struct AbsKey
 {
-  return std::bit_cast<uint32_t>(value) & 0x7FFFFFFFU;
-}
-
-/**
- * @brief Inverse of abs_key().
- * @param key Key produced by abs_key().
- * @return `|value|`.
- */
-inline float from_abs_key(uint32_t key)
-{
-  return std::bit_cast<float>(key);
-}
+  /// @brief Key of `|value|`.
+  static uint32_t key(float value)
+  {
+    return std::bit_cast<uint32_t>(value) & 0x7FFFFFFFU;
+  }
+  /// @brief Keys of a batch, lane by lane the same as the scalar key().
+  static xsimd::batch<uint32_t> key(xsimd::batch<float> value)
+  {
+    return xsimd::bitwise_and(xsimd::bitwise_cast<uint32_t>(value), xsimd::batch<uint32_t>(0x7FFFFFFFU));
+  }
+  /// @brief Inverse of key(): `|value|`.
+  static float value(uint32_t key)
+  {
+    return std::bit_cast<float>(key);
+  }
+};
 
 /**
  * @brief Exact median of the keys of `values`, reading `values` twice and never writing to it.
  *
  * Pass 1 histograms the top 16 key bits to find the bin holding rank k = n/2. Pass 2 histograms the low 16 bits of
  * the keys in that bin, which pins rank k exactly. For even n the median averages ranks k-1 and k.
+ * Both passes compute keys on xsimd batches; histogram increments stay scalar, and a scalar loop covers the values past
+ * the last whole batch.
+ * @tparam Key SignedKey for the median of `values`, AbsKey for the median of `|values|`.
  * @param values Input, left unmodified.
- * @param to_key Order-preserving float -> uint32 map.
- * @param from_key Inverse of `to_key`.
  * @return Median as numpy computes it, NaN for empty input.
  */
-template <typename ToKey, typename FromKey> float select(std::span<const float> values, ToKey to_key, FromKey from_key)
+template <typename Key> float select(std::span<const float> values)
 {
   const size_t n = values.size();
   if (n == 0)
@@ -98,9 +104,22 @@ template <typename ToKey, typename FromKey> float select(std::span<const float> 
 
   // Pass 1: the bin holding rank k, and how many keys sort below it.
   std::fill(histogram.begin(), histogram.end(), 0U);
-  for (const float value : values)
+
+  size_t i;
+  for (i = 0; i + xsimd::batch<float>::size <= n; i += xsimd::batch<float>::size)
   {
-    histogram[to_key(value) >> 16]++;
+    const auto batch = xsimd::load_unaligned(&values[i]);
+    const auto keys = Key::key(batch);
+    alignas(64) uint32_t highs[xsimd::batch<float>::size];
+    (keys >> 16).store_aligned(highs);
+    for (size_t j = 0; j < xsimd::batch<float>::size; ++j)
+    {
+      histogram[highs[j]]++;
+    }
+  }
+  for (; i < n; ++i)
+  {
+    histogram[Key::key(values[i]) >> 16]++;
   }
 
   uint32_t bin = 0;
@@ -113,10 +132,39 @@ template <typename ToKey, typename FromKey> float select(std::span<const float> 
 
   // Pass 2: low bits of the keys in that bin, plus the largest key below it (rank k-1 when k == below).
   std::fill(histogram.begin(), histogram.end(), 0U);
-  uint32_t lower_max_key = 0;
-  for (const float value : values)
+
+  xsimd::batch<uint32_t> lower_max_vec(0);
+  const xsimd::batch<uint32_t> bin_vec(bin);
+  const xsimd::batch<uint32_t> zero(0);
+  for (i = 0; i + xsimd::batch<float>::size <= n; i += xsimd::batch<float>::size)
   {
-    const uint32_t key = to_key(value);
+    const auto batch = xsimd::load_unaligned(&values[i]);
+    const auto keys = Key::key(batch);
+
+    const xsimd::batch<uint32_t> high = keys >> 16;
+
+    lower_max_vec = xsimd::max(lower_max_vec, xsimd::select(high < bin_vec, keys, zero));
+
+    if ((high == bin_vec).mask())
+    {
+      alignas(64) uint32_t keys_arr[xsimd::batch<float>::size];
+      (keys).store_aligned(keys_arr);
+      alignas(64) uint32_t highs[xsimd::batch<float>::size];
+      (high).store_aligned(highs);
+      for (size_t j = 0; j < xsimd::batch<float>::size; ++j)
+      {
+        if (highs[j] == bin)
+        {
+          histogram[keys_arr[j] & 0xFFFFU]++;
+        }
+      }
+    }
+  }
+
+  auto lower_max_key = xsimd::reduce_max(lower_max_vec);
+  for (; i < n; ++i)
+  {
+    const uint32_t key = Key::key(values[i]);
     const uint32_t high = key >> 16;
     if (high == bin)
     {
@@ -148,12 +196,12 @@ template <typename ToKey, typename FromKey> float select(std::span<const float> 
     }
   }
 
-  const float hi = from_key((bin << 16) | k_low);
+  const float hi = Key::value((bin << 16) | k_low);
   if (n % 2 == 1)
   {
     return hi;
   }
-  const float lo = need_k_minus_1 ? from_key((bin << 16) | k_minus_1_low) : from_key(lower_max_key);
+  const float lo = need_k_minus_1 ? Key::value((bin << 16) | k_minus_1_low) : Key::value(lower_max_key);
   return (lo + hi) / 2.F;
 }
 } // namespace radix
@@ -166,7 +214,7 @@ template <typename ToKey, typename FromKey> float select(std::span<const float> 
 inline float radix_median_of(std::span<const float> values)
 {
   ZoneScoped;
-  return radix::select(values, radix::signed_key, radix::from_signed_key);
+  return radix::select<radix::SignedKey>(values);
 }
 
 /**
@@ -177,7 +225,7 @@ inline float radix_median_of(std::span<const float> values)
 inline float radix_median_of_abs(std::span<const float> values)
 {
   ZoneScoped;
-  return radix::select(values, radix::abs_key, radix::from_abs_key);
+  return radix::select<radix::AbsKey>(values);
 }
 } // namespace breifast::detail::median
 
