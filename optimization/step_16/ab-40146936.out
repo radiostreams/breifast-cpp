@@ -1,0 +1,85 @@
+jbm003
+before T18-bound per-item cost (single-threaded, n=36): min=1.2569s p25=1.2641s median=1.2655s p75=1.2710s max=1.2955s mean=1.2667s
+before T18-bound   iteration 0: 240 items, 0 detections, compute time = 33.362s
+before T18-bound   iteration 1: 240 items, 0 detections, compute time = 33.190s
+before T18-bound   iteration 2: 240 items, 0 detections, compute time = 32.763s
+before T18-bound   iteration 3: 240 items, 0 detections, compute time = 33.635s
+before T18-bound   iteration 4: 240 items, 0 detections, compute time = 33.725s
+before T18-bound run_batch_core: 5 iterations, total = 166.675s, mean = 33.335s
+before T72-single per-item cost (single-threaded, n=36): min=1.2636s p25=1.2701s median=1.2719s p75=1.2768s max=1.3002s mean=1.2730s
+before T72-single   iteration 0: 240 items, 0 detections, compute time = 15.671s
+before T72-single   iteration 1: 240 items, 0 detections, compute time = 12.068s
+before T72-single   iteration 2: 240 items, 0 detections, compute time = 15.856s
+before T72-single   iteration 3: 240 items, 0 detections, compute time = 12.124s
+before T72-single   iteration 4: 240 items, 0 detections, compute time = 10.834s
+before T72-single run_batch_core: 5 iterations, total = 66.553s, mean = 13.311s
+after T18-bound per-item cost (single-threaded, n=36): min=1.2664s p25=1.2733s median=1.2749s p75=1.2804s max=1.3071s mean=1.2765s
+after T18-bound   iteration 0: 240 items, 0 detections, compute time = 31.693s
+after T18-bound   iteration 1: 240 items, 0 detections, compute time = 31.458s
+after T18-bound   iteration 2: 240 items, 0 detections, compute time = 31.357s
+after T18-bound   iteration 3: 240 items, 0 detections, compute time = 31.811s
+after T18-bound   iteration 4: 240 items, 0 detections, compute time = 32.114s
+after T18-bound run_batch_core: 5 iterations, total = 158.434s, mean = 31.687s
+after T72-single per-item cost (single-threaded, n=36): min=1.2666s p25=1.2731s median=1.2755s p75=1.2800s max=1.3089s mean=1.2764s
+after T72-single   iteration 0: 240 items, 0 detections, compute time = 12.897s
+after T72-single   iteration 1: 240 items, 0 detections, compute time = 11.187s
+after T72-single   iteration 2: 240 items, 0 detections, compute time = 11.614s
+after T72-single   iteration 3: 240 items, 0 detections, compute time = 11.725s
+after T72-single   iteration 4: 240 items, 0 detections, compute time = 11.662s
+after T72-single run_batch_core: 5 iterations, total = 59.085s, mean = 11.817s
+after T18-bound per-item cost (single-threaded, n=36): min=1.2731s p25=1.2808s median=1.2829s p75=1.2872s max=1.3140s mean=1.2838s
+after T18-bound   iteration 0: 240 items, 0 detections, compute time = 31.812s
+after T18-bound   iteration 1: 240 items, 0 detections, compute time = 32.850s
+after T18-bound   iteration 2: 240 items, 0 detections, compute time = 32.088s
+after T18-bound   iteration 3: 240 items, 0 detections, compute time = 31.915s
+after T18-bound   iteration 4: 240 items, 0 detections, compute time = 31.873s
+after T18-bound run_batch_core: 5 iterations, total = 160.538s, mean = 32.108s
+after T72-single per-item cost (single-threaded, n=36): min=1.2670s p25=1.2739s median=1.2760s p75=1.2812s max=1.3061s mean=1.2770s
+after T72-single   iteration 0: 240 items, 0 detections, compute time = 12.518s
+after T72-single   iteration 1: 240 items, 0 detections, compute time = 11.976s
+after T72-single   iteration 2: 240 items, 0 detections, compute time = 12.152s
+after T72-single   iteration 3: 240 items, 0 detections, compute time = 10.232s
+after T72-single   iteration 4: 240 items, 0 detections, compute time = 11.510s
+after T72-single run_batch_core: 5 iterations, total = 58.387s, mean = 11.677s
+before T18-bound per-item cost (single-threaded, n=36): min=1.2573s p25=1.2650s median=1.2669s p75=1.2721s max=1.2958s mean=1.2679s
+before T18-bound   iteration 0: 240 items, 0 detections, compute time = 35.200s
+before T18-bound   iteration 1: 240 items, 0 detections, compute time = 33.120s
+before T18-bound   iteration 2: 240 items, 0 detections, compute time = 35.751s
+before T18-bound   iteration 3: 240 items, 0 detections, compute time = 33.776s
+before T18-bound   iteration 4: 240 items, 0 detections, compute time = 33.823s
+before T18-bound run_batch_core: 5 iterations, total = 171.670s, mean = 34.334s
+before T72-single per-item cost (single-threaded, n=36): min=1.2626s p25=1.2693s median=1.2714s p75=1.2765s max=1.2997s mean=1.2724s
+before T72-single   iteration 0: 240 items, 0 detections, compute time = 15.151s
+before T72-single   iteration 1: 240 items, 0 detections, compute time = 10.972s
+before T72-single   iteration 2: 240 items, 0 detections, compute time = 11.915s
+before T72-single   iteration 3: 240 items, 0 detections, compute time = 10.669s
+before T72-single   iteration 4: 240 items, 0 detections, compute time = 11.863s
+before T72-single run_batch_core: 5 iterations, total = 60.570s, mean = 12.114s
+before T18-bound per-item cost (single-threaded, n=36): min=1.2575s p25=1.2651s median=1.2673s p75=1.2727s max=1.2973s mean=1.2683s
+before T18-bound   iteration 0: 240 items, 0 detections, compute time = 34.478s
+before T18-bound   iteration 1: 240 items, 0 detections, compute time = 34.083s
+before T18-bound   iteration 2: 240 items, 0 detections, compute time = 33.699s
+before T18-bound   iteration 3: 240 items, 0 detections, compute time = 33.722s
+before T18-bound   iteration 4: 240 items, 0 detections, compute time = 33.635s
+before T18-bound run_batch_core: 5 iterations, total = 169.618s, mean = 33.924s
+before T72-single per-item cost (single-threaded, n=36): min=1.2640s p25=1.2711s median=1.2731s p75=1.2778s max=1.3022s mean=1.2741s
+before T72-single   iteration 0: 240 items, 0 detections, compute time = 14.318s
+before T72-single   iteration 1: 240 items, 0 detections, compute time = 12.460s
+before T72-single   iteration 2: 240 items, 0 detections, compute time = 11.172s
+before T72-single   iteration 3: 240 items, 0 detections, compute time = 12.348s
+before T72-single   iteration 4: 240 items, 0 detections, compute time = 10.718s
+before T72-single run_batch_core: 5 iterations, total = 61.016s, mean = 12.203s
+after T18-bound per-item cost (single-threaded, n=36): min=1.2636s p25=1.2707s median=1.2720s p75=1.2779s max=1.3028s mean=1.2738s
+after T18-bound   iteration 0: 240 items, 0 detections, compute time = 31.259s
+after T18-bound   iteration 1: 240 items, 0 detections, compute time = 30.970s
+after T18-bound   iteration 2: 240 items, 0 detections, compute time = 31.512s
+after T18-bound   iteration 3: 240 items, 0 detections, compute time = 31.379s
+after T18-bound   iteration 4: 240 items, 0 detections, compute time = 31.348s
+after T18-bound run_batch_core: 5 iterations, total = 156.468s, mean = 31.294s
+after T72-single per-item cost (single-threaded, n=36): min=1.2638s p25=1.2707s median=1.2727s p75=1.2777s max=1.3016s mean=1.2738s
+after T72-single   iteration 0: 240 items, 0 detections, compute time = 13.396s
+after T72-single   iteration 1: 240 items, 0 detections, compute time = 11.789s
+after T72-single   iteration 2: 240 items, 0 detections, compute time = 12.984s
+after T72-single   iteration 3: 240 items, 0 detections, compute time = 10.499s
+after T72-single   iteration 4: 240 items, 0 detections, compute time = 11.796s
+after T72-single run_batch_core: 5 iterations, total = 60.464s, mean = 12.093s

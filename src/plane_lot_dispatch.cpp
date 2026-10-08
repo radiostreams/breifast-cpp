@@ -1,7 +1,11 @@
 #include <algorithm>
-#include <ittnotify.h>
 #include <span>
+#include <type_traits>
+
+#include <ittnotify.h>
+
 #include <tracy/Tracy.hpp>
+
 #include <xsimd/xsimd.hpp>
 #include <xtensor/core/xnoalias.hpp>
 #include <xtensor/core/xtensor_forward.hpp>
@@ -433,40 +437,82 @@ inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, cons
     ZoneScopedN("band_accumulate");
     plane.resize({n_y, n_x});
 
-    auto i_channel = band.start;
-
-    if (i_channel < band.stop)
+    const size_t n_pixels = n_y * n_x;
+    const auto &cube = item.stokes_cube;
+    if (cube.shape(1) != n_y || cube.shape(2) != n_x)
     {
-      for (size_t i_y = 0; i_y < n_y; ++i_y)
-      {
-        for (size_t i_x = 0; i_x < n_x; ++i_x)
-        {
-          plane(i_y, i_x) = item.stokes_cube(i_channel, i_y, i_x) * weights(i_channel) * inv_weights_sum;
-          if (do_subtract_mean)
-          {
-            plane(i_y, i_x) -= (*group.mean_image)(i_channel, i_y, i_x) * inv_band_size;
-          }
-        }
-      }
+      throw std::runtime_error("stokes_cube shape mismatch with plane");
     }
 
-    for (++i_channel; i_channel < band.stop; ++i_channel)
+    const float *mean_ptr = nullptr;
+    if (do_subtract_mean)
     {
-      for (size_t i_y = 0; i_y < n_y; ++i_y)
+      const auto &mean_image = *group.mean_image;
+      if (mean_image.shape(1) != n_y || mean_image.shape(2) != n_x)
       {
-        for (size_t i_x = 0; i_x < n_x; ++i_x)
+        throw std::runtime_error("mean_image shape mismatch with plane");
+      }
+      mean_ptr = mean_image.data();
+    }
+
+    float *const plane_ptr = plane.data();
+    const float *const cube_ptr = cube.data();
+    const float *const weights_ptr = weights.data();
+
+    const auto accumulate = [&](size_t i_channel, auto first, auto subtract)
+    {
+      const float *const cube_c = cube_ptr + i_channel * n_pixels;
+      const float *const mean_c = subtract ? mean_ptr + i_channel * n_pixels : nullptr;
+      const float weight = weights_ptr[i_channel];
+      for (size_t i = 0; i < n_pixels; ++i)
+      {
+        const float value = cube_c[i] * weight * inv_weights_sum;
+        if constexpr (first)
         {
-          plane(i_y, i_x) += item.stokes_cube(i_channel, i_y, i_x) * weights(i_channel) * inv_weights_sum;
-          if (do_subtract_mean)
-          {
-            plane(i_y, i_x) -= (*group.mean_image)(i_channel, i_y, i_x) * inv_band_size;
-          }
+          plane_ptr[i] = value;
+        }
+        else
+        {
+          plane_ptr[i] += value;
+        }
+        if constexpr (subtract)
+        {
+          plane_ptr[i] -= mean_c[i] * inv_band_size;
         }
       }
+    };
+
+    const auto accumulate_channel = [&](size_t i_channel, auto first)
+    {
+      if (do_subtract_mean)
+      {
+        accumulate(i_channel, first, std::true_type{});
+      }
+      else
+      {
+        accumulate(i_channel, first, std::false_type{});
+      }
+    };
+
+    if (band.start < band.stop)
+    {
+      accumulate_channel(band.start, std::true_type{});
+    }
+    for (auto i_channel = band.start + 1; i_channel < band.stop; ++i_channel)
+    {
+      accumulate_channel(i_channel, std::false_type{});
     }
   }
 
-  const float noise_global_mad = detail::median::radix_median_of_abs({plane.data(), plane.size()}) * 1.4826F;
+  std::optional<float> global_mad_cache;
+  const auto noise_global_mad = [&]()
+  {
+    if (!global_mad_cache)
+    {
+      global_mad_cache = detail::median::radix_median_of_abs({plane.data(), plane.size()}) * 1.4826F;
+    }
+    return *global_mad_cache;
+  };
 
   const auto combine = [&](const auto &base_noise_at)
   {
@@ -505,7 +551,7 @@ inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, cons
   }
   else
   {
-    median_noise = combine([&](size_t) { return noise_global_mad; });
+    median_noise = combine([&](size_t) { return noise_global_mad(); });
   }
 
   result.median_noises.push_back(median_noise);
@@ -641,12 +687,12 @@ inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, cons
     const float noisemap0_at_peak =
         config.use_rms_noise_estimator
             ? std::max(scratch.windows_sums(island.coordinates.first, island.coordinates.second), rms_floor)
-            : noise_global_mad;
+            : noise_global_mad();
 
     detection_arrays.add(island.coordinates.first, island.coordinates.second, island.island_size, item.stokes_label,
                          band.label, flux, island.local_noise, island.local_noise / median_noise, island.value,
                          rms != 0.F ? flux / rms : 0.F, signal_to_noise_extended_box, lmad != 0.F ? flux / lmad : 0.F,
-                         flux / noise_global_mad,
+                         flux / noise_global_mad(),
                          group.selfnoise_raw(island.coordinates.first, island.coordinates.second),
                          noise_map(island.coordinates.first, island.coordinates.second) / noisemap0_at_peak,
                          beam_chi2_value, boost_value);

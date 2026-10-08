@@ -1,0 +1,50 @@
+jst274
+before T18-bound per-item cost (single-threaded, n=36): min=1.3132s p25=1.3200s median=1.3218s p75=1.3276s max=1.3538s mean=1.3232s
+before T72-single per-item cost (single-threaded, n=36): min=1.3118s p25=1.3185s median=1.3207s p75=1.3245s max=1.3517s mean=1.3215s
+before T72-single   iteration 0: 240 items, 0 detections, compute time = 12.835s
+before T72-single   iteration 1: 240 items, 0 detections, compute time = 13.336s
+before T72-single   iteration 2: 240 items, 0 detections, compute time = 10.816s
+before T72-single   iteration 3: 240 items, 0 detections, compute time = 11.782s
+before T72-single   iteration 4: 240 items, 0 detections, compute time = 11.352s
+before T72-single run_batch_core: 5 iterations, total = 60.121s, mean = 12.024s
+after T18-bound per-item cost (single-threaded, n=36): min=1.2668s p25=1.2745s median=1.2785s p75=1.2816s max=1.3103s mean=1.2789s
+after T72-single per-item cost (single-threaded, n=36): min=1.2579s p25=1.2649s median=1.2671s p75=1.2720s max=1.2954s mean=1.2678s
+after T72-single   iteration 0: 240 items, 0 detections, compute time = 12.311s
+after T72-single   iteration 1: 240 items, 0 detections, compute time = 10.958s
+after T72-single   iteration 2: 240 items, 0 detections, compute time = 12.123s
+after T72-single   iteration 3: 240 items, 0 detections, compute time = 10.916s
+after T72-single   iteration 4: 240 items, 0 detections, compute time = 12.167s
+after T72-single run_batch_core: 5 iterations, total = 58.475s, mean = 11.695s
+after T18-bound per-item cost (single-threaded, n=36): min=1.2645s p25=1.2748s median=1.2814s p75=1.2846s max=1.3143s mean=1.2800s
+after T72-single per-item cost (single-threaded, n=36): min=1.2569s p25=1.2640s median=1.2659s p75=1.2711s max=1.2948s mean=1.2670s
+after T72-single   iteration 0: 240 items, 0 detections, compute time = 13.957s
+after T72-single   iteration 1: 240 items, 0 detections, compute time = 12.055s
+after T72-single   iteration 2: 240 items, 0 detections, compute time = 13.135s
+after T72-single   iteration 3: 240 items, 0 detections, compute time = 11.132s
+after T72-single   iteration 4: 240 items, 0 detections, compute time = 11.607s
+after T72-single run_batch_core: 5 iterations, total = 61.886s, mean = 12.377s
+before T18-bound per-item cost (single-threaded, n=36): min=1.3126s p25=1.3202s median=1.3229s p75=1.3259s max=1.3540s mean=1.3235s
+before T72-single per-item cost (single-threaded, n=36): min=1.3089s p25=1.3165s median=1.3191s p75=1.3231s max=1.3497s mean=1.3197s
+before T72-single   iteration 0: 240 items, 0 detections, compute time = 14.503s
+before T72-single   iteration 1: 240 items, 0 detections, compute time = 14.223s
+before T72-single   iteration 2: 240 items, 0 detections, compute time = 10.670s
+before T72-single   iteration 3: 240 items, 0 detections, compute time = 11.578s
+before T72-single   iteration 4: 240 items, 0 detections, compute time = 10.950s
+before T72-single run_batch_core: 5 iterations, total = 61.924s, mean = 12.385s
+before T18-bound per-item cost (single-threaded, n=36): min=1.3102s p25=1.3170s median=1.3191s p75=1.3228s max=1.3490s mean=1.3199s
+before T72-single per-item cost (single-threaded, n=36): min=1.3087s p25=1.3165s median=1.3182s p75=1.3230s max=1.3504s mean=1.3193s
+before T72-single   iteration 0: 240 items, 0 detections, compute time = 12.960s
+before T72-single   iteration 1: 240 items, 0 detections, compute time = 13.932s
+before T72-single   iteration 2: 240 items, 0 detections, compute time = 12.099s
+before T72-single   iteration 3: 240 items, 0 detections, compute time = 13.128s
+before T72-single   iteration 4: 240 items, 0 detections, compute time = 10.863s
+before T72-single run_batch_core: 5 iterations, total = 62.981s, mean = 12.596s
+after T18-bound per-item cost (single-threaded, n=36): min=1.2641s p25=1.2715s median=1.2732s p75=1.2785s max=1.3031s mean=1.2745s
+after T72-single per-item cost (single-threaded, n=36): min=1.2580s p25=1.2650s median=1.2668s p75=1.2716s max=1.2953s mean=1.2677s
+after T72-single   iteration 0: 240 items, 0 detections, compute time = 12.675s
+after T72-single   iteration 1: 240 items, 0 detections, compute time = 12.509s
+after T72-single   iteration 2: 240 items, 0 detections, compute time = 11.979s
+after T72-single   iteration 3: 240 items, 0 detections, compute time = 11.394s
+after T72-single   iteration 4: 240 items, 0 detections, compute time = 10.989s
+after T72-single run_batch_core: 5 iterations, total = 59.546s, mean = 11.909s
+slurmstepd: error: Detected 6 oom_kill events in StepId=40146937.batch. Some of the step tasks have been OOM Killed.

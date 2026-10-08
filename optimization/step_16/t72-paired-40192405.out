@@ -1,0 +1,65 @@
+jbm027
+round1 flat per-item cost (single-threaded, n=36): min=1.2669s p25=1.2741s median=1.2754s p75=1.2801s max=1.3056s mean=1.2766s
+round1 flat   iteration 0: 240 items, 0 detections, compute time = 12.788s
+round1 flat   iteration 1: 240 items, 0 detections, compute time = 11.631s
+round1 flat   iteration 2: 240 items, 0 detections, compute time = 14.867s
+round1 flat   iteration 3: 240 items, 0 detections, compute time = 10.973s
+round1 flat   iteration 4: 240 items, 0 detections, compute time = 12.261s
+round1 flat   iteration 5: 240 items, 0 detections, compute time = 10.923s
+round1 flat run_batch_core: 6 iterations, total = 73.444s, mean = 12.241s
+round1 tile per-item cost (single-threaded, n=36): min=1.1861s p25=1.1932s median=1.1956s p75=1.2002s max=1.2238s mean=1.1963s
+round1 tile   iteration 0: 240 items, 0 detections, compute time = 11.856s
+round1 tile   iteration 1: 240 items, 0 detections, compute time = 10.827s
+round1 tile   iteration 2: 240 items, 0 detections, compute time = 11.890s
+round1 tile   iteration 3: 240 items, 0 detections, compute time = 10.145s
+round1 tile   iteration 4: 240 items, 0 detections, compute time = 11.634s
+round1 tile   iteration 5: 240 items, 0 detections, compute time = 10.652s
+round1 tile run_batch_core: 6 iterations, total = 67.004s, mean = 11.167s
+round2 tile per-item cost (single-threaded, n=36): min=1.1995s p25=1.2063s median=1.2084s p75=1.2135s max=1.2395s mean=1.2093s
+round2 tile   iteration 0: 240 items, 0 detections, compute time = 13.706s
+round2 tile   iteration 1: 240 items, 0 detections, compute time = 14.733s
+round2 tile   iteration 2: 240 items, 0 detections, compute time = 13.071s
+round2 tile   iteration 3: 240 items, 0 detections, compute time = 10.336s
+round2 tile   iteration 4: 240 items, 0 detections, compute time = 11.666s
+round2 tile   iteration 5: 240 items, 0 detections, compute time = 10.059s
+round2 tile run_batch_core: 6 iterations, total = 73.572s, mean = 12.262s
+round2 flat per-item cost (single-threaded, n=36): min=1.2695s p25=1.2763s median=1.2789s p75=1.2837s max=1.3078s mean=1.2796s
+round2 flat   iteration 0: 240 items, 0 detections, compute time = 12.079s
+round2 flat   iteration 1: 240 items, 0 detections, compute time = 13.618s
+round2 flat   iteration 2: 240 items, 0 detections, compute time = 10.857s
+round2 flat   iteration 3: 240 items, 0 detections, compute time = 12.402s
+round2 flat   iteration 4: 240 items, 0 detections, compute time = 10.591s
+round2 flat   iteration 5: 240 items, 0 detections, compute time = 11.785s
+round2 flat run_batch_core: 6 iterations, total = 71.332s, mean = 11.889s
+round3 flat per-item cost (single-threaded, n=36): min=1.2530s p25=1.2602s median=1.2622s p75=1.2677s max=1.2910s mean=1.2632s
+round3 flat   iteration 0: 240 items, 0 detections, compute time = 11.703s
+round3 flat   iteration 1: 240 items, 0 detections, compute time = 11.954s
+round3 flat   iteration 2: 240 items, 0 detections, compute time = 14.611s
+round3 flat   iteration 3: 240 items, 0 detections, compute time = 11.308s
+round3 flat   iteration 4: 240 items, 0 detections, compute time = 11.179s
+round3 flat   iteration 5: 240 items, 0 detections, compute time = 10.173s
+round3 flat run_batch_core: 6 iterations, total = 70.928s, mean = 11.821s
+round3 tile per-item cost (single-threaded, n=36): min=1.1974s p25=1.2042s median=1.2062s p75=1.2115s max=1.2368s mean=1.2073s
+round3 tile   iteration 0: 240 items, 0 detections, compute time = 13.598s
+round3 tile   iteration 1: 240 items, 0 detections, compute time = 10.995s
+round3 tile   iteration 2: 240 items, 0 detections, compute time = 12.098s
+round3 tile   iteration 3: 240 items, 0 detections, compute time = 10.231s
+round3 tile   iteration 4: 240 items, 0 detections, compute time = 10.170s
+round3 tile   iteration 5: 240 items, 0 detections, compute time = 10.512s
+round3 tile run_batch_core: 6 iterations, total = 67.604s, mean = 11.267s
+round4 tile per-item cost (single-threaded, n=36): min=1.1839s p25=1.1907s median=1.1924s p75=1.1980s max=1.2215s mean=1.1937s
+round4 tile   iteration 0: 240 items, 0 detections, compute time = 12.373s
+round4 tile   iteration 1: 240 items, 0 detections, compute time = 12.410s
+round4 tile   iteration 2: 240 items, 0 detections, compute time = 11.895s
+round4 tile   iteration 3: 240 items, 0 detections, compute time = 10.886s
+round4 tile   iteration 4: 240 items, 0 detections, compute time = 11.047s
+round4 tile   iteration 5: 240 items, 0 detections, compute time = 10.917s
+round4 tile run_batch_core: 6 iterations, total = 69.528s, mean = 11.588s
+round4 flat per-item cost (single-threaded, n=36): min=1.2530s p25=1.2603s median=1.2619s p75=1.2682s max=1.2912s mean=1.2635s
+round4 flat   iteration 0: 240 items, 0 detections, compute time = 12.290s
+round4 flat   iteration 1: 240 items, 0 detections, compute time = 11.986s
+round4 flat   iteration 2: 240 items, 0 detections, compute time = 14.995s
+round4 flat   iteration 3: 240 items, 0 detections, compute time = 11.111s
+round4 flat   iteration 4: 240 items, 0 detections, compute time = 11.084s
+round4 flat   iteration 5: 240 items, 0 detections, compute time = 12.063s
+round4 flat run_batch_core: 6 iterations, total = 73.528s, mean = 12.255s
