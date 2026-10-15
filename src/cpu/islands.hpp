@@ -6,7 +6,9 @@
  * a unique positive integer ID and `false` pixels are labeled `0`.
  */
 #pragma once
+#include <cstddef>
 #include <limits>
+#include <span>
 #include <xtensor/containers/xtensor.hpp>
 
 namespace breifast::islands
@@ -58,4 +60,17 @@ void label_islands(IslandLabels &out, const xt::xtensor<bool, 2> &masks, const x
  */
 IslandLabels label_islands(const xt::xtensor<bool, 2> &masks, const xt::xtensor<float, 2> &image,
                            const xt::xtensor<float, 2> &local_noise);
+
+/**
+ * @brief Flux boost of one island: the ratio `flux / baseline_flux` with the largest absolute value among the island's
+ *        pixels, computed with the xtensor expressions the detection loop used.
+ *
+ * The first pixel in row-major order wins a tie. Scans the whole label image.
+ * @param labels `[n_y, n_x]` island labels from label_islands(), row major.
+ * @param baseline_flux `[n_y, n_x]` baseline flux, row major.
+ * @param label Island to evaluate, `1..count`. A label without any pixel throws.
+ * @param flux Flux of the island, the numerator of every ratio.
+ */
+float island_boost(std::span<const size_t> labels, std::span<const float> baseline_flux, size_t n_y, size_t n_x,
+                   size_t label, float flux);
 } // namespace breifast::islands

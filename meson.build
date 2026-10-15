@@ -1,10 +1,19 @@
 project('breifast-helpers-cpp', 'cpp',
   version : '0.1.0',
   default_options : ['cpp_std=c++23', 'buildtype=release', 'debug=true', 'b_ndebug=true',
-                      'cpp_args=-B/usr/bin', 'cpp_link_args=-B/usr/bin'])
+                      'cpp_args=-B/usr/bin', 'cpp_link_args=-B/usr/bin',
+                      'cuda_std=c++20', 'cuda_ccbindir=/usr/bin'])
 
 # Step 14: -O2 without -march ran scalar SSE2 on an AVX-512 part; -O3 -march is 19% faster on one thread.
 add_project_arguments('-march=' + get_option('march'), '-fno-math-errno', language : 'cpp')
+
+# GPU targets (src/gpu), off by default so CPU-only builds need no nvcc. nvcc 12.4 takes host gcc 13 at most and
+# C++20 at most, so cuda_ccbindir points it at the system gcc. The nix shell exports NVCC_APPEND_FLAGS with
+# -Xcompiler -B/usr/bin (as cpp_args above) so nvcc links with the system ld and glibc.
+have_gpu = add_languages('cuda', required : get_option('gpu'), native : false)
+if have_gpu
+  add_project_arguments('-arch=' + get_option('gpu_arch'), '-lineinfo', language : 'cuda')
+endif
 
 py = import('python').find_installation()
 
@@ -126,9 +135,23 @@ else
   tracy_dep = tracy_headers_dep
 endif
 
+# The CPU kernels (src/cpu) and the dispatch. Compiled by every target that uses them, so that each target's
+# own Tracy and compiler arguments apply.
+cpu_sources = [
+  'src/plane_lot_dispatch.cpp',
+  'src/cpu/channel_reductions.cpp',
+  'src/cpu/island_stamps.cpp',
+  'src/cpu/islands.cpp',
+  'src/cpu/order_statistics.cpp',
+  'src/cpu/pointwise.cpp',
+  'src/cpu/scalar_reductions.cpp',
+  'src/cpu/snr_filters.cpp',
+  'src/cpu/windows.cpp',
+]
+
 ext_module = py.extension_module(
   'breifast_helpers',
-  ['src/plane_lot_bindings.cpp', 'src/plane_lot_dispatch.cpp', 'src/islands.cpp', tbb_build],
+  ['src/plane_lot_bindings.cpp'] + cpu_sources + [tbb_build],
   dependencies : [py.dependency(), pybind11_dep, xtl_dep, xtensor_dep, xsimd_dep, xtensor_python_dep, numpy_dep,
                   tbb_dep, itt_dep, tracy_headers_dep],
   link_args : ['-static-libstdc++', '-static-libgcc'],
@@ -145,7 +168,7 @@ test('breifast_helpers',
 
 bench = executable(
   'bench',
-  ['src/bench.cpp', 'src/plane_lot_dispatch.cpp', 'src/islands.cpp', tbb_build],
+  ['src/bench.cpp'] + cpu_sources + [tbb_build],
   include_directories : include_directories('src'),
   dependencies : [xtl_dep, xtensor_dep, xsimd_dep, tbb_dep, itt_dep, json_dep, tracy_dep],
   cpp_args : get_option('box_version') ? ['-DBOX_VERSION'] : [],
@@ -153,17 +176,26 @@ bench = executable(
   build_by_default : false,
 )
 
-test_breifast_core_sources = [
-  'src/plane_lot_dispatch.cpp',
-  'src/islands.cpp',
+test_breifast_core_sources = cpu_sources + [
   'tests/cpp/group1_pure_functions/test_build_gaussian_beam_kernel.cpp',
   'tests/cpp/group1_pure_functions/test_compute_rms_noise_map.cpp',
+  'tests/cpp/group1_pure_functions/test_rms_noise_map.cpp',
+  'tests/cpp/group1_pure_functions/test_combine_noise_map.cpp',
   'tests/cpp/group1_pure_functions/test_compute_rms_noise_map_precision.cpp',
   'tests/cpp/group1_pure_functions/test_max_to_std_ratio.cpp',
   'tests/cpp/group1_pure_functions/test_compute_spectral_variance_stats.cpp',
+  'tests/cpp/group1_pure_functions/test_spectral_variance_moments.cpp',
+  'tests/cpp/group1_pure_functions/test_stamp_extract.cpp',
+  'tests/cpp/group1_pure_functions/test_stamp_adjacent_noise.cpp',
+  'tests/cpp/group1_pure_functions/test_stamp_donut_stats.cpp',
+  'tests/cpp/group1_pure_functions/test_stamp_beam_chi2.cpp',
   'tests/cpp/group1_pure_functions/test_label_islands.cpp',
+  'tests/cpp/group1_pure_functions/test_island_boost.cpp',
   'tests/cpp/group1_pure_functions/test_median.cpp',
+  'tests/cpp/group1_pure_functions/test_or_accept_masks.cpp',
+  'tests/cpp/group1_pure_functions/test_weighted_band_image.cpp',
   'tests/cpp/group2_snr_filters/test_compute_snr_and_apply_filters.cpp',
+  'tests/cpp/group2_snr_filters/test_snr_and_filters.cpp',
   'tests/cpp/group3_integration/test_process_band.cpp',
   'tests/cpp/group3_integration/test_process_plane.cpp',
   'tests/cpp/group3_integration/test_process_band_random.cpp',
@@ -181,6 +213,10 @@ test_breifast_core = executable(
   link_args : ['-static-libstdc++', '-static-libgcc'],
 )
 test('breifast_core', test_breifast_core)
+
+if have_gpu
+  subdir('src/gpu')
+endif
 
 uv = find_program('uv', required : true)
 devshell_python = find_program('python3', required : true)

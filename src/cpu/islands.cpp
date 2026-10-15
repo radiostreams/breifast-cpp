@@ -8,9 +8,15 @@
  * - Pass 2 resolves every pixel's provisional label to its canonical union-find root and compacts the (possibly sparse)
  *   root values into a dense `1..count` range.
  */
+#include <array>
 #include <cassert>
 #include <numeric>
+#include <stdexcept>
 #include <tracy/Tracy.hpp>
+#include <xtensor/containers/xadapt.hpp>
+#include <xtensor/core/xmath.hpp>
+#include <xtensor/misc/xsort.hpp>
+#include <xtensor/views/xindex_view.hpp>
 
 #include "islands.hpp"
 
@@ -142,5 +148,31 @@ IslandLabels label_islands(const xt::xtensor<bool, 2> &masks, const xt::xtensor<
   IslandLabels result;
   label_islands(result, masks, image, local_noise);
   return result;
+}
+
+float island_boost(std::span<const size_t> labels, std::span<const float> baseline_flux, size_t n_y, size_t n_x,
+                   size_t label, float flux)
+{
+  if (labels.size() != n_y * n_x)
+  {
+    throw std::runtime_error("island_boost: labels size mismatch with n_y * n_x");
+  }
+  if (baseline_flux.size() != n_y * n_x)
+  {
+    throw std::runtime_error("island_boost: baseline_flux size mismatch with n_y * n_x");
+  }
+
+  const auto labels_image =
+      xt::adapt(labels.data(), labels.size(), xt::no_ownership(), std::array<size_t, 2>{n_y, n_x});
+  const auto baseline_image =
+      xt::adapt(baseline_flux.data(), baseline_flux.size(), xt::no_ownership(), std::array<size_t, 2>{n_y, n_x});
+  const auto island_mask = xt::equal(labels_image, label);
+  const xt::xtensor<float, 1> ratio = flux / xt::filter(baseline_image, island_mask);
+  if (ratio.size() == 0)
+  {
+    throw std::runtime_error("island_boost: no pixel carries the label");
+  }
+  const auto max_abs_index = xt::argmax(xt::abs(ratio))();
+  return ratio(max_abs_index);
 }
 } // namespace breifast::islands

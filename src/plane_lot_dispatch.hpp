@@ -35,7 +35,7 @@
 #include <xtensor/views/xslice.hpp>
 #include <xtensor/views/xview.hpp>
 
-#include "islands.hpp"
+#include "cpu/islands.hpp"
 
 namespace breifast
 {
@@ -365,7 +365,8 @@ struct ProcessBandScratch
   std::vector<float> median_scratch;
   xt::xtensor<bool, 2> image_mask;
   xt::xtensor<float, 2> noise_map;
-  xt::xtensor<float, 2> padded_image;
+  xt::xtensor<float, 2> stamp;
+  xt::xtensor<float, 2> beam_stamp;
   islands::IslandLabels islands;
 };
 
