@@ -7,10 +7,10 @@ using namespace breifast;
 
 namespace
 {
-PlaneBatchGroup make_group(size_t n, float selfnoise_raw_value)
+PlaneBatchGroup make_group(size_t n, float selfnoise_raw_value, size_t n_channels = 1)
 {
   PlaneBatchGroup group;
-  group.accept_mask.resize({1, n, n});
+  group.accept_mask.resize({n_channels, n, n});
   group.accept_mask.fill(true);
   group.selfnoise_offset.resize({n, n});
   group.selfnoise_offset.fill(0.F);
@@ -219,7 +219,7 @@ TEST_CASE("run_batch_core processes multi-band items (band_slices on the shared 
   // full multi-band loop per item" from process_plane's own band-accumulation logic (already covered by
   // test_process_plane.cpp).
   constexpr size_t n = 7;
-  std::vector<PlaneBatchGroup> groups{make_group(n, 1.F)};
+  std::vector<PlaneBatchGroup> groups{make_group(n, 1.F, 2)};
 
   const auto make_two_channel_item = [&](long peak_y, long peak_x)
   {
