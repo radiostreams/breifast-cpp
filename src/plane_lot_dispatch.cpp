@@ -385,6 +385,25 @@ xt::xtensor<float, 2> build_gaussian_beam_kernel(long halfsize, float sigma_majo
   return kernel;
 }
 
+inline bool any_true(const bool *values, size_t n)
+{
+  constexpr size_t block_size = 4096;
+  for (size_t block_start = 0; block_start < n; block_start += block_size)
+  {
+    const size_t block_end = std::min(block_start + block_size, n);
+    unsigned char accumulated = 0;
+    for (size_t i = block_start; i < block_end; ++i)
+    {
+      accumulated |= static_cast<unsigned char>(values[i]);
+    }
+    if (accumulated != 0)
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
 inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, const PlaneBatchGroup &group,
                          const BandSlice &band, const PlaneConfig &config, ProcessPlaneResult &result)
 {
@@ -396,26 +415,35 @@ inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, cons
 
   const size_t n_y = item.stokes_cube.shape(1);
   const size_t n_x = item.stokes_cube.shape(2);
+  const auto n_pixels = n_y * n_x;
+  if (band.start < 0 || static_cast<size_t>(band.stop) > item.stokes_cube.shape(0))
+  {
+    throw std::runtime_error("band exceeds the stokes_cube channels");
+  }
 
   // Masking
   auto &image_mask = scratch.image_mask;
   bool any_mask = false;
   {
     ZoneScopedN("mask_accumulate");
-    xt::noalias(image_mask) = xt::view(group.accept_mask, band.start, xt::all(), xt::all());
-    any_mask = xt::any(image_mask);
+    if (group.accept_mask.shape(1) != n_y || group.accept_mask.shape(2) != n_x ||
+        group.accept_mask.shape(0) < static_cast<size_t>(band.stop))
+    {
+      throw std::runtime_error("accept_mask shape mismatch with plane or band");
+    }
+    image_mask.resize({n_y, n_x});
+    std::copy_n(group.accept_mask.data() + band.start * n_pixels, n_pixels, image_mask.data());
+    const auto image_mask_ptr = image_mask.data();
     for (long i_band = band.start + 1; i_band < band.stop; ++i_band)
     {
-      for (size_t i_y = 0; i_y < n_y; ++i_y)
+      const auto *accept_mask_ptr = group.accept_mask.data() + i_band * n_pixels;
+      for (size_t i_pixel = 0; i_pixel < n_pixels; ++i_pixel)
       {
-        for (size_t i_x = 0; i_x < n_x; ++i_x)
-        {
-          const bool mask = group.accept_mask(i_band, i_y, i_x) || image_mask(i_y, i_x);
-          any_mask |= mask;
-          image_mask(i_y, i_x) = mask;
-        }
+        image_mask_ptr[i_pixel] = accept_mask_ptr[i_pixel] | image_mask_ptr[i_pixel];
       }
     }
+
+    any_mask = any_true(image_mask_ptr, n_pixels);
   }
 
   if (!any_mask)
@@ -560,9 +588,9 @@ inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, cons
                                 result);
   if (band.size() == 1 && item.nonzero_channels.size() > 1)
   {
-    xt::view(item.stokes_cube, band.start) = scratch.snr;
+    std::copy_n(scratch.snr.data(), n_pixels, item.stokes_cube.data() + band.start * n_pixels);
   }
-  if (!xt::any(image_mask))
+  if (!any_true(image_mask.data(), image_mask.size()))
   {
     return;
   }
@@ -716,24 +744,29 @@ SpectralVarianceStats compute_spectral_variance_stats(const PlaneBatchItem &item
   stats.sum_pow3.fill(0.F);
   stats.sum_pow4.fill(0.F);
 
+  const float *__restrict cube_ptr = item.stokes_cube.data();
+  float *__restrict sum_pow2_ptr = stats.sum_pow2.data();
+  float *__restrict sum_pow3_ptr = stats.sum_pow3.data();
+  float *__restrict sum_pow4_ptr = stats.sum_pow4.data();
+
+  const auto n_pixels = n_y * n_x;
   for (size_t i_channel = 0; i_channel < n_channels; ++i_channel)
   {
+    const float *__restrict local_cube_ptr = cube_ptr + i_channel * n_y * n_x;
     if (!item.nonzero_channels(i_channel))
     {
       continue;
     }
-    for (size_t i_y = 0; i_y < n_y; ++i_y)
+#pragma GCC ivdep
+    for (size_t i_pixel = 0; i_pixel < n_pixels; ++i_pixel)
     {
-      for (size_t i_x = 0; i_x < n_x; ++i_x)
-      {
-        const auto value = item.stokes_cube(i_channel, i_y, i_x);
-        const auto value2 = value * value;
-        const auto value3 = value2 * value;
-        const auto value4 = value3 * value;
-        stats.sum_pow2(i_y, i_x) += value2;
-        stats.sum_pow3(i_y, i_x) += value3;
-        stats.sum_pow4(i_y, i_x) += value4;
-      }
+      const auto value = local_cube_ptr[i_pixel];
+      const auto value2 = value * value;
+      const auto value3 = value2 * value;
+      const auto value4 = value3 * value;
+      sum_pow2_ptr[i_pixel] += value2;
+      sum_pow3_ptr[i_pixel] += value3;
+      sum_pow4_ptr[i_pixel] += value4;
     }
   }
 
