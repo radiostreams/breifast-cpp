@@ -229,7 +229,7 @@ TEST_CASE("snr_and_filters rejects buffers and parameters it cannot use", "[snr_
   CHECK_THROWS_WITH(call(noise_map, snr_cutoff, flux_cutoff, params, out_snr, n_pixels, histogram0.first(2 * max_sigma_bin - 1)),
                     ContainsSubstring("histogram size mismatch"));
   // The band matters when a cutoff cube is given.
-  for (const auto [start, stop] : {std::pair<long, long>{-1, 2}, {1, 1}, {2, 1}})
+  for (const auto &[start, stop] : {std::pair<long, long>{-1, 2}, {1, 1}, {2, 1}})
   {
     SnrFilterParams bad_band = params;
     bad_band.band_start = start;
