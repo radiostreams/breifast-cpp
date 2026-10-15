@@ -1,5 +1,4 @@
 #pragma once
-// Windows, scans and compaction (theme 6 of optimization_gpu/kernels.md): rms_noise_map. compact_mask joins it.
 #include <cstddef>
 #include <span>
 

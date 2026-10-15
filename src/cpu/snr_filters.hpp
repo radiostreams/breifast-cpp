@@ -1,6 +1,4 @@
 #pragma once
-// The SNR stage (themes 1, 3 and 4 of optimization_gpu/kernels.md) in one xsimd loop: SNR, the four cumulative masks,
-// three histograms and the min/max sigma. Splitting it would add full passes to a loop tuned for bandwidth.
 #include <array>
 #include <cstddef>
 #include <span>

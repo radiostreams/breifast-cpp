@@ -1,6 +1,4 @@
 #pragma once
-// Per-island stamp kernels (themes 3, 5, 6 and 8 of optimization_gpu/kernels.md): stamp_extract, stamp_zero_inner_box,
-// stamp_abs_extreme, stamp_donut_stats, stamp_beam_chi2.
 #include <cstddef>
 #include <span>
 

@@ -1,6 +1,4 @@
 #pragma once
-// Reductions along the channel axis (theme 2 of optimization_gpu/kernels.md): or_accept_masks, weighted_band_image,
-// spectral_variance_moments. band_cutoff_average joins them.
 #include <cstddef>
 #include <span>
 
