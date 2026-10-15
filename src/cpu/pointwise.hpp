@@ -1,5 +1,4 @@
 #pragma once
-// Pointwise maps (theme 1 of optimization_gpu/kernels.md): combine_noise_map. copy_snr_to_cube joins it.
 #include <cstddef>
 #include <span>
 

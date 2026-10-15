@@ -1,6 +1,4 @@
 #pragma once
-// Reductions to a scalar over pixels (theme 3 of optimization_gpu/kernels.md): any_true. stamp_min_max and donut_std
-// join it.
 #include <cstddef>
 
 namespace breifast::plane_lot::detail
