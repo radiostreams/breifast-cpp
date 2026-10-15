@@ -1,22 +1,17 @@
-/**
- * @file median.hpp
- * @brief Exact medians over float arrays.
- *
- * radix_median_of()/radix_median_of_abs() are used in production: two read-only passes, no copy of the input.
- * median_of()/median_of_abs() are the nth_element versions, kept as the reference for the tests.
- */
-#pragma once
+#include "order_statistics.hpp"
+
 #include <algorithm>
 #include <bit>
+#include <cmath>
 #include <cstdint>
 #include <limits>
-#include <span>
-#include <vector>
 
 #include <tracy/Tracy.hpp>
 #include <xsimd/xsimd.hpp>
 
 namespace breifast::detail::median
+{
+namespace
 {
 namespace radix
 {
@@ -205,38 +200,20 @@ template <typename Key> float select(std::span<const float> values)
   return (lo + hi) / 2.F;
 }
 } // namespace radix
+} // namespace
 
-/**
- * @brief Exact median of `values`, same result as median_of().
- * @param values Input, left unmodified.
- * @return Median, NaN for empty input.
- */
-inline float radix_median_of(std::span<const float> values)
+float radix_median_of(std::span<const float> values)
 {
   ZoneScoped;
   return radix::select<radix::SignedKey>(values);
 }
 
-/**
- * @brief Exact median of `|values|`, same result as median_of_abs().
- * @param values Input, left unmodified.
- * @return Median of the absolute values, NaN for empty input.
- */
-inline float radix_median_of_abs(std::span<const float> values)
+float radix_median_of_abs(std::span<const float> values)
 {
   ZoneScoped;
   return radix::select<radix::AbsKey>(values);
 }
-} // namespace breifast::detail::median
 
-namespace breifast::detail::median
-{
-/**
- * @brief Reference median of `|values|`: copies `|values|` into `scratch`, then std::nth_element.
- * @param values Input, left unmodified.
- * @param scratch Buffer resized to `values.size()` and overwritten.
- * @return Median of the absolute values.
- */
 template <typename T> float median_of_abs(std::span<const T> values, std::vector<T> &scratch)
 {
   ZoneScoped;
@@ -261,12 +238,6 @@ template <typename T> float median_of_abs(std::span<const T> values, std::vector
   return (hi + lo) / 2.F;
 }
 
-/**
- * @brief Reference median of `values`: copies `values` into `scratch`, then std::nth_element.
- * @param values Input, left unmodified.
- * @param scratch Buffer resized to `values.size()` and overwritten.
- * @return Median.
- */
 template <typename T> float median_of(std::span<const T> values, std::vector<T> &scratch)
 {
   ZoneScoped;
@@ -289,4 +260,9 @@ template <typename T> float median_of(std::span<const T> values, std::vector<T> 
   }
   return (hi + lo) / 2.F;
 }
+
+template float median_of_abs<float>(std::span<const float>, std::vector<float> &);
+template float median_of_abs<double>(std::span<const double>, std::vector<double> &);
+template float median_of<float>(std::span<const float>, std::vector<float> &);
+template float median_of<double>(std::span<const double>, std::vector<double> &);
 } // namespace breifast::detail::median

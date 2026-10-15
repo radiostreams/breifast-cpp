@@ -4,3 +4,7 @@ option('box_version', type : 'boolean', value : false,
   description : 'Build compute_rms_noise_map with the BOX_VERSION (ring-buffer) branch instead of the default separable box filter')
 option('march', type : 'string', value : 'native',
   description : 'Target CPU for -march. The binaries only run on CPUs with the build machine\'s ISA')
+option('gpu', type : 'feature', value : 'disabled',
+  description : 'Build the CUDA targets in src/gpu (needs nvcc)')
+option('gpu_arch', type : 'string', value : 'sm_90',
+  description : 'GPU architecture passed to nvcc -arch (sm_90 is the H100)')

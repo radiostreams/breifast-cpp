@@ -1,5 +1,20 @@
 {
   "nodes": {
+    "astro-nix": {
+      "locked": {
+        "lastModified": 1791968709,
+        "narHash": "sha256-P0hcAo1yisqREKvg7tUVS7H4pAenMQooW3qL6gtSOa0=",
+        "ref": "refs/heads/main",
+        "rev": "37460e9a0f35da16525ff8c79400fb51d9aa67b0",
+        "revCount": 88,
+        "type": "git",
+        "url": "file:///work/ska/hchouh/src/astro-nix"
+      },
+      "original": {
+        "type": "git",
+        "url": "file:///work/ska/hchouh/src/astro-nix"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1790463110,
@@ -18,6 +33,7 @@
     },
     "root": {
       "inputs": {
+        "astro-nix": "astro-nix",
         "nixpkgs": "nixpkgs"
       }
     }

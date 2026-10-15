@@ -12,9 +12,15 @@
 #include <xtensor/misc/xsort.hpp>
 #include <xtensor/reducers/xreducer.hpp>
 
-#include "islands.hpp"
-#include "median.hpp"
+#include "cpu/island_stamps.hpp"
+#include "cpu/islands.hpp"
+#include "cpu/order_statistics.hpp"
+#include "cpu/pointwise.hpp"
+#include "cpu/snr_filters.hpp"
+#include "cpu/windows.hpp"
 #include "plane_lot_dispatch.hpp"
+#include "cpu/channel_reductions.hpp"
+#include "cpu/scalar_reductions.hpp"
 
 namespace breifast
 {
@@ -71,95 +77,19 @@ float PlaneConfig::max_to_std_ratio_value() const
   return *max_to_std_ratio_value_;
 }
 
-inline const xt::xtensor<float, 2> &compute_rms_noise_map(ProcessBandScratch &scratch,
-                                                          const xt::xtensor<float, 2> &plane, long boxsize)
+const xt::xtensor<float, 2> &compute_rms_noise_map(ProcessBandScratch &scratch, const xt::xtensor<float, 2> &plane,
+                                                   long boxsize)
 {
-  ZoneScoped;
-  const long n_y = static_cast<long>(plane.shape(0));
-  const long n_x = static_cast<long>(plane.shape(1));
-
-  const long radius = boxsize / 2;
-  const long window_size = std::max(boxsize, 1L);
-
-  const auto min_x_of = [&](long i_x) { return std::max(i_x - radius, 0L); };
-  const auto max_x_of = [&](long i_x) { return std::min(i_x + window_size - radius, n_x); };
-  const auto min_y_of = [&](long i_y) { return std::max(i_y - radius, 0L); };
-  const auto max_y_of = [&](long i_y) { return std::min(i_y + window_size - radius, n_y); };
-
-  auto &windows_sums = scratch.windows_sums;
-  windows_sums.resize({static_cast<size_t>(n_y), static_cast<size_t>(n_x)});
-
-  auto &row_window_sums = scratch.row_window_sums;
-  row_window_sums.resize({static_cast<size_t>(n_y), static_cast<size_t>(n_x)});
-
-  for (long i_y = 0; i_y < n_y; ++i_y)
-  {
-    double accumulator = 0.;
-    for (long i_x = 0; i_x < max_x_of(0); ++i_x)
-    {
-      const double value = plane(i_y, i_x);
-      accumulator += value * value;
-    }
-
-    for (long i_x = 0; i_x < n_x; ++i_x)
-    {
-      row_window_sums(i_y, i_x) = accumulator;
-
-      const auto entering_column = i_x + window_size - radius;
-      const auto leaving_column = i_x - radius;
-      if (entering_column < n_x)
-      {
-        const double value = plane(i_y, entering_column);
-        accumulator += value * value;
-      }
-
-      if (leaving_column >= 0)
-      {
-        const double value = plane(i_y, leaving_column);
-        accumulator -= value * value;
-      }
-    }
-  }
-
-  auto &column_accumulators = scratch.column_accumulators;
-  column_accumulators.assign(static_cast<size_t>(n_x), 0.);
-
-  for (long i_y = 0; i_y < max_y_of(0); ++i_y)
-  {
-    for (long i_x = 0; i_x < n_x; ++i_x)
-    {
-      column_accumulators[i_x] += row_window_sums(i_y, i_x);
-    }
-  }
-
-  for (long i_y = 0; i_y < n_y; ++i_y)
-  {
-    const long rows_in_window = max_y_of(i_y) - min_y_of(i_y);
-    for (long i_x = 0; i_x < n_x; ++i_x)
-    {
-      const long count = rows_in_window * (max_x_of(i_x) - min_x_of(i_x));
-      windows_sums(i_y, i_x) = static_cast<float>(std::sqrt(column_accumulators[i_x] / static_cast<double>(count)));
-    }
-
-    const long entering_row = i_y + window_size - radius;
-    const long leaving_row = i_y - radius;
-    if (entering_row < n_y)
-    {
-      for (long i_x = 0; i_x < n_x; ++i_x)
-      {
-        column_accumulators[i_x] += row_window_sums(entering_row, i_x);
-      }
-    }
-    if (leaving_row >= 0)
-    {
-      for (long i_x = 0; i_x < n_x; ++i_x)
-      {
-        column_accumulators[i_x] -= row_window_sums(leaving_row, i_x);
-      }
-    }
-  }
-
-  return windows_sums;
+  const size_t n_y = plane.shape(0);
+  const size_t n_x = plane.shape(1);
+  scratch.windows_sums.resize({n_y, n_x});
+  scratch.row_window_sums.resize({n_y, n_x});
+  scratch.column_accumulators.resize(n_x);
+  plane_lot::detail::rms_noise_map({plane.data(), plane.size()}, n_y, n_x, boxsize,
+                                   {scratch.row_window_sums.data(), scratch.row_window_sums.size()},
+                                   scratch.column_accumulators,
+                                   {scratch.windows_sums.data(), scratch.windows_sums.size()});
+  return scratch.windows_sums;
 }
 
 void compute_snr_and_apply_filters(ProcessBandScratch &scratch, const xt::xtensor<float, 2> &plane,
@@ -167,194 +97,34 @@ void compute_snr_and_apply_filters(ProcessBandScratch &scratch, const xt::xtenso
                                    xt::xtensor<bool, 2> &image_mask, const PlaneBatchGroup &group,
                                    const BandSlice &band, const PlaneConfig &config, ProcessPlaneResult &result)
 {
-  ZoneScoped;
-  const size_t n_y = plane.shape(0);
-  const size_t n_x = plane.shape(1);
-
   scratch.snr.resize(plane.shape());
-  scratch.histograms[0].resize(config.max_sigma_bin * 2, 0);
-  scratch.histograms[1].resize(config.max_sigma_bin * 2, 0);
-  scratch.histograms[2].resize(config.max_sigma_bin * 2, 0);
-  std::fill(scratch.histograms[0].begin(), scratch.histograms[0].end(), 0);
-  std::fill(scratch.histograms[1].begin(), scratch.histograms[1].end(), 0);
-  std::fill(scratch.histograms[2].begin(), scratch.histograms[2].end(), 0);
-
-  float local_min_sigma = std::numeric_limits<float>::infinity();
-  float local_max_sigma = std::numeric_limits<float>::lowest();
-
-  const float *const plane_ptr = plane.data();
-  const float *const noise_map_ptr = noise_map.data();
-  float *const snr_ptr = scratch.snr.data();
-  bool *const image_mask_ptr = image_mask.data();
-  const bool snr_cutoff_enabled = group.snr_cutoff.has_value();
-  const float *const snr_cutoff_ptr = snr_cutoff_enabled ? group.snr_cutoff->data() : nullptr;
-  const bool flux_cutoff_enabled = group.flux_cutoff.has_value();
-  const float *const flux_cutoff_ptr = flux_cutoff_enabled ? group.flux_cutoff->data() : nullptr;
-
-#if SCALAR
-  const size_t first_scalar_pixel = 0;
-#else
-  const xsimd::batch_bool<float> snr_cutoff_disabled(!snr_cutoff_enabled);
-  const xsimd::batch_bool<float> flux_cutoff_disabled(!flux_cutoff_enabled);
-  const xsimd::batch_bool<float> noise_rejection_disabled(config.reject_noise_threshold == 0.F);
-  const xsimd::batch<float> noise_rejection_threshold(median_noise * config.reject_noise_threshold);
-
-  constexpr size_t batch_size = xsimd::batch<float>::size;
-  const size_t n_vector_pixels = n_y * n_x - (n_y * n_x) % batch_size;
-  xsimd::batch<float> min_sigma_vec(local_min_sigma);
-  xsimd::batch<float> max_sigma_vec(local_max_sigma);
-  for (size_t i_pixel = 0; i_pixel < n_vector_pixels; i_pixel += batch_size)
+  for (auto &histogram : scratch.histograms)
   {
-    const auto noise_vec = xsimd::load_unaligned(noise_map_ptr + i_pixel);
-    const auto valid = noise_vec != xsimd::batch<float>(0.F) && xsimd::isfinite(noise_vec);
-    const auto plane_val = xsimd::load_unaligned(plane_ptr + i_pixel);
-    auto snr = xsimd::select(valid, plane_val / noise_vec, xsimd::batch<float>(0.F));
-    snr.store_unaligned(snr_ptr + i_pixel);
-
-    auto image_mask_vec = xsimd::batch_bool<float>::load_unaligned(image_mask_ptr + i_pixel);
-    image_mask_vec &= valid;
-    image_mask_vec.store_unaligned(image_mask_ptr + i_pixel);
-
-    const auto mask0 = image_mask_vec;
-
-    xsimd::batch<float, xsimd::default_arch> snr_cutoff_threshold_vec{0.F};
-    if (snr_cutoff_enabled)
-    {
-      for (auto i_channel = band.start; i_channel < band.stop; ++i_channel)
-      {
-        const auto snr_cutoff_vec = xsimd::load_unaligned(snr_cutoff_ptr + i_channel * n_y * n_x + i_pixel);
-        snr_cutoff_threshold_vec += snr_cutoff_vec;
-      }
-      snr_cutoff_threshold_vec *= inv_band_size;
-    }
-
-    xsimd::batch<float, xsimd::default_arch> flux_cutoff_threshold_vec{0.F};
-    if (flux_cutoff_enabled)
-    {
-      for (auto i_channel = band.start; i_channel < band.stop; ++i_channel)
-      {
-        const auto flux_cutoff_vec = xsimd::load_unaligned(flux_cutoff_ptr + i_channel * n_y * n_x + i_pixel);
-        flux_cutoff_threshold_vec += flux_cutoff_vec;
-      }
-      flux_cutoff_threshold_vec *= inv_band_size;
-    }
-
-    const auto mask1 = mask0 && (snr_cutoff_disabled || xsimd::abs(snr) >= snr_cutoff_threshold_vec);
-    const auto mask2 = mask1 && (flux_cutoff_disabled || xsimd::abs(plane_val) >= flux_cutoff_threshold_vec);
-    const auto mask3 = mask2 && (noise_rejection_disabled || noise_vec <= noise_rejection_threshold);
-
-    mask3.store_unaligned(image_mask_ptr + i_pixel);
-
-    auto bin_index = xsimd::floor(snr + xsimd::batch<float>(config.max_sigma_bin));
-    bin_index -= xsimd::select(bin_index == xsimd::batch<float>(2 * config.max_sigma_bin), xsimd::batch<float>(1.F),
-                               xsimd::batch<float>(0.F));
-
-    const auto in_range = bin_index >= xsimd::batch<float>(0.F) &&
-                          bin_index < xsimd::batch<float>(static_cast<float>(2 * config.max_sigma_bin));
-    alignas(64) int32_t bins[xsimd::batch<float>::size];
-    xsimd::batch_cast<int32_t>(bin_index).store_aligned(bins);
-    const auto add_to_histogram = [&](std::vector<long> &histogram, const xsimd::batch_bool<float> &mask)
-    {
-      for (auto bits = (mask && in_range).mask(); bits != 0; bits &= bits - 1)
-      {
-        histogram[bins[std::countr_zero(bits)]]++;
-      }
-    };
-    if (config.histogram_detail > 1)
-    {
-      add_to_histogram(scratch.histograms[0], mask0);
-      add_to_histogram(scratch.histograms[1], mask1);
-    }
-    if (config.histogram_detail > 0)
-    {
-      add_to_histogram(scratch.histograms[2], mask2);
-    }
-
-    min_sigma_vec = xsimd::min(min_sigma_vec, xsimd::select(mask3, snr, min_sigma_vec));
-    max_sigma_vec = xsimd::max(max_sigma_vec, xsimd::select(mask3, snr, max_sigma_vec));
-
-    const auto thresholded_abs_snr = xsimd::select(mask3, xsimd::abs(snr), xsimd::batch<float>(0.F));
-    const auto mask = thresholded_abs_snr >= xsimd::batch<float>(config.threshold);
-    mask.store_unaligned(image_mask_ptr + i_pixel);
+    histogram.resize(config.max_sigma_bin * 2);
   }
-  local_min_sigma = xsimd::reduce_min(min_sigma_vec);
-  local_max_sigma = xsimd::reduce_max(max_sigma_vec);
-  const size_t first_scalar_pixel = n_vector_pixels;
-#endif
+  const auto cutoff_span = [](const std::optional<xt::xtensor<float, 3>> &cutoff)
+  { return cutoff ? std::span<const float>(cutoff->data(), cutoff->size()) : std::span<const float>(); };
 
-  // Epilog of the xsimd loop: the pixels past the last whole batch.
-  for (size_t i_pixel = first_scalar_pixel; i_pixel < n_y * n_x; ++i_pixel)
-  {
-    const auto noise = noise_map_ptr[i_pixel];
-    const bool valid = noise != 0 && std::isfinite(noise);
-    snr_ptr[i_pixel] = valid ? plane_ptr[i_pixel] / noise : 0;
-    image_mask_ptr[i_pixel] &= valid;
+  const plane_lot::detail::SnrFilterParams params{median_noise,
+                                                  inv_band_size,
+                                                  band.start,
+                                                  band.stop,
+                                                  config.max_sigma_bin,
+                                                  config.histogram_detail,
+                                                  config.reject_noise_threshold,
+                                                  config.threshold};
+  const auto summary = plane_lot::detail::snr_and_filters(
+      {plane.data(), plane.size()}, {noise_map.data(), noise_map.size()}, cutoff_span(group.snr_cutoff),
+      cutoff_span(group.flux_cutoff), params, {scratch.snr.data(), scratch.snr.size()},
+      {image_mask.data(), image_mask.size()},
+      {std::span<long>(scratch.histograms[0]), std::span<long>(scratch.histograms[1]),
+       std::span<long>(scratch.histograms[2])});
 
-    const auto mask0 = image_mask_ptr[i_pixel];
-
-    float snr_cutoff_threshold = 0.F;
-    if (snr_cutoff_enabled)
-    {
-      for (auto i_channel = band.start; i_channel < band.stop; ++i_channel)
-      {
-        snr_cutoff_threshold += snr_cutoff_ptr[i_channel * n_y * n_x + i_pixel];
-      }
-      snr_cutoff_threshold *= inv_band_size;
-    }
-
-    float flux_cutoff_threshold = 0.F;
-    if (flux_cutoff_enabled)
-    {
-      for (auto i_channel = band.start; i_channel < band.stop; ++i_channel)
-      {
-        flux_cutoff_threshold += flux_cutoff_ptr[i_channel * n_y * n_x + i_pixel];
-      }
-      flux_cutoff_threshold *= inv_band_size;
-    }
-
-    const auto mask1 = mask0 && (!snr_cutoff_enabled || std::abs(snr_ptr[i_pixel]) >= snr_cutoff_threshold);
-    const auto mask2 = mask1 && (!flux_cutoff_enabled || std::abs(plane_ptr[i_pixel]) >= flux_cutoff_threshold);
-    const auto mask3 = mask2 && (config.reject_noise_threshold == 0.F ||
-                                 noise_map_ptr[i_pixel] <= median_noise * config.reject_noise_threshold);
-
-    image_mask_ptr[i_pixel] = mask3;
-
-    long bin_index = std::floor(snr_ptr[i_pixel] + config.max_sigma_bin);
-    if (bin_index == 2 * config.max_sigma_bin)
-    {
-      bin_index = 2 * config.max_sigma_bin - 1;
-    }
-    if (0 <= bin_index && bin_index < 2 * config.max_sigma_bin)
-    {
-      if (mask0 && config.histogram_detail > 1)
-      {
-        scratch.histograms[0][bin_index]++;
-      }
-      if (mask1 && config.histogram_detail > 1)
-      {
-        scratch.histograms[1][bin_index]++;
-      }
-      if (mask2 && config.histogram_detail > 0)
-      {
-        scratch.histograms[2][bin_index]++;
-      }
-    }
-
-    if (mask3)
-    {
-      const float value = snr_ptr[i_pixel];
-      local_min_sigma = std::min(local_min_sigma, value);
-      local_max_sigma = std::max(local_max_sigma, value);
-    }
-
-    const float thresholded_abs_snr = mask3 ? std::abs(snr_ptr[i_pixel]) : 0.F;
-    image_mask_ptr[i_pixel] = thresholded_abs_snr >= config.threshold;
-  }
   result.histograms = scratch.histograms;
-  if (local_min_sigma < std::numeric_limits<float>::infinity())
+  if (summary.min_sigma < std::numeric_limits<float>::infinity())
   {
-    result.min_sigma = result.min_sigma ? std::min(*result.min_sigma, local_min_sigma) : local_min_sigma;
-    result.max_sigma = result.max_sigma ? std::max(*result.max_sigma, local_max_sigma) : local_max_sigma;
+    result.min_sigma = result.min_sigma ? std::min(*result.min_sigma, summary.min_sigma) : summary.min_sigma;
+    result.max_sigma = result.max_sigma ? std::max(*result.max_sigma, summary.max_sigma) : summary.max_sigma;
   }
 }
 
@@ -385,24 +155,220 @@ xt::xtensor<float, 2> build_gaussian_beam_kernel(long halfsize, float sigma_majo
   return kernel;
 }
 
-inline bool any_true(const bool *values, size_t n)
+namespace
 {
-  constexpr size_t block_size = 4096;
-  for (size_t block_start = 0; block_start < n; block_start += block_size)
+/// The weights of the band's channels and the scalars derived from them.
+struct BandScalars
+{
+  xt::xtensor<float, 1> weights_sliced;
+  float inv_band_size;
+  float weights_sum;
+  float inv_weights_sum;
+};
+
+BandScalars band_scalars(const PlaneBatchItem &item, const BandSlice &band)
+{
+  BandScalars scalars;
+  scalars.weights_sliced = xt::view(item.weights, band.xrange());
+  scalars.inv_band_size = 1.F / static_cast<float>(band.size());
+  scalars.weights_sum = std::accumulate(scalars.weights_sliced.cbegin(), scalars.weights_sliced.cend(), 0.F);
+  scalars.inv_weights_sum = 1.F / scalars.weights_sum;
+  return scalars;
+}
+
+/// Weighted image of the band's channels into `scratch.plane`, minus the mean image when the config asks for it.
+void band_plane(ProcessBandScratch &scratch, const PlaneBatchItem &item, const PlaneBatchGroup &group,
+                const BandSlice &band, const PlaneConfig &config, const BandScalars &scalars)
+{
+  const size_t n_y = item.stokes_cube.shape(1);
+  const size_t n_x = item.stokes_cube.shape(2);
+  const auto n_pixels = n_y * n_x;
+  const auto &weights = item.weights;
+  const bool do_subtract_mean = config.subtract_mean && group.mean_image.has_value();
+
+  auto &plane = scratch.plane;
+  plane.resize({n_y, n_x});
+  const auto &cube = item.stokes_cube;
+  if (cube.shape(1) != n_y || cube.shape(2) != n_x)
   {
-    const size_t block_end = std::min(block_start + block_size, n);
-    unsigned char accumulated = 0;
-    for (size_t i = block_start; i < block_end; ++i)
+    throw std::runtime_error("stokes_cube shape mismatch with plane");
+  }
+  std::span<const float> mean_image_span;
+  if (do_subtract_mean)
+  {
+    const auto &mean_image = *group.mean_image;
+    if (mean_image.shape(1) != n_y || mean_image.shape(2) != n_x)
     {
-      accumulated |= static_cast<unsigned char>(values[i]);
+      throw std::runtime_error("mean_image shape mismatch with plane");
     }
-    if (accumulated != 0)
+    mean_image_span = std::span<const float>(mean_image.data(), mean_image.size());
+  }
+  plane_lot::detail::weighted_band_image({cube.data(), cube.size()}, {weights.data(), weights.size()}, mean_image_span,
+                                         n_pixels, band.start, band.stop, scalars.inv_weights_sum,
+                                         scalars.inv_band_size, {plane.data(), plane.size()});
+}
+
+struct NoiseStage
+{
+  float median_noise;
+  float rms_floor; ///< 0 in the global MAD mode
+};
+
+/// Noise map of the band into `scratch.noise_map`, from the local RMS or from the global MAD, and its median.
+/// `noise_global_mad` returns the global MAD noise of the band's plane (1.4826 times the median of `abs(plane)`), which
+/// process_band computes on first use and shares with the detection records.
+template <typename GlobalMadFn>
+NoiseStage noise_stage(ProcessBandScratch &scratch, const PlaneBatchGroup &group, const BandSlice &band,
+                       const PlaneConfig &config, GlobalMadFn &noise_global_mad)
+{
+  const auto &plane = scratch.plane;
+  const size_t n_y = plane.shape(0);
+  const size_t n_x = plane.shape(1);
+
+  // Precondition: group.selfnoise_offset/dde_noise must match the plane's shape.
+  if (group.selfnoise_offset.shape() != std::array<size_t, 2>{n_y, n_x} ||
+      group.dde_noise.shape() != std::array<size_t, 2>{n_y, n_x})
+  {
+    throw std::runtime_error("selfnoise_offset/dde_noise shape mismatch with plane");
+  }
+  const std::span<const float> selfnoise_span(group.selfnoise_offset.data(), group.selfnoise_offset.size());
+  const std::span<const float> dde_span(group.dde_noise.data(), group.dde_noise.size());
+
+  auto &noise_map = scratch.noise_map;
+  noise_map.resize({n_y, n_x});
+  const std::span<float> noise_map_span(noise_map.data(), noise_map.size());
+  float rms_floor = 0.F;
+  if (config.use_rms_noise_estimator)
+  {
+    // make_noise_map(method='std'): pixels below the map's own median are raised to it.
+    const auto &rms = compute_rms_noise_map(scratch, plane, config.boxsize);
+    rms_floor = detail::median::radix_median_of({rms.data(), rms.size()});
+    plane_lot::detail::combine_noise_map_rms({rms.data(), rms.size()}, rms_floor, selfnoise_span, dde_span,
+                                             band.selfnoise_scale_factor, config.ddenoise_scaling_factor,
+                                             noise_map_span);
+  }
+  else
+  {
+    plane_lot::detail::combine_noise_map_constant(noise_global_mad(), selfnoise_span, dde_span,
+                                                  band.selfnoise_scale_factor, config.ddenoise_scaling_factor,
+                                                  noise_map_span);
+  }
+  const float median_noise = detail::median::radix_median_of({noise_map.data(), noise_map.size()});
+  return {median_noise, rms_floor};
+}
+
+struct BeamKernel
+{
+  size_t halfsize = 0;
+  std::optional<xt::xtensor<float, 2>> kernel; ///< empty when the beam is disabled
+};
+
+/// Half size and kernel of the beam for the band: the fixed kernel of the config, or a Gaussian built from the band's
+/// weighted beam axes.
+BeamKernel beam_kernel_for_band(const PlaneBatchItem &item, const BandSlice &band, const PlaneConfig &config,
+                                const BandScalars &scalars)
+{
+  BeamKernel beam;
+  if (config.beam_size_enabled)
+  {
+    if (config.fixed_beam_kernel.has_value())
     {
-      return true;
+      beam.halfsize = config.fixed_beam_halfsize;
+      beam.kernel = xt::xtensor<float, 2>(*config.fixed_beam_kernel);
+    }
+    else
+    {
+      float beam_kernel_halfsize_flt = 0.F;
+      for (auto i_channel = band.start; i_channel < band.stop; ++i_channel)
+      {
+        beam_kernel_halfsize_flt += (*item.beam_major_axis)(i_channel);
+      }
+      beam_kernel_halfsize_flt *= 3 / static_cast<float>(band.size());
+      beam.halfsize = static_cast<long>(beam_kernel_halfsize_flt) + 1;
+
+      const auto &weights_sliced = scalars.weights_sliced;
+      const auto weights_sum = scalars.weights_sum;
+      const auto beam_major_sliced = xt::view(*item.beam_major_axis, band.xrange());
+      const auto beam_minor_sliced = xt::view(*item.beam_minor_axis, band.xrange());
+      const auto beam_position_angle_sliced = xt::view(*item.beam_position_angle, band.xrange());
+      const float beam_major_weighted = xt::sum(beam_major_sliced * weights_sliced)() / weights_sum;
+      const float beam_minor_weighted = xt::sum(beam_minor_sliced * weights_sliced)() / weights_sum;
+      const auto beam_position_angle_weighted = xt::sum(beam_position_angle_sliced * weights_sliced)() / weights_sum;
+      beam.kernel = build_gaussian_beam_kernel(beam.halfsize, beam_major_weighted, beam_minor_weighted,
+                                               beam_position_angle_weighted);
     }
   }
-  return false;
+  return beam;
 }
+
+/// The per-island quantities that the detection record needs besides the peak, the island size and the noise maps.
+struct IslandStatistics
+{
+  float flux;
+  float signal_to_noise_extended_box;
+  float beam_chi2;
+  double rms; ///< standard deviation of the donut around the island, 0 when it is empty
+  float lmad; ///< scaled median absolute value of the donut, 0 when it is empty
+  float boost;
+};
+
+/// Stamp statistics of island `label` (1 based) of `scratch.islands`, around its peak pixel in `scratch.plane`.
+IslandStatistics island_statistics(ProcessBandScratch &scratch, const PlaneConfig &config, const BeamKernel &beam,
+                                   size_t label)
+{
+  const auto &plane = scratch.plane;
+  const auto &islands = scratch.islands;
+  const size_t n_y = plane.shape(0);
+  const size_t n_x = plane.shape(1);
+  const size_t radius = config.boxsize / 2;
+  const size_t beam_kernel_halfsize = beam.halfsize;
+
+  const auto &island = islands.peak_per_label[label - 1];
+  const long peak_y = static_cast<long>(island.coordinates.first);
+  const long peak_x = static_cast<long>(island.coordinates.second);
+
+  auto &sub_image = scratch.stamp;
+  sub_image.resize({2 * radius + 1, 2 * radius + 1});
+  plane_lot::detail::stamp_extract({plane.data(), plane.size()}, n_y, n_x, peak_y, peak_x, static_cast<long>(radius),
+                                   {sub_image.data(), sub_image.size()});
+  plane_lot::detail::stamp_zero_inner_box({sub_image.data(), sub_image.size()}, static_cast<long>(radius),
+                                          config.inner_boxsize);
+  const float extreme = plane_lot::detail::stamp_abs_extreme({sub_image.data(), sub_image.size()});
+  const auto adjacent_noise = extreme / config.max_to_std_ratio_value();
+
+  const auto flux = plane(island.coordinates.first, island.coordinates.second);
+  const auto signal_to_noise_extended_box = adjacent_noise != 0.F ? flux / adjacent_noise : 0.F;
+
+  float beam_chi2_value = 0.F;
+  if (beam.kernel.has_value())
+  {
+    auto &beam_sub_image = scratch.beam_stamp;
+    beam_sub_image.resize({2 * beam_kernel_halfsize + 1, 2 * beam_kernel_halfsize + 1});
+    plane_lot::detail::stamp_extract({plane.data(), plane.size()}, n_y, n_x, peak_y, peak_x,
+                                     static_cast<long>(beam_kernel_halfsize),
+                                     {beam_sub_image.data(), beam_sub_image.size()});
+
+    beam_chi2_value = plane_lot::detail::stamp_beam_chi2(
+        {beam_sub_image.data(), beam_sub_image.size()}, {beam.kernel->data(), beam.kernel->size()},
+        static_cast<long>(beam_kernel_halfsize), adjacent_noise);
+  }
+
+  const auto donut =
+      plane_lot::detail::stamp_donut_stats({sub_image.data(), sub_image.size()}, static_cast<long>(radius));
+  const auto rms = donut.stddev;
+  const auto lmad = donut.lmad;
+
+  float boost_value = 0.F;
+  if (config.baseline_flux.has_value())
+  {
+    boost_value = breifast::islands::island_boost({islands.labels.data(), islands.labels.size()},
+                                                  {config.baseline_flux->data(), config.baseline_flux->size()}, n_y,
+                                                  n_x, label, flux);
+  }
+
+  return {flux, signal_to_noise_extended_box, beam_chi2_value, rms, lmad, boost_value};
+}
+} // namespace
 
 inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, const PlaneBatchGroup &group,
                          const BandSlice &band, const PlaneConfig &config, ProcessPlaneResult &result)
@@ -423,114 +389,21 @@ inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, cons
 
   // Masking
   auto &image_mask = scratch.image_mask;
-  bool any_mask = false;
+  if (group.accept_mask.shape(1) != n_y || group.accept_mask.shape(2) != n_x)
   {
-    ZoneScopedN("mask_accumulate");
-    if (group.accept_mask.shape(1) != n_y || group.accept_mask.shape(2) != n_x ||
-        group.accept_mask.shape(0) < static_cast<size_t>(band.stop))
-    {
-      throw std::runtime_error("accept_mask shape mismatch with plane or band");
-    }
-    image_mask.resize({n_y, n_x});
-    std::copy_n(group.accept_mask.data() + band.start * n_pixels, n_pixels, image_mask.data());
-    const auto image_mask_ptr = image_mask.data();
-    for (long i_band = band.start + 1; i_band < band.stop; ++i_band)
-    {
-      const auto *accept_mask_ptr = group.accept_mask.data() + i_band * n_pixels;
-      for (size_t i_pixel = 0; i_pixel < n_pixels; ++i_pixel)
-      {
-        image_mask_ptr[i_pixel] = accept_mask_ptr[i_pixel] | image_mask_ptr[i_pixel];
-      }
-    }
-
-    any_mask = any_true(image_mask_ptr, n_pixels);
+    throw std::runtime_error("accept_mask shape mismatch with plane");
   }
-
-  if (!any_mask)
+  image_mask.resize({n_y, n_x});
+  if (!plane_lot::detail::or_accept_masks(std::span<const bool>(group.accept_mask.data(), group.accept_mask.size()),
+                                          n_pixels, band.start, band.stop,
+                                          std::span<bool>(image_mask.data(), image_mask.size())))
   {
     return;
   }
 
-  const auto &weights = item.weights;
-  const xt::xtensor<float, 1> weights_sliced = xt::view(weights, band.xrange());
-
-  const bool do_subtract_mean = config.subtract_mean && group.mean_image.has_value();
-  const float inv_band_size = 1.F / static_cast<float>(band.size());
-
-  const float weights_sum = std::accumulate(weights_sliced.cbegin(), weights_sliced.cend(), 0.F);
-  const float inv_weights_sum = 1.F / weights_sum;
-
+  const auto scalars = band_scalars(item, band);
+  band_plane(scratch, item, group, band, config, scalars);
   auto &plane = scratch.plane;
-  {
-    ZoneScopedN("band_accumulate");
-    plane.resize({n_y, n_x});
-
-    const size_t n_pixels = n_y * n_x;
-    const auto &cube = item.stokes_cube;
-    if (cube.shape(1) != n_y || cube.shape(2) != n_x)
-    {
-      throw std::runtime_error("stokes_cube shape mismatch with plane");
-    }
-
-    const float *mean_ptr = nullptr;
-    if (do_subtract_mean)
-    {
-      const auto &mean_image = *group.mean_image;
-      if (mean_image.shape(1) != n_y || mean_image.shape(2) != n_x)
-      {
-        throw std::runtime_error("mean_image shape mismatch with plane");
-      }
-      mean_ptr = mean_image.data();
-    }
-
-    float *const plane_ptr = plane.data();
-    const float *const cube_ptr = cube.data();
-    const float *const weights_ptr = weights.data();
-
-    const auto accumulate = [&](size_t i_channel, auto first, auto subtract)
-    {
-      const float *const cube_c = cube_ptr + i_channel * n_pixels;
-      const float *const mean_c = subtract ? mean_ptr + i_channel * n_pixels : nullptr;
-      const float weight = weights_ptr[i_channel];
-      for (size_t i = 0; i < n_pixels; ++i)
-      {
-        const float value = cube_c[i] * weight * inv_weights_sum;
-        if constexpr (first)
-        {
-          plane_ptr[i] = value;
-        }
-        else
-        {
-          plane_ptr[i] += value;
-        }
-        if constexpr (subtract)
-        {
-          plane_ptr[i] -= mean_c[i] * inv_band_size;
-        }
-      }
-    };
-
-    const auto accumulate_channel = [&](size_t i_channel, auto first)
-    {
-      if (do_subtract_mean)
-      {
-        accumulate(i_channel, first, std::true_type{});
-      }
-      else
-      {
-        accumulate(i_channel, first, std::false_type{});
-      }
-    };
-
-    if (band.start < band.stop)
-    {
-      accumulate_channel(band.start, std::true_type{});
-    }
-    for (auto i_channel = band.start + 1; i_channel < band.stop; ++i_channel)
-    {
-      accumulate_channel(i_channel, std::false_type{});
-    }
-  }
 
   std::optional<float> global_mad_cache;
   const auto noise_global_mad = [&]()
@@ -541,124 +414,28 @@ inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, cons
     }
     return *global_mad_cache;
   };
-
-  const auto combine = [&](const auto &base_noise_at)
-  {
-    ZoneScopedN("combine");
-    // Precondition: group.selfnoise_offset/dde_noise must match the plane's shape.
-    if (group.selfnoise_offset.shape() != std::array<size_t, 2>{n_y, n_x} ||
-        group.dde_noise.shape() != std::array<size_t, 2>{n_y, n_x})
-    {
-      throw std::runtime_error("selfnoise_offset/dde_noise shape mismatch with plane");
-    }
-
-    auto &noisemap = scratch.noise_map;
-    noisemap.resize({n_y, n_x});
-    float *const noisemap_ptr = noisemap.data();
-    const float *const selfnoise_ptr = group.selfnoise_offset.data();
-    const float *const dde_ptr = group.dde_noise.data();
-    for (size_t i_pixel = 0; i_pixel < n_y * n_x; ++i_pixel)
-    {
-      const float base = base_noise_at(i_pixel);
-      noisemap_ptr[i_pixel] = std::sqrt(base * base + band.selfnoise_scale_factor * selfnoise_ptr[i_pixel] +
-                                        config.ddenoise_scaling_factor * dde_ptr[i_pixel]);
-    }
-    return detail::median::radix_median_of({noisemap.data(), noisemap.size()});
-  };
-
+  const auto noise = noise_stage(scratch, group, band, config, noise_global_mad);
   auto &noise_map = scratch.noise_map;
-  float median_noise = 0.F;
-  float rms_floor = 0.F;
-  if (config.use_rms_noise_estimator)
-  {
-    // make_noise_map(method='std'): pixels below the map's own median are raised to it.
-    const auto &rms = compute_rms_noise_map(scratch, plane, config.boxsize);
-    rms_floor = detail::median::radix_median_of({rms.data(), rms.size()});
-    const float *const rms_ptr = rms.data();
-    median_noise = combine([&](size_t i_pixel) { return std::max(rms_ptr[i_pixel], rms_floor); });
-  }
-  else
-  {
-    median_noise = combine([&](size_t) { return noise_global_mad(); });
-  }
+  const float median_noise = noise.median_noise;
 
   result.median_noises.push_back(median_noise);
 
-  compute_snr_and_apply_filters(scratch, plane, noise_map, median_noise, inv_band_size, image_mask, group, band, config,
-                                result);
+  compute_snr_and_apply_filters(scratch, plane, noise_map, median_noise, scalars.inv_band_size, image_mask, group, band,
+                                config, result);
   if (band.size() == 1 && item.nonzero_channels.size() > 1)
   {
     std::copy_n(scratch.snr.data(), n_pixels, item.stokes_cube.data() + band.start * n_pixels);
   }
-  if (!any_true(image_mask.data(), image_mask.size()))
+  if (!plane_lot::detail::any_true(image_mask.data(), image_mask.size()))
   {
     return;
   }
 
-  const size_t radius = config.boxsize / 2;
-  size_t pad;
-  size_t beam_kernel_halfsize = 0;
-  if (config.beam_size_enabled)
-  {
-    if (config.fixed_beam_kernel.has_value())
-    {
-      beam_kernel_halfsize = config.fixed_beam_halfsize;
-    }
-    else
-    {
-      float beam_kernel_halfsize_flt = 0.F;
-      for (auto i_channel = band.start; i_channel < band.stop; ++i_channel)
-      {
-        beam_kernel_halfsize_flt += (*item.beam_major_axis)(i_channel);
-      }
-      beam_kernel_halfsize_flt *= 3 / static_cast<float>(band.size());
-      beam_kernel_halfsize = static_cast<long>(beam_kernel_halfsize_flt) + 1;
-    }
-    pad = std::max(beam_kernel_halfsize, radius + 1);
-  }
-  else
-  {
-    pad = radius + 1;
-  }
-
-  auto &padded_image = scratch.padded_image;
-  {
-    ZoneScopedN("pad_image");
-    padded_image.resize({plane.shape(0) + pad * 2, plane.shape(1) + pad * 2});
-    const size_t padded_ny = static_cast<size_t>(padded_image.shape(0));
-    const size_t padded_nx = static_cast<size_t>(padded_image.shape(1));
-    for (size_t i_y = 0; i_y < padded_ny; ++i_y)
-    {
-      for (size_t i_x = 0; i_x < padded_nx; ++i_x)
-      {
-        const bool in_padding = i_y < pad || i_x < pad || i_y >= pad + n_y || i_x >= pad + n_x;
-        padded_image(i_y, i_x) = in_padding ? 0 : plane(i_y - pad, i_x - pad);
-      }
-    }
-  }
+  const auto beam = beam_kernel_for_band(item, band, config, scalars);
 
   breifast::islands::label_islands(scratch.islands, image_mask, scratch.snr, noise_map);
 
   const auto &islands = scratch.islands;
-  std::optional<xt::xtensor<float, 2>> beam_kernel;
-  if (config.beam_size_enabled)
-  {
-    if (config.fixed_beam_kernel.has_value())
-    {
-      beam_kernel = xt::xtensor<float, 2>(*config.fixed_beam_kernel);
-    }
-    else
-    {
-      const auto beam_major_sliced = xt::view(*item.beam_major_axis, band.xrange());
-      const auto beam_minor_sliced = xt::view(*item.beam_minor_axis, band.xrange());
-      const auto beam_position_angle_sliced = xt::view(*item.beam_position_angle, band.xrange());
-      const float beam_major_weighted = xt::sum(beam_major_sliced * weights_sliced)() / weights_sum;
-      const float beam_minor_weighted = xt::sum(beam_minor_sliced * weights_sliced)() / weights_sum;
-      const auto beam_position_angle_weighted = xt::sum(beam_position_angle_sliced * weights_sliced)() / weights_sum;
-      beam_kernel = build_gaussian_beam_kernel(beam_kernel_halfsize, beam_major_weighted, beam_minor_weighted,
-                                               beam_position_angle_weighted);
-    }
-  }
 
   auto &detection_arrays = result.detections;
   detection_arrays.reserve(result.detections.size() + scratch.islands.peak_per_label.size());
@@ -666,73 +443,30 @@ inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, cons
   for (size_t label = 1; label <= islands.peak_per_label.size(); ++label)
   {
     const auto &island = islands.peak_per_label[label - 1];
-    const auto padded_y = island.coordinates.first + pad;
-    const auto padded_x = island.coordinates.second + pad;
-
-    xt::xtensor<float, 2> sub_image = xt::view(padded_image, xt::range(padded_y - radius, padded_y + radius + 1),
-                                               xt::range(padded_x - radius, padded_x + radius + 1));
-    xt::view(sub_image, xt::range(radius - config.inner_boxsize, radius + config.inner_boxsize + 1),
-             xt::range(radius - config.inner_boxsize, radius + config.inner_boxsize + 1)) = 0.F;
-
-    const auto minmax_subimage = xt::minmax(sub_image)();
-    const auto extreme = std::max(std::abs(minmax_subimage[0]), std::abs(minmax_subimage[1]));
-    const auto adjacent_noise = extreme / config.max_to_std_ratio_value();
-
-    const auto flux = plane(island.coordinates.first, island.coordinates.second);
-    const auto signal_to_noise_extended_box = adjacent_noise != 0.F ? flux / adjacent_noise : 0.F;
-
-    float beam_chi2_value = 0.F;
-    if (beam_kernel.has_value())
-    {
-      xt::xtensor<float, 2> beam_sub_image =
-          xt::view(padded_image, xt::range(padded_y - beam_kernel_halfsize, padded_y + beam_kernel_halfsize + 1),
-                   xt::range(padded_x - beam_kernel_halfsize, padded_x + beam_kernel_halfsize + 1));
-
-      const auto fit = *beam_kernel * (xt::sum(beam_sub_image)() / xt::sum(*beam_kernel)());
-      const auto mask = xt::not_equal(beam_sub_image, 0.F);
-      const auto diff = xt::filter(beam_sub_image, mask) - xt::filter(fit, mask);
-      const auto mask_count = xt::sum(mask)();
-
-      if (mask_count > 0 && adjacent_noise != 0.F)
-      {
-        beam_chi2_value = xt::sum(diff * diff)() / (adjacent_noise * adjacent_noise * mask_count);
-      }
-    }
-
-    const auto donut = xt::filter(sub_image, xt::not_equal(sub_image, 0.F));
-    const auto rms = donut.size() == 0 ? 0.F : xt::stddev(donut)();
-    const auto lmad = donut.size() == 0 ? 0.F : xt::median(xt::abs(donut)) * 1.4826F;
-
-    float boost_value = 0.F;
-    if (config.baseline_flux.has_value())
-    {
-      const auto island_mask = xt::equal(islands.labels, label);
-      const xt::xtensor<float, 1> ratio = flux / xt::filter(*config.baseline_flux, island_mask);
-      const auto max_abs_index = xt::argmax(xt::abs(ratio))();
-      boost_value = ratio(max_abs_index);
-    }
+    const auto statistics = island_statistics(scratch, config, beam, label);
+    const auto flux = statistics.flux;
+    const auto rms = statistics.rms;
+    const auto lmad = statistics.lmad;
 
     const float noisemap0_at_peak =
         config.use_rms_noise_estimator
-            ? std::max(scratch.windows_sums(island.coordinates.first, island.coordinates.second), rms_floor)
+            ? std::max(scratch.windows_sums(island.coordinates.first, island.coordinates.second), noise.rms_floor)
             : noise_global_mad();
 
     detection_arrays.add(island.coordinates.first, island.coordinates.second, island.island_size, item.stokes_label,
                          band.label, flux, island.local_noise, island.local_noise / median_noise, island.value,
-                         rms != 0.F ? flux / rms : 0.F, signal_to_noise_extended_box, lmad != 0.F ? flux / lmad : 0.F,
-                         flux / noise_global_mad(),
+                         rms != 0.F ? flux / rms : 0.F, statistics.signal_to_noise_extended_box,
+                         lmad != 0.F ? flux / lmad : 0.F, flux / noise_global_mad(),
                          group.selfnoise_raw(island.coordinates.first, island.coordinates.second),
                          noise_map(island.coordinates.first, island.coordinates.second) / noisemap0_at_peak,
-                         beam_chi2_value, boost_value);
+                         statistics.beam_chi2, statistics.boost);
   }
 }
 
 SpectralVarianceStats compute_spectral_variance_stats(const PlaneBatchItem &item, const PlaneBatchGroup &group,
                                                       const PlaneConfig &config)
 {
-  ZoneScoped;
   SpectralVarianceStats stats;
-  const auto n_channels = item.stokes_cube.shape(0);
   const auto n_y = item.stokes_cube.shape(1);
   const auto n_x = item.stokes_cube.shape(2);
 
@@ -740,35 +474,10 @@ SpectralVarianceStats compute_spectral_variance_stats(const PlaneBatchItem &item
   stats.sum_pow3.resize({n_y, n_x});
   stats.sum_pow4.resize({n_y, n_x});
 
-  stats.sum_pow2.fill(0.F);
-  stats.sum_pow3.fill(0.F);
-  stats.sum_pow4.fill(0.F);
-
-  const float *__restrict cube_ptr = item.stokes_cube.data();
-  float *__restrict sum_pow2_ptr = stats.sum_pow2.data();
-  float *__restrict sum_pow3_ptr = stats.sum_pow3.data();
-  float *__restrict sum_pow4_ptr = stats.sum_pow4.data();
-
-  const auto n_pixels = n_y * n_x;
-  for (size_t i_channel = 0; i_channel < n_channels; ++i_channel)
-  {
-    const float *__restrict local_cube_ptr = cube_ptr + i_channel * n_y * n_x;
-    if (!item.nonzero_channels(i_channel))
-    {
-      continue;
-    }
-#pragma GCC ivdep
-    for (size_t i_pixel = 0; i_pixel < n_pixels; ++i_pixel)
-    {
-      const auto value = local_cube_ptr[i_pixel];
-      const auto value2 = value * value;
-      const auto value3 = value2 * value;
-      const auto value4 = value3 * value;
-      sum_pow2_ptr[i_pixel] += value2;
-      sum_pow3_ptr[i_pixel] += value3;
-      sum_pow4_ptr[i_pixel] += value4;
-    }
-  }
+  plane_lot::detail::spectral_variance_moments(
+      {item.stokes_cube.data(), item.stokes_cube.size()}, {item.nonzero_channels.data(), item.nonzero_channels.size()},
+      n_y * n_x, {stats.sum_pow2.data(), stats.sum_pow2.size()}, {stats.sum_pow3.data(), stats.sum_pow3.size()},
+      {stats.sum_pow4.data(), stats.sum_pow4.size()});
 
   stats.nonzero_channels_mask = item.nonzero_channels;
 

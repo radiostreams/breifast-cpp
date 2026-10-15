@@ -3,7 +3,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
-#include "median.hpp"
+#include "cpu/order_statistics.hpp"
 #include "plane_lot_dispatch.hpp"
 
 #include "../test_helpers.hpp"
