@@ -32,8 +32,18 @@ struct GpuDeviceSummary
 /// Properties of the GPU with index `device_id` among the devices visible to the process.
 GpuDeviceSummary gpu_device_summary(int device_id = 0);
 
-/// A `cudaStream_t`, opaque here so this header needs no CUDA includes. `nullptr` is the default stream.
-using GpuStream = void *;
+/// The stream a GPU call runs on; `nullptr` is the default stream. Opaque here so the header needs no CUDA includes,
+/// and implicitly a `cudaStream_t` inside CUDA translation units.
+struct CUstream_st;
+struct GpuStream
+{
+  void *handle_ = nullptr;
+  GpuStream(std::nullptr_t = nullptr) {}
+  GpuStream(void *h) : handle_(h) {}
+#ifdef __CUDACC__
+  operator ::CUstream_st *() const { return static_cast<::CUstream_st *>(handle_); }
+#endif
+};
 
 /**
  * @brief OR of the accept masks of the channels `[band_start, band_stop)`, and whether any pixel ends up true.

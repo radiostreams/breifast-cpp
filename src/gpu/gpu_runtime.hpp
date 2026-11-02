@@ -40,6 +40,7 @@ inline void checkLast(char const *file, int line)
 #define gpuMemcpy(dst, src, size, kind) CHECK_GPU_ERROR(cudaMemcpy(dst, src, size, kind))
 #define gpuMemcpyAsync(dst, src, size, kind, stream) CHECK_GPU_ERROR(cudaMemcpyAsync(dst, src, size, kind, stream))
 #define gpuMemset(ptr, value, size) CHECK_GPU_ERROR(cudaMemset(ptr, value, size))
+#define gpuMemsetAsync(ptr, value, size, stream) CHECK_GPU_ERROR(cudaMemsetAsync(ptr, value, size, stream))
 #define gpuMemcpyToSymbol(symbol, src, size, offset, kind)                                                             \
   CHECK_GPU_ERROR(cudaMemcpyToSymbol(symbol, src, size, offset, kind))
 #define gpuMemcpyToSymbolAsync(symbol, src, size, offset, kind, stream)                                                \
