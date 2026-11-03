@@ -71,4 +71,17 @@ void gpu_mask_or(const bool *accept_mask, size_t n_pixels, int band_start, int b
 void gpu_weighted_band_image(const float *cube, const float *weights, const float *mean_image, float *out_plane,
                              size_t n_pixels, int band_start, int band_stop, float inv_weights_sum,
                              float inv_band_size, GpuStream stream = nullptr);
+
+/**
+ * @brief Per-pixel sums of the second, third and fourth powers over the valid channels:
+ *        `out_sum_k[p] = Σ over channels c with nonzero_channels[c] of cube[c, p]^k`, k = 2, 3, 4.
+ *
+ * Device pointers. Channels flagged false are skipped without being read. The work is enqueued on `stream`.
+ * @param cube `[n_channels, n_pixels]` floats, channel major.
+ * @param nonzero_channels One flag per channel, indexed by the absolute channel.
+ * @param n_pixels `Y * X` of one channel.
+ * @param out_sum2 `[n_pixels]` floats, written completely. Same for `out_sum3` and `out_sum4`.
+ */
+void gpu_spectral_variance_moments(const float *cube, const bool *nonzero_channels, float *out_sum2, float *out_sum3,
+                                   float *out_sum4, size_t n_pixels, int n_channels, GpuStream stream = nullptr);
 } // namespace breifast::gpu

@@ -18,7 +18,8 @@ gpu_lib = static_library('breifast_gpu',
 )
 
 test_gpu = executable('test_gpu',
-  ['tests/test_gpu_smoke.cu', 'tests/test_gpu_mask_or.cu', 'tests/test_gpu_weighted_band_image.cu', catch2_build],
+  ['tests/test_gpu_smoke.cu', 'tests/test_gpu_mask_or.cu', 'tests/test_gpu_weighted_band_image.cu',
+   'tests/test_gpu_spectral_variance_moments.cu', catch2_build],
   include_directories : gpu_include,
   dependencies : [catch2_dep],
   link_with : [gpu_lib],

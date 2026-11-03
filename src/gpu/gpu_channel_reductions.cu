@@ -50,6 +50,34 @@ __global__ void weighted_band_image_kernel(const float *cube, const float *weigh
     out_plane[i_pixel] = result;
   }
 }
+
+__global__ void spectral_variance_moments_kernel(const float *cube, const bool *nonzero_channels, float *out_sum2,
+                                                 float *out_sum3, float *out_sum4, size_t n_pixels, size_t n_channels)
+{
+  const auto i_pixel = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i_pixel < n_pixels)
+  {
+    float sum2 = 0.0f;
+    float sum3 = 0.0f;
+    float sum4 = 0.0f;
+    for (size_t i_channel = 0; i_channel < n_channels; ++i_channel)
+    {
+      if (nonzero_channels[i_channel])
+      {
+        const float value = cube[i_channel * n_pixels + i_pixel];
+        const auto value2 = value * value;
+        const auto value3 = value2 * value;
+        const auto value4 = value3 * value;
+        sum2 += value2;
+        sum3 += value3;
+        sum4 += value4;
+      }
+    }
+    out_sum2[i_pixel] = sum2;
+    out_sum3[i_pixel] = sum3;
+    out_sum4[i_pixel] = sum4;
+  }
+}
 } // namespace
 
 void gpu_mask_or(const bool *accept_mask, size_t n_pixels, int band_start, int band_stop, bool *out_mask, int *out_any,
@@ -93,6 +121,23 @@ void gpu_weighted_band_image(const float *cube, const float *weights, const floa
 
   weighted_band_image_kernel<<<grid_size, block_size, 0, stream>>>(
       cube, weights, mean_image, out_plane, n_pixels, band_start, band_stop, inv_weights_sum, inv_band_size);
+  CHECK_LAST_GPU_ERROR();
+}
+
+void gpu_spectral_variance_moments(const float *cube, const bool *nonzero_channels, float *out_sum2, float *out_sum3,
+                                   float *out_sum4, size_t n_pixels, int n_channels, GpuStream stream)
+{
+  if (n_pixels == 0)
+  {
+    throw std::runtime_error("gpu_spectral_variance_moments: zero pixels");
+  }
+
+  constexpr size_t threads = 256;
+  const dim3 block_size = {threads};
+  const dim3 grid_size = {static_cast<unsigned int>((n_pixels + threads - 1) / threads)};
+
+  spectral_variance_moments_kernel<<<grid_size, block_size, 0, stream>>>(cube, nonzero_channels, out_sum2, out_sum3,
+                                                                         out_sum4, n_pixels, n_channels);
   CHECK_LAST_GPU_ERROR();
 }
 } // namespace breifast::gpu
