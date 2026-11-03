@@ -152,6 +152,7 @@ cpu_sources = [
 ext_module = py.extension_module(
   'breifast_helpers',
   ['src/plane_lot_bindings.cpp'] + cpu_sources + [tbb_build],
+  include_directories : include_directories('src'),
   dependencies : [py.dependency(), pybind11_dep, xtl_dep, xtensor_dep, xsimd_dep, xtensor_python_dep, numpy_dep,
                   tbb_dep, itt_dep, tracy_headers_dep],
   link_args : ['-static-libstdc++', '-static-libgcc'],

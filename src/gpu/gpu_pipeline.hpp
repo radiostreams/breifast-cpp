@@ -3,6 +3,8 @@
 #include <sstream>
 #include <string>
 
+#include "common/snr_filter_params.hpp"
+
 // Host-side interface of the GPU library: no CUDA headers, so C++23 translation units can include it.
 namespace breifast::gpu
 {
@@ -92,4 +94,26 @@ void gpu_combine_noise_map_rms(const float *rms, float rms_floor, const float *s
 void gpu_combine_noise_map_constant(float base_noise, const float *selfnoise_offset, const float *dde_noise,
                                     float selfnoise_scale, float dde_scale, float *out_noise_map, size_t n_pixels,
                                     GpuStream stream = nullptr);
+
+/**
+ * @brief SNR and mask cascade of one band, fused: `snr`, the four cumulative masks, the histogram counts and the SNR
+ *        min/max over the accepted pixels, in one pass over the plane.
+ *
+ * `out_snr[p] = plane[p] / noise_map[p]` where the noise is nonzero and finite, else 0. `image_mask` is refined in place
+ * through four cumulative stages per pixel: valid noise, `|snr| >= mean of snr_cutoff over the band` (when given),
+ * `|plane| >= mean of flux_cutoff over the band` (when given), `noise_map <= median_noise * reject_noise_threshold`
+ * (when the threshold is nonzero); the final value is `|snr| >= threshold` of the pixels that passed. Device pointers;
+ * `snr_cutoff` and `flux_cutoff` may be `nullptr` for no cutoff, and are indexed `[c * n_pixels + p]` for `c` in
+ * `[band_start, band_stop)`. The work is enqueued on `stream`; the summary lands in `out_min_sigma`/`out_max_sigma`.
+ * @param params scalars, see `SnrFilterParams`; `max_sigma_bin` sets the histogram length `2 * max_sigma_bin`.
+ * @param out_snr `[n_pixels]` floats, written completely.
+ * @param image_mask `[n_pixels]` bools, AND-ed in place, written completely.
+ * @param histogram0 `2 * max_sigma_bin` counts under the first mask (only when `histogram_detail > 1`), and likewise
+ *        `histogram1` under the second mask; `histogram2` under the third mask when `histogram_detail > 0`.
+ * @param out_min_sigma,out_max_sigma One float each; `+inf` and `lowest` when no pixel passes the third mask.
+ */
+void gpu_snr_and_filters(const float *plane, const float *noise_map, const float *snr_cutoff, const float *flux_cutoff,
+                         size_t n_pixels, const common::SnrFilterParams &params, float *out_snr, bool *image_mask,
+                         unsigned long long *histogram0, unsigned long long *histogram1, unsigned long long *histogram2,
+                         float *out_min_sigma, float *out_max_sigma, GpuStream stream = nullptr);
 } // namespace breifast::gpu
