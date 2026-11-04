@@ -157,4 +157,18 @@ void gpu_median(const float *values, size_t n, float *out_median, GpuStream stre
  * @param out_median One float, written by this call.
  */
 void gpu_median_abs(const float *values, size_t n, float *out_median, GpuStream stream = nullptr);
+
+/**
+ * @brief Scaled median absolute value of the nonzero pixels of each stamp: the `lmad` of stamp_donut_stats.
+ *
+ * One block per stamp. The block keeps the pixels with `value != 0`, takes the median of `abs(value)` with a
+ * block-level digit select (the even-count average of the two middle ranks), and writes `scale * median`, or 0 when
+ * the stamp has no nonzero pixel. Device pointers; the work is enqueued on `stream`.
+ * @param stamps `[n_stamps, stamp_pixels]` floats, row major, one stamp per row.
+ * @param stamp_pixels `(2 * radius + 1)^2`.
+ * @param scale Multiplier applied to the median, `1.4826` for the donut.
+ * @param out_lmad `[n_stamps]` floats, written completely.
+ */
+void gpu_donut_median_abs(const float *stamps, size_t n_stamps, size_t stamp_pixels, float scale, float *out_lmad,
+                          GpuStream stream = nullptr);
 } // namespace breifast::gpu

@@ -7,8 +7,6 @@ namespace breifast::gpu
 {
 namespace
 {
-// TODO: out_mask[p] = OR over c in [band_start, band_stop) of accept_mask[c * n_pixels + p], and *out_any set when
-// any out_mask[p] is true.
 __global__ void mask_or_kernel(const bool *accept_mask, size_t n_pixels, int band_start, int band_stop, bool *out_mask,
                                int *out_any)
 {
