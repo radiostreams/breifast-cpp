@@ -49,28 +49,24 @@ __global__ void radix_scan_kernel(const uint32_t *histogram, size_t rank, int sh
   }
 }
 
-// Even n only: count the keys equal to the resolved rank-k key (aux[0]) and the largest key strictly below it (aux[1]),
-// to resolve rank k-1.
-__global__ void radix_refine_kernel(const float *values, size_t n, bool abs_mode, const uint32_t *state, uint32_t *aux)
+// Even n only: the largest key strictly below the resolved rank-k key, to resolve rank k-1 when it is not a repeat.
+__global__ void radix_refine_kernel(const float *values, size_t n, bool abs_mode, const uint32_t *state,
+                                    uint32_t *lower_max)
 {
   const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < n)
   {
     const uint32_t key = abs_mode ? abs_key(values[idx]) : signed_key(values[idx]);
-    if (key == state[1])
+    if (key < state[1])
     {
-      atomicAdd(&aux[0], 1U);
-    }
-    else if (key < state[1])
-    {
-      atomicMax(&aux[1], key);
+      atomicMax(lower_max, key);
     }
   }
 }
 
-// state[1] is the full rank-k key. Even n averages it with rank k-1: the same key when it repeats, else the largest key
-// below it.
-__global__ void radix_finalize_kernel(const uint32_t *state, const uint32_t *aux, bool abs_mode, size_t n,
+// state[1] is the full rank-k key. Even n averages it with rank k-1: the same key when the rank-k key is not the first
+// of its repeats, else the largest key below it.
+__global__ void radix_finalize_kernel(const uint32_t *state, const uint32_t *lower_max, bool abs_mode, size_t n,
                                       float *out_median)
 {
   if (blockIdx.x == 0 && threadIdx.x == 0)
@@ -82,7 +78,7 @@ __global__ void radix_finalize_kernel(const uint32_t *state, const uint32_t *aux
       *out_median = hi;
       return;
     }
-    const uint32_t lo_key = aux[0] >= 2 ? hi_key : aux[1];
+    const uint32_t lo_key = static_cast<size_t>(n / 2) > state[0] ? hi_key : lower_max[0];
     const float lo = abs_mode ? abs_value(lo_key) : signed_value(lo_key);
     *out_median = (lo + hi) / 2.F;
   }
@@ -106,14 +102,14 @@ void gpu_median_impl(const float *values, size_t n, float *out_median, bool abs_
   const dim3 block_size = {threads};
   const dim3 grid_size = {static_cast<unsigned int>((n + threads - 1) / threads)};
 
-  constexpr size_t scratch_words = histogram_bins + 5; // 256 bins, then state[3] and aux[2]
+  constexpr size_t scratch_words = histogram_bins + 4; // 256 bins, then state[3] and lower_max[1]
   uint32_t *scratch = nullptr;
   gpuMallocAsync(&scratch, scratch_words * sizeof(uint32_t), stream);
   gpuMemsetAsync(scratch, 0, scratch_words * sizeof(uint32_t), stream);
 
   uint32_t *histogram = scratch;
-  uint32_t *state = scratch + histogram_bins;   // below, prefix, coverage
-  uint32_t *aux = scratch + histogram_bins + 3; // count_eq, max_below
+  uint32_t *state = scratch + histogram_bins;      // below, prefix, coverage
+  uint32_t *lower_max = scratch + histogram_bins + 3;
 
   const int shifts[n_digits] = {24, 16, 8, 0};
   for (int shift : shifts)
@@ -127,11 +123,11 @@ void gpu_median_impl(const float *values, size_t n, float *out_median, bool abs_
 
   if (n % 2 == 0)
   {
-    radix_refine_kernel<<<grid_size, block_size, 0, stream>>>(values, n, abs_mode, state, aux);
+    radix_refine_kernel<<<grid_size, block_size, 0, stream>>>(values, n, abs_mode, state, lower_max);
     CHECK_LAST_GPU_ERROR();
   }
 
-  radix_finalize_kernel<<<1, 1, 0, stream>>>(state, aux, abs_mode, n, out_median);
+  radix_finalize_kernel<<<1, 1, 0, stream>>>(state, lower_max, abs_mode, n, out_median);
   CHECK_LAST_GPU_ERROR();
 
   gpuFreeAsync(scratch, stream);

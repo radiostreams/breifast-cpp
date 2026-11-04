@@ -84,6 +84,13 @@ TEST_CASE("gpu_median and gpu_median_abs match the CPU oracle on small odd and e
   CHECK_THAT(run_median({-2.F, 8.F}, true), WithinRel(5.F));
 }
 
+TEST_CASE("gpu_median averages the middle ranks when the upper rank starts a repeated run", "[gpu][order_statistics]")
+{
+  // Sorted {5, 7, 9, 9}: rank n/2 = 2 is the first 9, so rank 1 is 7 and the median is 8, not 9.
+  CHECK_THAT(run_median({5.F, 7.F, 9.F, 9.F}, false), WithinRel(8.F));
+  CHECK_THAT(run_median({5.F, 7.F, 9.F, 9.F}, true), WithinRel(8.F));
+}
+
 TEST_CASE("gpu_median matches numpy on seeded arrays with many ties, odd and even n", "[gpu][order_statistics]")
 {
   // Expected values from np.median(x) and np.median(np.abs(x)) on the float32 arrays built by the same LCG.
