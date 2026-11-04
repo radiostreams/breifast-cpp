@@ -40,10 +40,17 @@ struct CUstream_st;
 struct GpuStream
 {
   void *handle_ = nullptr;
-  GpuStream(std::nullptr_t = nullptr) {}
-  GpuStream(void *h) : handle_(h) {}
+  GpuStream(std::nullptr_t = nullptr)
+  {
+  }
+  GpuStream(void *h) : handle_(h)
+  {
+  }
 #ifdef __CUDACC__
-  operator ::CUstream_st *() const { return static_cast<::CUstream_st *>(handle_); }
+  operator ::CUstream_st *() const
+  {
+    return static_cast<::CUstream_st *>(handle_);
+  }
 #endif
 };
 
@@ -71,8 +78,8 @@ void gpu_mask_or(const bool *accept_mask, size_t n_pixels, int band_start, int b
  * @param out_plane `[n_pixels]` floats, written completely.
  */
 void gpu_weighted_band_image(const float *cube, const float *weights, const float *mean_image, float *out_plane,
-                             size_t n_pixels, int band_start, int band_stop, float inv_weights_sum,
-                             float inv_band_size, GpuStream stream = nullptr);
+                             size_t n_pixels, int band_start, int band_stop, float inv_weights_sum, float inv_band_size,
+                             GpuStream stream = nullptr);
 
 /**
  * @brief Per-pixel sums of the second, third and fourth powers over the valid channels:
@@ -87,9 +94,9 @@ void gpu_weighted_band_image(const float *cube, const float *weights, const floa
 void gpu_spectral_variance_moments(const float *cube, const bool *nonzero_channels, float *out_sum2, float *out_sum3,
                                    float *out_sum4, size_t n_pixels, int n_channels, GpuStream stream = nullptr);
 
-void gpu_combine_noise_map_rms(const float *rms, float rms_floor, const float *selfnoise_offset,
-                               const float *dde_noise, float selfnoise_scale, float dde_scale, float *out_noise_map,
-                               size_t n_pixels, GpuStream stream = nullptr);
+void gpu_combine_noise_map_rms(const float *rms, float rms_floor, const float *selfnoise_offset, const float *dde_noise,
+                               float selfnoise_scale, float dde_scale, float *out_noise_map, size_t n_pixels,
+                               GpuStream stream = nullptr);
 
 void gpu_combine_noise_map_constant(float base_noise, const float *selfnoise_offset, const float *dde_noise,
                                     float selfnoise_scale, float dde_scale, float *out_noise_map, size_t n_pixels,
@@ -99,8 +106,9 @@ void gpu_combine_noise_map_constant(float base_noise, const float *selfnoise_off
  * @brief SNR and mask cascade of one band, fused: `snr`, the four cumulative masks, the histogram counts and the SNR
  *        min/max over the accepted pixels, in one pass over the plane.
  *
- * `out_snr[p] = plane[p] / noise_map[p]` where the noise is nonzero and finite, else 0. `image_mask` is refined in place
- * through four cumulative stages per pixel: valid noise, `|snr| >= mean of snr_cutoff over the band` (when given),
+ * `out_snr[p] = plane[p] / noise_map[p]` where the noise is nonzero and finite, else 0. `image_mask` is refined in
+ * place through four cumulative stages per pixel: valid noise, `|snr| >= mean of snr_cutoff over the band` (when
+ * given),
  * `|plane| >= mean of flux_cutoff over the band` (when given), `noise_map <= median_noise * reject_noise_threshold`
  * (when the threshold is nonzero); the final value is `|snr| >= threshold` of the pixels that passed. Device pointers;
  * `snr_cutoff` and `flux_cutoff` may be `nullptr` for no cutoff, and are indexed `[c * n_pixels + p]` for `c` in
@@ -118,8 +126,8 @@ void gpu_snr_and_filters(const float *plane, const float *noise_map, const float
                          float *out_min_sigma, float *out_max_sigma, GpuStream stream = nullptr);
 
 /**
- * @brief Local RMS noise map: a sliding `boxsize x boxsize` window over `plane`, edge-corrected, square root of the mean
- *        of `plane^2`.
+ * @brief Local RMS noise map: a sliding `boxsize x boxsize` window over `plane`, edge-corrected, square root of the
+ * mean of `plane^2`.
  *
  * Two separable passes with double accumulators, the horizontal running sums into `row_window_sums` then the vertical
  * pass. Device pointers; the work is enqueued on `stream`. `boxsize <= 0` is treated as 1.
@@ -129,4 +137,24 @@ void gpu_snr_and_filters(const float *plane, const float *noise_map, const float
  */
 void gpu_rms_noise_map(const float *plane, size_t n_y, size_t n_x, long boxsize, float *row_window_sums, float *out_rms,
                        GpuStream stream = nullptr);
+
+/**
+ * @brief Exact median of `values`, numpy semantics: odd `n` picks rank `n/2`, even `n` averages ranks `n/2 - 1` and
+ *        `n/2`.
+ *
+ * Order-preserving key, four MSB-first byte passes with a device-wide 256-bin digit histogram, then a scan of the bins
+ * per pass. Device pointers; the work is enqueued on `stream`. `n == 0` writes NaN.
+ * @param values `[n]` floats, read only.
+ * @param out_median One float, written by this call.
+ */
+void gpu_median(const float *values, size_t n, float *out_median, GpuStream stream = nullptr);
+
+/**
+ * @brief Exact median of `|values|`, the global MAD input.
+ *
+ * Same as gpu_median() on the absolute values.
+ * @param values `[n]` floats, read only.
+ * @param out_median One float, written by this call.
+ */
+void gpu_median_abs(const float *values, size_t n, float *out_median, GpuStream stream = nullptr);
 } // namespace breifast::gpu

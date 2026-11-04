@@ -1,0 +1,140 @@
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
+#include <cuda_runtime.h>
+
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <vector>
+
+#include "gpu_buffers.hpp"
+#include "gpu_pipeline.hpp"
+#include "gpu_runtime.hpp"
+
+using breifast::gpu::DeviceVector;
+using breifast::gpu::gpu_median;
+using breifast::gpu::gpu_median_abs;
+using breifast::gpu::PinnedVector;
+using Catch::Matchers::WithinRel;
+
+namespace
+{
+float run_median(const std::vector<float> &values, bool abs_mode)
+{
+  const size_t n = values.size();
+  const size_t n_alloc = n == 0 ? 1 : n;
+
+  PinnedVector<float> host_values(values.begin(), values.end());
+  DeviceVector<float> device_values(n_alloc);
+  DeviceVector<float> device_median(1);
+
+  cudaStream_t stream{};
+  gpuStreamCreate(&stream);
+
+  if (n > 0)
+  {
+    gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_values.data()), thrust::raw_pointer_cast(host_values.data()),
+                               n * sizeof(float), stream);
+  }
+
+  if (abs_mode)
+  {
+    gpu_median_abs(thrust::raw_pointer_cast(device_values.data()), n, thrust::raw_pointer_cast(device_median.data()),
+                   stream);
+  }
+  else
+  {
+    gpu_median(thrust::raw_pointer_cast(device_values.data()), n, thrust::raw_pointer_cast(device_median.data()), stream);
+  }
+
+  float result = 0.F;
+  gpuMemcpyDeviceToHostAsync(&result, thrust::raw_pointer_cast(device_median.data()), sizeof(float), stream);
+  gpuStreamSynchronize(stream);
+  gpuStreamDestroy(stream);
+  return result;
+}
+
+// Same LCG as the Python reference and the CPU test, so both sides build bit-identical float32 inputs. Every value is an
+// integer in [-10000, 10000] divided by 64, which is exact in float32, and the 20001-value range forces many ties.
+std::vector<float> lcg_values(size_t n, uint32_t seed)
+{
+  std::vector<float> values(n);
+  uint32_t state = seed;
+  for (auto &value : values)
+  {
+    state = state * 1664525U + 1013904223U;
+    value = static_cast<float>(static_cast<int>((state >> 8) % 20001) - 10000) / 64.F;
+  }
+  return values;
+}
+} // namespace
+
+TEST_CASE("gpu_median and gpu_median_abs match the CPU oracle on small odd and even arrays", "[gpu][order_statistics]")
+{
+  CHECK_THAT(run_median({5.F, 1.F, 4.F, 2.F, 3.F}, false), WithinRel(3.F));
+  CHECK_THAT(run_median({5.F, 1.F, 4.F, 2.F, 3.F, 6.F}, false), WithinRel(3.5F));
+  CHECK_THAT(run_median({7.F}, false), WithinRel(7.F));
+  CHECK_THAT(run_median({2.F, 8.F}, false), WithinRel(5.F));
+  CHECK_THAT(run_median({-3.F, -1.F, -2.F}, false), WithinRel(-2.F));
+
+  CHECK_THAT(run_median({-5.F, 1.F, -4.F, 2.F, 3.F}, true), WithinRel(3.F));
+  CHECK_THAT(run_median({-6.F, 1.F, -4.F, 2.F, 3.F, 5.F}, true), WithinRel(3.5F));
+  CHECK_THAT(run_median({-7.F}, true), WithinRel(7.F));
+  CHECK_THAT(run_median({-2.F, 8.F}, true), WithinRel(5.F));
+}
+
+TEST_CASE("gpu_median matches numpy on seeded arrays with many ties, odd and even n", "[gpu][order_statistics]")
+{
+  // Expected values from np.median(x) and np.median(np.abs(x)) on the float32 arrays built by the same LCG.
+  struct Case
+  {
+    size_t n;
+    uint32_t seed;
+    float median;
+    float median_abs;
+  };
+  const std::vector<Case> cases{
+      {1001, 7, -7.71875F, 76.09375F},
+      {1000, 7, -7.5625F, 75.984375F},
+      {100000, 42, 0.15625F, 78.578125F},
+      {99999, 42, 0.15625F, 78.578125F},
+  };
+
+  for (const auto &c : cases)
+  {
+    INFO("n=" << c.n << " seed=" << c.seed);
+    const auto values = lcg_values(c.n, c.seed);
+    CHECK_THAT(run_median(values, false), WithinRel(c.median));
+    CHECK_THAT(run_median(values, true), WithinRel(c.median_abs));
+  }
+}
+
+TEST_CASE("gpu_median handles ties, zeros of both signs, subnormals and infinities like numpy",
+          "[gpu][order_statistics]")
+{
+  constexpr float inf = std::numeric_limits<float>::infinity();
+  const float subnormal_1 = 1e-40F;
+  const float subnormal_2 = 2e-40F;
+  const float subnormal_3 = 3e-40F;
+
+  CHECK_THAT(run_median({4.F, 4.F, 4.F, 4.F, 4.F, 4.F, 4.F}, false), WithinRel(4.F));
+  CHECK_THAT(run_median({3.F, 3.F, 3.F, 1.F, 3.F, 3.F}, false), WithinRel(3.F));
+  // -0 and +0 compare equal, so this pins the value and leaves the sign of the returned zero free.
+  CHECK_THAT(run_median({-0.F, 0.F, -0.F, 0.F, 0.F}, false), WithinRel(0.F));
+  CHECK_THAT(run_median({subnormal_1, subnormal_3, subnormal_2}, false), WithinRel(subnormal_2));
+
+  CHECK_THAT(run_median({-inf, 1.F, inf}, false), WithinRel(1.F));
+  CHECK_THAT(run_median({1.F, inf}, false), WithinRel(inf));
+  CHECK(std::isnan(run_median({-inf, inf}, false))); // (-inf + inf) / 2, same as numpy
+  CHECK_THAT(run_median({-inf, 1.F, inf}, true), WithinRel(inf));
+  CHECK_THAT(run_median({-inf, inf}, true), WithinRel(inf));
+  CHECK_THAT(run_median({-inf, 1.F, 2.F}, true), WithinRel(2.F));
+  CHECK_THAT(run_median({-0.F, 0.F, -0.F}, true), WithinRel(0.F));
+}
+
+TEST_CASE("gpu_median writes NaN for empty input", "[gpu][order_statistics]")
+{
+  CHECK(std::isnan(run_median({}, false)));
+  CHECK(std::isnan(run_median({}, true)));
+}

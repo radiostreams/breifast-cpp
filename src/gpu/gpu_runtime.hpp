@@ -35,6 +35,8 @@ inline void checkLast(char const *file, int line)
 
 #define gpuMalloc(ptr, size) CHECK_GPU_ERROR(cudaMalloc(ptr, size))
 #define gpuFree(ptr) CHECK_GPU_ERROR(cudaFree(ptr))
+#define gpuMallocAsync(ptr, size, stream) CHECK_GPU_ERROR(cudaMallocAsync(ptr, size, stream))
+#define gpuFreeAsync(ptr, stream) CHECK_GPU_ERROR(cudaFreeAsync(ptr, stream))
 #define gpuMallocHost(ptr, size) CHECK_GPU_ERROR(cudaMallocHost(ptr, size))
 #define gpuFreeHost(ptr) CHECK_GPU_ERROR(cudaFreeHost(ptr))
 #define gpuMemcpy(dst, src, size, kind) CHECK_GPU_ERROR(cudaMemcpy(dst, src, size, kind))
