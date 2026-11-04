@@ -1,1 +1,113 @@
 #include "gpu_pipeline.hpp"
+
+#include "gpu_runtime.hpp"
+
+namespace breifast::gpu
+{
+
+namespace
+{
+__device__ inline long min_of(long i, long radius)
+{
+  const long bound = i - radius;
+  return bound > 0 ? bound : 0;
+}
+
+__device__ inline long max_of(long i, long window_size, long radius, long n)
+{
+  const long bound = i + window_size - radius;
+  return bound < n ? bound : n;
+}
+
+__global__ void window_rows_kernel(const float *plane, const size_t n_y, const size_t n_x, long box_size,
+                                   float *row_window_sums)
+{
+  const auto i_y = blockIdx.x * blockDim.x + threadIdx.x;
+  const auto radius = box_size / 2;
+  const auto window_size = box_size > 0 ? box_size : 1;
+  if (i_y < n_y)
+  {
+    double acc = 0.;
+    for (long i_x = 0; i_x < max_of(0, window_size, radius, static_cast<long>(n_x)); ++i_x)
+    {
+      const double value = plane[i_y * n_x + i_x];
+      acc += value * value;
+    }
+
+    for (long i_x = 0; i_x < n_x; ++i_x)
+    {
+      row_window_sums[i_y * n_x + i_x] = acc;
+      const auto entering_column = i_x + window_size - radius;
+      const auto leaving_column = i_x - radius;
+      if (entering_column < n_x)
+      {
+        const double value = plane[i_y * n_x + entering_column];
+        acc += value * value;
+      }
+
+      if (leaving_column >= 0)
+      {
+        const double value = plane[i_y * n_x + leaving_column];
+        acc -= value * value;
+      }
+    }
+  }
+}
+
+__global__ void window_cols_kernel(const float *row_window_sums, const size_t n_y, const size_t n_x, long box_size,
+                                   float *out)
+{
+  const auto i_x = blockIdx.x * blockDim.x + threadIdx.x;
+  const auto radius = box_size / 2;
+  const auto window_size = box_size > 0 ? box_size : 1;
+  if (i_x < n_x)
+  {
+    double acc = 0.;
+
+    for (long i_y = 0; i_y < max_of(0, window_size, radius, static_cast<long>(n_y)); ++i_y)
+    {
+      acc += row_window_sums[i_y * n_x + i_x];
+    }
+
+    for (long i_y = 0; i_y < n_y; ++i_y)
+    {
+      const long dx = max_of(i_x, window_size, radius, static_cast<long>(n_x)) - min_of(i_x, radius);
+      const long dy = max_of(i_y, window_size, radius, static_cast<long>(n_y)) - min_of(i_y, radius);
+      const long count = dx * dy;
+
+      out[i_y * n_x + i_x] = static_cast<float>(sqrt(acc / static_cast<double>(count)));
+
+      const long entering_row = i_y + window_size - radius;
+      const long leaving_row = i_y - radius;
+      if (entering_row < n_y)
+      {
+        acc += row_window_sums[entering_row * n_x + i_x];
+      }
+      if (leaving_row >= 0)
+      {
+        acc -= row_window_sums[leaving_row * n_x + i_x];
+      }
+    }
+  }
+}
+} // namespace
+
+void gpu_rms_noise_map(const float *plane, size_t n_y, size_t n_x, long boxsize, float *row_window_sums, float *out_rms,
+                       GpuStream stream)
+{
+  if (n_y == 0 || n_x == 0)
+  {
+    throw std::runtime_error("gpu_rms_noise_map: n_y and n_x must be greater than 0");
+  }
+
+  const size_t threads = 256;
+  const dim3 block_size = {threads};
+  const dim3 row_grid = {static_cast<unsigned int>((n_y + threads - 1) / threads)};
+  window_rows_kernel<<<row_grid, block_size, 0, stream>>>(plane, n_y, n_x, boxsize, row_window_sums);
+  CHECK_LAST_GPU_ERROR();
+  const dim3 col_grid = {static_cast<unsigned int>((n_x + threads - 1) / threads)};
+  window_cols_kernel<<<col_grid, block_size, 0, stream>>>(row_window_sums, n_y, n_x, boxsize, out_rms);
+  CHECK_LAST_GPU_ERROR();
+}
+
+} // namespace breifast::gpu

@@ -116,4 +116,17 @@ void gpu_snr_and_filters(const float *plane, const float *noise_map, const float
                          size_t n_pixels, const common::SnrFilterParams &params, float *out_snr, bool *image_mask,
                          unsigned long long *histogram0, unsigned long long *histogram1, unsigned long long *histogram2,
                          float *out_min_sigma, float *out_max_sigma, GpuStream stream = nullptr);
+
+/**
+ * @brief Local RMS noise map: a sliding `boxsize x boxsize` window over `plane`, edge-corrected, square root of the mean
+ *        of `plane^2`.
+ *
+ * Two separable passes with double accumulators, the horizontal running sums into `row_window_sums` then the vertical
+ * pass. Device pointers; the work is enqueued on `stream`. `boxsize <= 0` is treated as 1.
+ * @param plane `[n_y, n_x]` floats, row major.
+ * @param row_window_sums Caller scratch of `n_y * n_x` floats, overwritten.
+ * @param out_rms `[n_y, n_x]` floats, written completely.
+ */
+void gpu_rms_noise_map(const float *plane, size_t n_y, size_t n_x, long boxsize, float *row_window_sums, float *out_rms,
+                       GpuStream stream = nullptr);
 } // namespace breifast::gpu
