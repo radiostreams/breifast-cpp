@@ -1,3 +1,5 @@
+#include <cfloat>
+
 #include "gpu_pipeline.hpp"
 
 #include "gpu_runtime.hpp"
@@ -134,6 +136,44 @@ __global__ void donut_median_abs_kernel(const float *stamps, size_t stamp_pixels
     }
   }
 }
+
+constexpr size_t stamp_block_threads = 256;
+
+__global__ void stamp_abs_extreme_kernel(const float *stamps, size_t stamp_pixels, float *out_extreme)
+{
+  const size_t i_stamp = blockIdx.x;
+  const float *stamp = stamps + i_stamp * stamp_pixels;
+
+  float min_value = FLT_MAX;
+  float max_value = -FLT_MAX;
+  for (size_t i = threadIdx.x; i < stamp_pixels; i += blockDim.x)
+  {
+    const float value = stamp[i];
+    min_value = fminf(min_value, value);
+    max_value = fmaxf(max_value, value);
+  }
+
+  __shared__ float shared_min[stamp_block_threads];
+  __shared__ float shared_max[stamp_block_threads];
+  shared_min[threadIdx.x] = min_value;
+  shared_max[threadIdx.x] = max_value;
+  __syncthreads();
+
+  for (size_t stride = blockDim.x / 2; stride > 0; stride >>= 1)
+  {
+    if (threadIdx.x < stride)
+    {
+      shared_min[threadIdx.x] = fminf(shared_min[threadIdx.x], shared_min[threadIdx.x + stride]);
+      shared_max[threadIdx.x] = fmaxf(shared_max[threadIdx.x], shared_max[threadIdx.x + stride]);
+    }
+    __syncthreads();
+  }
+
+  if (threadIdx.x == 0)
+  {
+    out_extreme[i_stamp] = fmaxf(fabsf(shared_min[0]), fabsf(shared_max[0]));
+  }
+}
 } // namespace
 
 /**
@@ -164,6 +204,24 @@ void gpu_donut_median_abs(const float *stamps, size_t n_stamps, size_t stamp_pix
   const dim3 grid_size = {static_cast<unsigned int>(n_stamps)};
 
   donut_median_abs_kernel<<<grid_size, block_size, 0, stream>>>(stamps, stamp_pixels, scale, out_lmad);
+  CHECK_LAST_GPU_ERROR();
+}
+
+void gpu_stamp_abs_extreme(const float *stamps, size_t n_stamps, size_t stamp_pixels, float *out_extreme,
+                           GpuStream stream)
+{
+  if (n_stamps == 0)
+  {
+    throw std::runtime_error{"gpu_stamp_abs_extreme: no stamps to process"};
+  }
+  if (stamp_pixels == 0)
+  {
+    throw std::runtime_error{"gpu_stamp_abs_extreme: empty stamps"};
+  }
+
+  const dim3 block_size = {stamp_block_threads};
+  const dim3 grid_size = {static_cast<unsigned int>(n_stamps)};
+  stamp_abs_extreme_kernel<<<grid_size, block_size, 0, stream>>>(stamps, stamp_pixels, out_extreme);
   CHECK_LAST_GPU_ERROR();
 }
 } // namespace breifast::gpu

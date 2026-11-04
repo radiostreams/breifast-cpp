@@ -171,4 +171,16 @@ void gpu_median_abs(const float *values, size_t n, float *out_median, GpuStream 
  */
 void gpu_donut_median_abs(const float *stamps, size_t n_stamps, size_t stamp_pixels, float scale, float *out_lmad,
                           GpuStream stream = nullptr);
+
+/**
+ * @brief `max(|min|, |max|)` over each stamp, the local-noise extreme of stamp_abs_extreme.
+ *
+ * One block per stamp, min and max reduced over the stamp and combined into one number per stamp. NaN pixels are
+ * ignored, and a stamp with no other value gives `FLT_MAX`. Device pointers; the work is enqueued on `stream`.
+ * @param stamps `[n_stamps, stamp_pixels]` floats, row major, one stamp per row.
+ * @param stamp_pixels `(2 * radius + 1)^2`.
+ * @param out_extreme `[n_stamps]` floats, written completely.
+ */
+void gpu_stamp_abs_extreme(const float *stamps, size_t n_stamps, size_t stamp_pixels, float *out_extreme,
+                           GpuStream stream = nullptr);
 } // namespace breifast::gpu

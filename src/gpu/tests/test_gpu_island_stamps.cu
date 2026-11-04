@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
@@ -15,6 +16,7 @@
 
 using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_donut_median_abs;
+using breifast::gpu::gpu_stamp_abs_extreme;
 using breifast::gpu::PinnedVector;
 using Catch::Matchers::WithinRel;
 
@@ -104,6 +106,44 @@ std::vector<float> lcg_stamp(uint32_t seed, long inner_half)
   }
   return stamp;
 }
+
+std::vector<float> run_abs_extreme(const std::vector<std::vector<float>> &stamps)
+{
+  const size_t n_stamps = stamps.size();
+  const size_t stamp_pixels = stamps.front().size();
+
+  std::vector<float> flat;
+  flat.reserve(n_stamps * stamp_pixels);
+  for (const auto &stamp : stamps)
+  {
+    flat.insert(flat.end(), stamp.begin(), stamp.end());
+  }
+
+  PinnedVector<float> host_stamps(flat.begin(), flat.end());
+  DeviceVector<float> device_stamps(flat.size());
+  DeviceVector<float> device_out(n_stamps);
+
+  cudaStream_t stream{};
+  gpuStreamCreate(&stream);
+
+  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_stamps.data()), thrust::raw_pointer_cast(host_stamps.data()),
+                             flat.size() * sizeof(float), stream);
+  gpu_stamp_abs_extreme(thrust::raw_pointer_cast(device_stamps.data()), n_stamps, stamp_pixels,
+                        thrust::raw_pointer_cast(device_out.data()), stream);
+
+  PinnedVector<float> host_out(n_stamps);
+  gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_out.data()), thrust::raw_pointer_cast(device_out.data()),
+                             n_stamps * sizeof(float), stream);
+  gpuStreamSynchronize(stream);
+  gpuStreamDestroy(stream);
+
+  return std::vector<float>(host_out.begin(), host_out.end());
+}
+
+float run_abs_extreme(const std::vector<float> &stamp)
+{
+  return run_abs_extreme(std::vector<std::vector<float>>{stamp})[0];
+}
 } // namespace
 
 TEST_CASE("gpu_donut_median_abs matches numpy on a seeded 9x9 stamp with a zeroed centre", "[gpu][island_stamps]")
@@ -191,6 +231,89 @@ TEST_CASE("gpu_donut_median_abs rejects zero stamps and zero stamp pixels", "[gp
 
   REQUIRE_THROWS_AS(gpu_donut_median_abs(nullptr, 0, 9, lmad_scale, out_ptr, stream), std::runtime_error);
   REQUIRE_THROWS_AS(gpu_donut_median_abs(nullptr, 1, 0, lmad_scale, out_ptr, stream), std::runtime_error);
+
+  gpuStreamDestroy(stream);
+}
+
+TEST_CASE("gpu_stamp_abs_extreme matches numpy's max(abs(min), abs(max)) on a seeded 5x5 stamp",
+          "[gpu][island_stamps]")
+{
+  // numpy (default_rng seed 42, 2 * normal, float32): min -3.90207028, max 2.44508266, so the extreme is the minimum.
+  const std::vector<float> stamp = {
+      0.609434187F, -2.07996821F, 1.50090241F, 1.88112938F, -3.90207028F, -2.60435891F, 0.255680799F,
+      -0.632485211F, -0.0336023159F, -1.70608783F, 1.75879598F, 1.55558383F, 0.132061392F, 2.25448251F,
+      0.935018659F, -1.7185849F, 0.737501562F, -1.91776526F, 1.75690055F, -0.0998518243F, -0.369724721F,
+      -1.36185908F, 2.44508266F, -0.309058964F, -0.856655657F,
+  };
+  REQUIRE(stamp.size() == 25);
+
+  CHECK_THAT(run_abs_extreme(stamp), WithinRel(3.90207028F));
+}
+
+TEST_CASE("gpu_stamp_abs_extreme takes the larger of the two sides and 0 for a zero stamp", "[gpu][island_stamps]")
+{
+  CHECK_THAT(run_abs_extreme(std::vector<float>{-5.F, 2.F, 3.F}), WithinRel(5.F));
+  CHECK_THAT(run_abs_extreme(std::vector<float>{-2.F, 1.F, 4.F}), WithinRel(4.F));
+  CHECK_THAT(run_abs_extreme(std::vector<float>{-4.F, 1.F, 4.F}), WithinRel(4.F));
+  CHECK_THAT(run_abs_extreme(std::vector<float>{-3.F}), WithinRel(3.F));
+  CHECK_THAT(run_abs_extreme(std::vector<float>(49, 0.F)), WithinRel(0.F));
+}
+
+TEST_CASE("gpu_stamp_abs_extreme ignores NaN pixels and reports FLT_MAX when nothing else is there",
+          "[gpu][island_stamps]")
+{
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  const float inf = std::numeric_limits<float>::infinity();
+
+  CHECK_THAT(run_abs_extreme(std::vector<float>{nan, -7.F, 2.F, nan}), WithinRel(7.F));
+  CHECK_THAT(run_abs_extreme(std::vector<float>(2, nan)), WithinRel(std::numeric_limits<float>::max()));
+  CHECK_THAT(run_abs_extreme(std::vector<float>{1.F, -inf, 3.F}), WithinRel(inf));
+  CHECK_THAT(run_abs_extreme(std::vector<float>{1.F, inf, nan}), WithinRel(inf));
+}
+
+TEST_CASE("gpu_stamp_abs_extreme computes each stamp independently, one block per stamp", "[gpu][island_stamps]")
+{
+  const std::vector<float> a = {-5.F, 2.F, 3.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F}; // -> 5
+  const std::vector<float> b(9, 0.F);                                          // -> 0
+  const std::vector<float> c = {-1.F, 1.F, 8.F, 2.F, 3.F, 4.F, 5.F, 6.F, 7.F}; // -> 8
+
+  const auto out = run_abs_extreme({a, b, c});
+
+  REQUIRE(out.size() == 3);
+  CHECK_THAT(out[0], WithinRel(5.F));
+  CHECK_THAT(out[1], WithinRel(0.F));
+  CHECK_THAT(out[2], WithinRel(8.F));
+}
+
+TEST_CASE("gpu_stamp_abs_extreme covers a stamp larger than a block against a host reference",
+          "[gpu][island_stamps]")
+{
+  // 21x21 = 441 pixels, larger than the 256-thread block, so the strided loop and the tree reduction both run.
+  const std::vector<float> stamp = lcg_stamp(7U, 0);
+  REQUIRE(stamp.size() == 441);
+
+  float host_min = std::numeric_limits<float>::max();
+  float host_max = std::numeric_limits<float>::lowest();
+  for (const float value : stamp)
+  {
+    host_min = std::min(host_min, value);
+    host_max = std::max(host_max, value);
+  }
+  const float expected = std::max(std::fabs(host_min), std::fabs(host_max));
+
+  CHECK_THAT(run_abs_extreme(stamp), WithinRel(expected));
+}
+
+TEST_CASE("gpu_stamp_abs_extreme rejects zero stamps and zero stamp pixels", "[gpu][island_stamps]")
+{
+  cudaStream_t stream{};
+  gpuStreamCreate(&stream);
+
+  DeviceVector<float> out(1);
+  float *out_ptr = thrust::raw_pointer_cast(out.data());
+
+  REQUIRE_THROWS_AS(gpu_stamp_abs_extreme(nullptr, 0, 9, out_ptr, stream), std::runtime_error);
+  REQUIRE_THROWS_AS(gpu_stamp_abs_extreme(nullptr, 1, 0, out_ptr, stream), std::runtime_error);
 
   gpuStreamDestroy(stream);
 }
