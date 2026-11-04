@@ -1,5 +1,6 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <fstream>
 #include <nlohmann/json.hpp>
 
@@ -170,26 +171,26 @@ TEST_CASE("run_batch_core matches an independent Python reference across a batch
         REQUIRE(index < result.detections.peak_y().size());
 
         CHECK(result.detections.island_size()[index] == e.at("island_size").get<long>());
-        CHECK(result.detections.local_noise()[index] ==
-             Catch::Approx(e.at("local_noise").get<float>()).epsilon(1e-3));
-        CHECK(result.detections.local_noise_median_ratio()[index] ==
-             Catch::Approx(e.at("local_noise_median_ratio").get<float>()).epsilon(1e-3));
-        CHECK(result.detections.signal_to_noise()[index] ==
-             Catch::Approx(e.at("signal_to_noise").get<float>()).epsilon(1e-3));
-        CHECK(result.detections.signal_to_noise_rms()[index] ==
-             Catch::Approx(e.at("signal_to_noise_rms").get<float>()).epsilon(1e-3));
+        CHECK_THAT(result.detections.local_noise()[index],
+                   Catch::Matchers::WithinRel(static_cast<double>(e.at("local_noise").get<float>()), 1e-3));
+        CHECK_THAT(result.detections.local_noise_median_ratio()[index],
+                   Catch::Matchers::WithinRel(static_cast<double>(e.at("local_noise_median_ratio").get<float>()), 1e-3));
+        CHECK_THAT(result.detections.signal_to_noise()[index],
+                   Catch::Matchers::WithinRel(static_cast<double>(e.at("signal_to_noise").get<float>()), 1e-3));
+        CHECK_THAT(result.detections.signal_to_noise_rms()[index],
+                   Catch::Matchers::WithinRel(static_cast<double>(e.at("signal_to_noise_rms").get<float>()), 1e-3));
         const auto extreme = e.at("extreme").get<float>();
         const auto expected_extended_box = extreme != 0.F ? e.at("flux").get<float>() * ratio / extreme : 0.F;
-        CHECK(result.detections.signal_to_noise_extended_box()[index] ==
-             Catch::Approx(expected_extended_box).epsilon(1e-3));
-        CHECK(result.detections.signal_to_noise_local_mad()[index] ==
-             Catch::Approx(e.at("signal_to_noise_local_mad").get<float>()).epsilon(1e-3));
-        CHECK(result.detections.signal_to_noise_global_mad()[index] ==
-             Catch::Approx(e.at("signal_to_noise_global_mad").get<float>()).epsilon(1e-3));
-        CHECK(result.detections.self_noise()[index] ==
-             Catch::Approx(e.at("self_noise").get<float>()).epsilon(1e-3));
-        CHECK(result.detections.excess_noise_factor()[index] ==
-             Catch::Approx(e.at("excess_noise_factor").get<float>()).epsilon(1e-3));
+        CHECK_THAT(result.detections.signal_to_noise_extended_box()[index],
+                   Catch::Matchers::WithinRel(static_cast<double>(expected_extended_box), 1e-3));
+        CHECK_THAT(result.detections.signal_to_noise_local_mad()[index],
+                   Catch::Matchers::WithinRel(static_cast<double>(e.at("signal_to_noise_local_mad").get<float>()), 1e-3));
+        CHECK_THAT(result.detections.signal_to_noise_global_mad()[index],
+                   Catch::Matchers::WithinRel(static_cast<double>(e.at("signal_to_noise_global_mad").get<float>()), 1e-3));
+        CHECK_THAT(result.detections.self_noise()[index],
+                   Catch::Matchers::WithinRel(static_cast<double>(e.at("self_noise").get<float>()), 1e-3));
+        CHECK_THAT(result.detections.excess_noise_factor()[index],
+                   Catch::Matchers::WithinRel(static_cast<double>(e.at("excess_noise_factor").get<float>()), 1e-3));
       }
     }
   }

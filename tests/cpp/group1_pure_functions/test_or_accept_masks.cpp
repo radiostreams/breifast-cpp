@@ -8,6 +8,7 @@
 #include "cpu/channel_reductions.hpp"
 
 using breifast::plane_lot::detail::or_accept_masks;
+using Catch::Matchers::Equals;
 
 namespace
 {
@@ -65,7 +66,7 @@ TEST_CASE("or_accept_masks matches a seeded-random 4x37 mask against a Python re
   const auto result = run_or_accept_masks(channels, 1, 4);
 
   CHECK(result.any);
-  CHECK(result.mask == expected);
+  CHECK_THAT(result.mask, Equals(expected));
 }
 
 TEST_CASE("or_accept_masks overwrites the stale true pixels of out_mask", "[or_accept_masks]")
@@ -81,7 +82,7 @@ TEST_CASE("or_accept_masks overwrites the stale true pixels of out_mask", "[or_a
   const auto result = run_or_accept_masks(channels, 2, 3, true);
 
   CHECK(result.any);
-  CHECK(result.mask == "0000000000000000001");
+  CHECK_THAT(result.mask, Equals("0000000000000000001"));
 }
 
 TEST_CASE("or_accept_masks returns false and an all-false mask when the band has no true pixel", "[or_accept_masks]")
@@ -97,7 +98,7 @@ TEST_CASE("or_accept_masks returns false and an all-false mask when the band has
   const auto result = run_or_accept_masks(channels, 1, 3, true);
 
   CHECK_FALSE(result.any);
-  CHECK(result.mask == "0000000000000000");
+  CHECK_THAT(result.mask, Equals("0000000000000000"));
 }
 
 TEST_CASE("or_accept_masks sees a true pixel in the last channel and the last pixel", "[or_accept_masks]")
@@ -112,7 +113,7 @@ TEST_CASE("or_accept_masks sees a true pixel in the last channel and the last pi
   const auto result = run_or_accept_masks(channels, 0, 3);
 
   CHECK(result.any);
-  CHECK(result.mask == "000000000000000000000000000000001");
+  CHECK_THAT(result.mask, Equals("000000000000000000000000000000001"));
 }
 
 TEST_CASE("or_accept_masks rejects a band that is negative or empty or reversed", "[or_accept_masks]")

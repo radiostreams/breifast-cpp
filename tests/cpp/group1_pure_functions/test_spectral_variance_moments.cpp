@@ -6,11 +6,13 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
+#include <catch2/matchers/catch_matchers_vector.hpp>
 
 #include "cpu/channel_reductions.hpp"
 
 using breifast::plane_lot::detail::spectral_variance_moments;
 using Catch::Approx;
+using Catch::Matchers::Equals;
 
 namespace
 {
@@ -88,13 +90,9 @@ TEST_CASE("spectral_variance_moments matches a seeded-random cube against a nump
   const auto sums = run_spectral_variance_moments(channel_flags);
 
   REQUIRE(sums.sum2.size() == n_pixels);
-  for (size_t i_pixel = 0; i_pixel < n_pixels; ++i_pixel)
-  {
-    INFO("pixel " << i_pixel);
-    CHECK(sums.sum2[i_pixel] == Approx(expected2[i_pixel]).epsilon(1e-5).margin(1e-6));
-    CHECK(sums.sum3[i_pixel] == Approx(expected3[i_pixel]).epsilon(1e-5).margin(1e-6));
-    CHECK(sums.sum4[i_pixel] == Approx(expected4[i_pixel]).epsilon(1e-5).margin(1e-6));
-  }
+  CHECK_THAT(sums.sum2, Catch::Matchers::Approx(expected2).epsilon(1e-5).margin(1e-6));
+  CHECK_THAT(sums.sum3, Catch::Matchers::Approx(expected3).epsilon(1e-5).margin(1e-6));
+  CHECK_THAT(sums.sum4, Catch::Matchers::Approx(expected4).epsilon(1e-5).margin(1e-6));
 }
 
 TEST_CASE("spectral_variance_moments overwrites the stale values of the sums", "[spectral_variance_moments]")
@@ -104,9 +102,9 @@ TEST_CASE("spectral_variance_moments overwrites the stale values of the sums", "
   for (const float prefill : {std::numeric_limits<float>::quiet_NaN(), 1.0e30F})
   {
     const auto sums = run_spectral_variance_moments(channel_flags, prefill);
-    CHECK(sums.sum2 == from_zero.sum2);
-    CHECK(sums.sum3 == from_zero.sum3);
-    CHECK(sums.sum4 == from_zero.sum4);
+    CHECK_THAT(sums.sum2, Equals(from_zero.sum2));
+    CHECK_THAT(sums.sum3, Equals(from_zero.sum3));
+    CHECK_THAT(sums.sum4, Equals(from_zero.sum4));
   }
 }
 
@@ -117,9 +115,9 @@ TEST_CASE("spectral_variance_moments leaves every sum at 0 when no channel is fl
   const auto sums = run_spectral_variance_moments(none, 1.0e30F);
 
   const std::vector<float> zeros(n_pixels, 0.F);
-  CHECK(sums.sum2 == zeros);
-  CHECK(sums.sum3 == zeros);
-  CHECK(sums.sum4 == zeros);
+  CHECK_THAT(sums.sum2, Equals(zeros));
+  CHECK_THAT(sums.sum3, Equals(zeros));
+  CHECK_THAT(sums.sum4, Equals(zeros));
 }
 
 TEST_CASE("spectral_variance_moments rejects a cube and outputs that do not match the flags and n_pixels",

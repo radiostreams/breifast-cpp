@@ -4,11 +4,13 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
+#include <catch2/matchers/catch_matchers_vector.hpp>
 
 #include "cpu/channel_reductions.hpp"
 
 using breifast::plane_lot::detail::weighted_band_image;
 using Catch::Approx;
+using Catch::Matchers::Equals;
 
 namespace
 {
@@ -86,11 +88,7 @@ TEST_CASE("weighted_band_image matches a seeded-random 4x23 cube against a numpy
   const auto out_plane = run_weighted_band_image(cube, mean_image, 1, 4);
 
   REQUIRE(out_plane.size() == n_pixels);
-  for (size_t i_pixel = 0; i_pixel < n_pixels; ++i_pixel)
-  {
-    INFO("pixel " << i_pixel);
-    CHECK(out_plane[i_pixel] == Approx(expected[i_pixel]).epsilon(1e-5).margin(1e-6));
-  }
+  CHECK_THAT(out_plane, Catch::Matchers::Approx(expected).epsilon(1e-5).margin(1e-6));
 }
 
 TEST_CASE("weighted_band_image without a mean image matches the numpy reference", "[weighted_band_image]")
@@ -106,11 +104,7 @@ TEST_CASE("weighted_band_image without a mean image matches the numpy reference"
   const auto out_plane = run_weighted_band_image(cube, {}, 1, 4);
 
   REQUIRE(out_plane.size() == n_pixels);
-  for (size_t i_pixel = 0; i_pixel < n_pixels; ++i_pixel)
-  {
-    INFO("pixel " << i_pixel);
-    CHECK(out_plane[i_pixel] == Approx(expected[i_pixel]).epsilon(1e-5).margin(1e-6));
-  }
+  CHECK_THAT(out_plane, Catch::Matchers::Approx(expected).epsilon(1e-5).margin(1e-6));
 }
 
 TEST_CASE("weighted_band_image on a one-channel band reads that channel and its weight", "[weighted_band_image]")
@@ -134,8 +128,8 @@ TEST_CASE("weighted_band_image overwrites the stale values of out_plane", "[weig
   const auto from_garbage = run_weighted_band_image(cube, mean_image, 0, 3, 1.0e30F);
   const auto from_zero = run_weighted_band_image(cube, mean_image, 0, 3, 0.F);
 
-  CHECK(from_nan == from_zero);
-  CHECK(from_garbage == from_zero);
+  CHECK_THAT(from_nan, Equals(from_zero));
+  CHECK_THAT(from_garbage, Equals(from_zero));
 }
 
 TEST_CASE("weighted_band_image rejects a band that is negative or empty or reversed", "[weighted_band_image]")

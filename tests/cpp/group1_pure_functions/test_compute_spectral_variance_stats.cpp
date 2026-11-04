@@ -1,5 +1,6 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "plane_lot_dispatch.hpp"
 
@@ -44,9 +45,9 @@ TEST_CASE("compute_spectral_variance_stats matches a hand-computed cube, skippin
   {
     for (size_t i_x = 0; i_x < 2; ++i_x)
     {
-      CHECK(stats.sum_pow2(i_y, i_x) == Catch::Approx(expected_pow2[i_y][i_x]).epsilon(1e-6));
-      CHECK(stats.sum_pow3(i_y, i_x) == Catch::Approx(expected_pow3[i_y][i_x]).epsilon(1e-6));
-      CHECK(stats.sum_pow4(i_y, i_x) == Catch::Approx(expected_pow4[i_y][i_x]).epsilon(1e-6));
+      CHECK_THAT(stats.sum_pow2(i_y, i_x), Catch::Matchers::WithinRel(static_cast<double>(expected_pow2[i_y][i_x]), 1e-6));
+      CHECK_THAT(stats.sum_pow3(i_y, i_x), Catch::Matchers::WithinRel(static_cast<double>(expected_pow3[i_y][i_x]), 1e-6));
+      CHECK_THAT(stats.sum_pow4(i_y, i_x), Catch::Matchers::WithinRel(static_cast<double>(expected_pow4[i_y][i_x]), 1e-6));
     }
   }
 }
@@ -85,9 +86,9 @@ TEST_CASE("compute_spectral_variance_stats matches a seeded-random cube against 
   {
     for (size_t i_x = 0; i_x < 3; ++i_x)
     {
-      CHECK(stats.sum_pow2(i_y, i_x) == Catch::Approx(expected_pow2[i_y][i_x]).epsilon(1e-4));
-      CHECK(stats.sum_pow3(i_y, i_x) == Catch::Approx(expected_pow3[i_y][i_x]).epsilon(1e-4));
-      CHECK(stats.sum_pow4(i_y, i_x) == Catch::Approx(expected_pow4[i_y][i_x]).epsilon(1e-4));
+      CHECK_THAT(stats.sum_pow2(i_y, i_x), Catch::Matchers::WithinRel(static_cast<double>(expected_pow2[i_y][i_x]), 1e-4));
+      CHECK_THAT(stats.sum_pow3(i_y, i_x), Catch::Matchers::WithinRel(static_cast<double>(expected_pow3[i_y][i_x]), 1e-4));
+      CHECK_THAT(stats.sum_pow4(i_y, i_x), Catch::Matchers::WithinRel(static_cast<double>(expected_pow4[i_y][i_x]), 1e-4));
     }
   }
 }
@@ -113,9 +114,9 @@ TEST_CASE("compute_spectral_variance_stats with a single active channel reduces 
     for (size_t i_x = 0; i_x < 2; ++i_x)
     {
       const auto v = values[i_y][i_x];
-      CHECK(stats.sum_pow2(i_y, i_x) == Catch::Approx(v * v).epsilon(1e-6));
-      CHECK(stats.sum_pow3(i_y, i_x) == Catch::Approx(v * v * v).epsilon(1e-6));
-      CHECK(stats.sum_pow4(i_y, i_x) == Catch::Approx(v * v * v * v).epsilon(1e-6));
+      CHECK_THAT(stats.sum_pow2(i_y, i_x), Catch::Matchers::WithinRel(static_cast<double>(v * v), 1e-6));
+      CHECK_THAT(stats.sum_pow3(i_y, i_x), Catch::Matchers::WithinRel(static_cast<double>(v * v * v), 1e-6));
+      CHECK_THAT(stats.sum_pow4(i_y, i_x), Catch::Matchers::WithinRel(static_cast<double>(v * v * v * v), 1e-6));
     }
   }
 }

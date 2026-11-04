@@ -1,5 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_range_equals.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
+#include <catch2/matchers/catch_matchers_vector.hpp>
 #include <cuda_runtime.h>
 
 #include <algorithm>
@@ -19,6 +21,8 @@ using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_snr_and_filters;
 using breifast::gpu::PinnedVector;
 using breifast::common::SnrFilterParams;
+using Catch::Matchers::Equals;
+using Catch::Matchers::RangeEquals;
 
 namespace
 {
@@ -362,9 +366,9 @@ void check_snr_and_filters_matches_host(size_t n)
                                            accepted);
 
   REQUIRE(out.snr.size() == n);
-  CHECK(out.snr == expected.snr);
-  CHECK(out.mask == expected.mask);
-  CHECK(out.histograms == expected.histograms);
+  CHECK_THAT(out.snr, Equals(expected.snr));
+  CHECK_THAT(out.mask, Equals(expected.mask));
+  CHECK_THAT(out.histograms, RangeEquals(expected.histograms));
   CHECK(out.min_sigma == expected.min_sigma);
   CHECK(out.max_sigma == expected.max_sigma);
 }
@@ -396,9 +400,9 @@ TEST_CASE("gpu_snr_and_filters matches a seeded-random 37-pixel plane with every
   const auto out = run_gpu_snr_and_filters(plane, noise_map, snr_cutoff, flux_cutoff, default_params(), accept);
 
   REQUIRE(out.snr.size() == n_pixels);
-  CHECK(out.snr == expected_snr);
-  CHECK(out.mask == expected_mask);
-  CHECK(out.histograms == expected_histograms);
+  CHECK_THAT(out.snr, Equals(expected_snr));
+  CHECK_THAT(out.mask, Equals(expected_mask));
+  CHECK_THAT(out.histograms, RangeEquals(expected_histograms));
   CHECK(out.min_sigma == -2.18333697F);
   CHECK(out.max_sigma == 4.03591585F);
 }
@@ -414,9 +418,9 @@ TEST_CASE("gpu_snr_and_filters overwrites the stale values of out_snr and the hi
 
   for (const auto *other : {&from_nan, &from_garbage})
   {
-    CHECK(other->snr == from_zero.snr);
-    CHECK(other->mask == from_zero.mask);
-    CHECK(other->histograms == from_zero.histograms);
+    CHECK_THAT(other->snr, Equals(from_zero.snr));
+    CHECK_THAT(other->mask, Equals(from_zero.mask));
+    CHECK_THAT(other->histograms, RangeEquals(from_zero.histograms));
     CHECK(other->min_sigma == from_zero.min_sigma);
     CHECK(other->max_sigma == from_zero.max_sigma);
   }
@@ -430,10 +434,10 @@ TEST_CASE("gpu_snr_and_filters returns the empty summary and zero histograms whe
 
   CHECK(out.min_sigma == std::numeric_limits<float>::infinity());
   CHECK(out.max_sigma == std::numeric_limits<float>::lowest());
-  CHECK(out.mask == std::string(n_pixels, '0'));
+  CHECK_THAT(out.mask, Equals(std::string(n_pixels, '0')));
   for (const auto &histogram : out.histograms)
   {
-    CHECK(histogram == std::vector<unsigned long long>(2 * max_sigma_bin, 0));
+    CHECK_THAT(histogram, Equals(std::vector<unsigned long long>(2 * max_sigma_bin, 0)));
   }
 }
 

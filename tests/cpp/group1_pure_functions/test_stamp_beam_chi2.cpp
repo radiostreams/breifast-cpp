@@ -2,6 +2,7 @@
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include "cpu/island_stamps.hpp"
@@ -32,7 +33,7 @@ TEST_CASE("stamp_beam_chi2 matches numpy on a seeded-random 5x5 stamp against a 
 
   const float chi2 = stamp_beam_chi2(stamp, kernel, 2, 1.3F);
 
-  CHECK(chi2 == Approx(0.5573078192176192).epsilon(1e-5));
+  CHECK_THAT(chi2, Catch::Matchers::WithinRel(0.5573078192176192, 1e-5));
 }
 
 TEST_CASE("stamp_beam_chi2 scales the kernel with the whole stamp and sums the residual over nonzero pixels only",
@@ -47,7 +48,7 @@ TEST_CASE("stamp_beam_chi2 scales the kernel with the whole stamp and sums the r
   };
   const std::vector<float> kernel(9, 1.F);
 
-  CHECK(stamp_beam_chi2(stamp, kernel, 1, 2.F) == Approx(3.1604938271604937).epsilon(1e-6));
+  CHECK_THAT(stamp_beam_chi2(stamp, kernel, 1, 2.F), Catch::Matchers::WithinRel(3.1604938271604937, 1e-6));
 }
 
 TEST_CASE("stamp_beam_chi2 is 0 for a perfect fit, an all-zero stamp and a zero adjacent noise", "[stamp_beam_chi2]")

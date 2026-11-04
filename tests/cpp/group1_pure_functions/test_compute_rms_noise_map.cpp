@@ -2,6 +2,7 @@
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "cpu/order_statistics.hpp"
 #include "plane_lot_dispatch.hpp"
@@ -41,7 +42,7 @@ TEST_CASE("compute_rms_noise_map matches a hand-computed 3x3 grid at boxsize=3",
   {
     for (size_t i_x = 0; i_x < 3; ++i_x)
     {
-      CHECK(noise_map(i_y, i_x) == Catch::Approx(expected[i_y][i_x]).epsilon(1e-5));
+      CHECK_THAT(noise_map(i_y, i_x), Catch::Matchers::WithinRel(static_cast<double>(expected[i_y][i_x]), 1e-5));
     }
   }
 }
@@ -58,7 +59,7 @@ TEST_CASE("compute_rms_noise_map matches a hand-computed rectangular (non-square
   {
     for (size_t i_x = 0; i_x < 4; ++i_x)
     {
-      CHECK(noise_map(i_y, i_x) == Catch::Approx(expected[i_y][i_x]).epsilon(1e-5));
+      CHECK_THAT(noise_map(i_y, i_x), Catch::Matchers::WithinRel(static_cast<double>(expected[i_y][i_x]), 1e-5));
     }
   }
 }
@@ -91,7 +92,7 @@ TEST_CASE("compute_rms_noise_map matches a seeded-random 6x7 plane against a Pyt
   {
     for (size_t i_x = 0; i_x < 7; ++i_x)
     {
-      CHECK(noise_map(i_y, i_x) == Catch::Approx(expected[i_y][i_x]).epsilon(1e-4));
+      CHECK_THAT(noise_map(i_y, i_x), Catch::Matchers::WithinRel(static_cast<double>(expected[i_y][i_x]), 1e-4));
     }
   }
 }
@@ -102,12 +103,12 @@ TEST_CASE("compute_rms_noise_map is uniform when boxsize covers the whole plane"
   const auto plane = make_plane({{1.F, 2.F, 3.F}, {4.F, 5.F, 6.F}, {7.F, 8.F, 9.F}});
   const auto noise_map = floored_rms_noise_map(scratch, plane, 5);
 
-  const auto expected = Catch::Approx(5.627314338711377).epsilon(1e-5);
+  const auto expected = Catch::Matchers::WithinRel(5.627314338711377, 1e-5);
   for (size_t i_y = 0; i_y < 3; ++i_y)
   {
     for (size_t i_x = 0; i_x < 3; ++i_x)
     {
-      CHECK(noise_map(i_y, i_x) == expected);
+      CHECK_THAT(noise_map(i_y, i_x), expected);
     }
   }
 }
@@ -126,7 +127,7 @@ TEST_CASE("compute_rms_noise_map with boxsize=1 is abs(plane) floored to its own
   {
     for (size_t i_x = 0; i_x < plane.shape(1); ++i_x)
     {
-      CHECK(noise_map(i_y, i_x) == Catch::Approx(expected[i_y][i_x]).epsilon(1e-6));
+      CHECK_THAT(noise_map(i_y, i_x), Catch::Matchers::WithinRel(static_cast<double>(expected[i_y][i_x]), 1e-6));
     }
   }
 }
@@ -145,8 +146,8 @@ TEST_CASE("compute_rms_noise_map boxsize=0 behaves the same as boxsize=1", "[com
   {
     for (size_t i_x = 0; i_x < plane.shape(1); ++i_x)
     {
-      CHECK(noise_map_0(i_y, i_x) == Catch::Approx(noise_map_1(i_y, i_x)).epsilon(1e-6));
-      CHECK(noise_map_0(i_y, i_x) == Catch::Approx(expected[i_y][i_x]).epsilon(1e-6));
+      CHECK_THAT(noise_map_0(i_y, i_x), Catch::Matchers::WithinRel(static_cast<double>(noise_map_1(i_y, i_x)), 1e-6));
+      CHECK_THAT(noise_map_0(i_y, i_x), Catch::Matchers::WithinRel(static_cast<double>(expected[i_y][i_x]), 1e-6));
     }
   }
 }
@@ -170,7 +171,7 @@ TEST_CASE("compute_rms_noise_map even boxsize windows are one pixel narrower tha
   {
     for (size_t i_x = 0; i_x < plane.shape(1); ++i_x)
     {
-      CHECK(noise_map_2(i_y, i_x) == Catch::Approx(expected[i_y][i_x]).epsilon(1e-5));
+      CHECK_THAT(noise_map_2(i_y, i_x), Catch::Matchers::WithinRel(static_cast<double>(expected[i_y][i_x]), 1e-5));
     }
   }
 }
@@ -189,7 +190,7 @@ TEST_CASE("compute_rms_noise_map on a uniform-value plane returns that constant 
     {
       for (size_t i_x = 0; i_x < n_x; ++i_x)
       {
-        CHECK(noise_map(i_y, i_x) == Catch::Approx(std::abs(value)).epsilon(1e-5));
+        CHECK_THAT(noise_map(i_y, i_x), Catch::Matchers::WithinRel(static_cast<double>(std::abs(value)), 1e-5));
       }
     }
   };
@@ -230,7 +231,7 @@ TEST_CASE("compute_rms_noise_map should floor below-median values up to the medi
   {
     for (size_t i_x = 0; i_x < 5; ++i_x)
     {
-      CHECK(noise_map(i_y, i_x) == Catch::Approx(expected[i_y][i_x]).epsilon(1e-5));
+      CHECK_THAT(noise_map(i_y, i_x), Catch::Matchers::WithinRel(static_cast<double>(expected[i_y][i_x]), 1e-5));
     }
   }
 }

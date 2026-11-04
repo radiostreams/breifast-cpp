@@ -1,6 +1,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
+#include <catch2/matchers/catch_matchers_vector.hpp>
 #include <cuda_runtime.h>
 
 #include <cstddef>
@@ -15,6 +16,7 @@ using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_weighted_band_image;
 using breifast::gpu::PinnedVector;
 using Catch::Approx;
+using Catch::Matchers::Equals;
 
 namespace
 {
@@ -205,11 +207,7 @@ void check_plane_matches_host(size_t n_plane_pixels)
   const auto out = run_gpu_weighted_band_image(pattern, pattern_weights, pattern_mean, n_plane_pixels, 0, 3);
 
   REQUIRE(out.size() == n_plane_pixels);
-  for (size_t i_pixel = 0; i_pixel < n_plane_pixels; ++i_pixel)
-  {
-    INFO("pixel " << i_pixel);
-    CHECK(out[i_pixel] == Approx(expected[i_pixel]).epsilon(1e-5).margin(1e-5));
-  }
+  CHECK_THAT(out, Catch::Matchers::Approx(expected).epsilon(1e-5).margin(1e-5));
 }
 } // namespace
 
@@ -218,11 +216,7 @@ TEST_CASE("gpu_weighted_band_image matches the numpy reference with a mean image
   const auto out = run_gpu_weighted_band_image(cube, weights, mean_image, n_pixels, 1, 4);
 
   REQUIRE(out.size() == n_pixels);
-  for (size_t i_pixel = 0; i_pixel < n_pixels; ++i_pixel)
-  {
-    INFO("pixel " << i_pixel);
-    CHECK(out[i_pixel] == Approx(expected_with_mean[i_pixel]).epsilon(1e-5).margin(1e-6));
-  }
+  CHECK_THAT(out, Catch::Matchers::Approx(expected_with_mean).epsilon(1e-5).margin(1e-6));
 }
 
 TEST_CASE("gpu_weighted_band_image without a mean image matches the numpy reference", "[gpu][weighted_band_image]")
@@ -230,11 +224,7 @@ TEST_CASE("gpu_weighted_band_image without a mean image matches the numpy refere
   const auto out = run_gpu_weighted_band_image(cube, weights, {}, n_pixels, 1, 4);
 
   REQUIRE(out.size() == n_pixels);
-  for (size_t i_pixel = 0; i_pixel < n_pixels; ++i_pixel)
-  {
-    INFO("pixel " << i_pixel);
-    CHECK(out[i_pixel] == Approx(expected_without_mean[i_pixel]).epsilon(1e-5).margin(1e-6));
-  }
+  CHECK_THAT(out, Catch::Matchers::Approx(expected_without_mean).epsilon(1e-5).margin(1e-6));
 }
 
 TEST_CASE("gpu_weighted_band_image on a one-channel band reads that channel and its weight",
@@ -244,13 +234,14 @@ TEST_CASE("gpu_weighted_band_image on a one-channel band reads that channel and 
   // Reading weights[0] (0.5) or the first channel instead would change every pixel.
   const auto out = run_gpu_weighted_band_image(cube, weights, mean_image, n_pixels, 2, 3);
 
-  REQUIRE(out.size() == n_pixels);
+  std::vector<float> expected(n_pixels);
   for (size_t i_pixel = 0; i_pixel < n_pixels; ++i_pixel)
   {
-    INFO("pixel " << i_pixel);
-    const float expected = cube[2 * n_pixels + i_pixel] - mean_image[2 * n_pixels + i_pixel];
-    CHECK(out[i_pixel] == Approx(expected).epsilon(1e-6));
+    expected[i_pixel] = cube[2 * n_pixels + i_pixel] - mean_image[2 * n_pixels + i_pixel];
   }
+
+  REQUIRE(out.size() == n_pixels);
+  CHECK_THAT(out, Catch::Matchers::Approx(expected).epsilon(1e-6));
 }
 
 TEST_CASE("gpu_weighted_band_image ignores channels outside the band", "[gpu][weighted_band_image]")
@@ -265,11 +256,7 @@ TEST_CASE("gpu_weighted_band_image ignores channels outside the band", "[gpu][we
   const auto out = run_gpu_weighted_band_image(poisoned, weights, mean_image, n_pixels, 1, 4);
 
   REQUIRE(out.size() == n_pixels);
-  for (size_t i_pixel = 0; i_pixel < n_pixels; ++i_pixel)
-  {
-    INFO("pixel " << i_pixel);
-    CHECK(out[i_pixel] == Approx(expected_with_mean[i_pixel]).epsilon(1e-5).margin(1e-6));
-  }
+  CHECK_THAT(out, Catch::Matchers::Approx(expected_with_mean).epsilon(1e-5).margin(1e-6));
 }
 
 TEST_CASE("gpu_weighted_band_image overwrites the stale values of out_plane", "[gpu][weighted_band_image]")
@@ -280,8 +267,8 @@ TEST_CASE("gpu_weighted_band_image overwrites the stale values of out_plane", "[
   const auto from_garbage = run_gpu_weighted_band_image(cube, weights, mean_image, n_pixels, 0, 3, 1.0e30F);
   const auto from_zero = run_gpu_weighted_band_image(cube, weights, mean_image, n_pixels, 0, 3, 0.F);
 
-  CHECK(from_nan == from_zero);
-  CHECK(from_garbage == from_zero);
+  CHECK_THAT(from_nan, Equals(from_zero));
+  CHECK_THAT(from_garbage, Equals(from_zero));
 }
 
 TEST_CASE("gpu_weighted_band_image covers the partial last block of a 1000-pixel plane", "[gpu][weighted_band_image]")

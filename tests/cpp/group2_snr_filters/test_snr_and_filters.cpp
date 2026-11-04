@@ -5,13 +5,17 @@
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_range_equals.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
+#include <catch2/matchers/catch_matchers_vector.hpp>
 
 #include "cpu/snr_filters.hpp"
 
 using breifast::plane_lot::detail::snr_and_filters;
 using breifast::plane_lot::detail::SnrFilterParams;
 using breifast::plane_lot::detail::SnrFilterSummary;
+using Catch::Matchers::Equals;
+using Catch::Matchers::RangeEquals;
 
 namespace
 {
@@ -153,9 +157,9 @@ TEST_CASE("snr_and_filters matches a seeded-random 37-pixel plane with every sta
 
   const auto out = run_snr_and_filters(0.F, 0);
 
-  CHECK(out.snr == expected_snr);
-  CHECK(out.mask == expected_mask);
-  CHECK(out.histograms == expected_histograms);
+  CHECK_THAT(out.snr, Equals(expected_snr));
+  CHECK_THAT(out.mask, Equals(expected_mask));
+  CHECK_THAT(out.histograms, RangeEquals(expected_histograms));
   CHECK(out.summary.min_sigma == -2.18333697F);
   CHECK(out.summary.max_sigma == 4.03591585F);
 }
@@ -169,9 +173,9 @@ TEST_CASE("snr_and_filters overwrites the stale values of out_snr and the histog
 
   for (const auto *other : {&from_nan, &from_garbage})
   {
-    CHECK(other->snr == from_zero.snr);
-    CHECK(other->mask == from_zero.mask);
-    CHECK(other->histograms == from_zero.histograms);
+    CHECK_THAT(other->snr, Equals(from_zero.snr));
+    CHECK_THAT(other->mask, Equals(from_zero.mask));
+    CHECK_THAT(other->histograms, RangeEquals(from_zero.histograms));
     CHECK(other->summary.min_sigma == from_zero.summary.min_sigma);
     CHECK(other->summary.max_sigma == from_zero.summary.max_sigma);
   }
@@ -183,10 +187,10 @@ TEST_CASE("snr_and_filters returns the empty summary and zero histograms when no
 
   CHECK(out.summary.min_sigma == std::numeric_limits<float>::infinity());
   CHECK(out.summary.max_sigma == std::numeric_limits<float>::lowest());
-  CHECK(out.mask == std::string(n_pixels, '0'));
+  CHECK_THAT(out.mask, Equals(std::string(n_pixels, '0')));
   for (const auto &histogram : out.histograms)
   {
-    CHECK(histogram == std::vector<long>(2 * max_sigma_bin, 0));
+    CHECK_THAT(histogram, Equals(std::vector<long>(2 * max_sigma_bin, 0)));
   }
 }
 

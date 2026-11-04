@@ -1,5 +1,6 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "plane_lot_dispatch.hpp"
 
@@ -71,17 +72,17 @@ TEST_CASE("run_batch_core resolves each item's group_index into the correct grou
   REQUIRE(results[0].detections.peak_y().size() == 1);
   CHECK(results[0].detections.peak_y()[0] == 2);
   CHECK(results[0].detections.peak_x()[0] == 2);
-  CHECK(results[0].detections.self_noise()[0] == Catch::Approx(1.F));
+  CHECK_THAT(results[0].detections.self_noise()[0], Catch::Matchers::WithinRel(1.F));
 
   REQUIRE(results[1].detections.peak_y().size() == 1);
   CHECK(results[1].detections.peak_y()[0] == 4);
   CHECK(results[1].detections.peak_x()[0] == 4);
-  CHECK(results[1].detections.self_noise()[0] == Catch::Approx(2.F));
+  CHECK_THAT(results[1].detections.self_noise()[0], Catch::Matchers::WithinRel(2.F));
 
   REQUIRE(results[2].detections.peak_y().size() == 1);
   CHECK(results[2].detections.peak_y()[0] == 2);
   CHECK(results[2].detections.peak_x()[0] == 4);
-  CHECK(results[2].detections.self_noise()[0] == Catch::Approx(1.F));
+  CHECK_THAT(results[2].detections.self_noise()[0], Catch::Matchers::WithinRel(1.F));
 }
 
 TEST_CASE("run_batch_core keeps results in items order across many items scheduled on multiple TBB threads",
@@ -126,7 +127,7 @@ TEST_CASE("run_batch_core keeps results in items order across many items schedul
     REQUIRE(results[i].detections.peak_y().size() == 1);
     CHECK(results[i].detections.peak_y()[0] == expected_peaks[i].first);
     CHECK(results[i].detections.peak_x()[0] == expected_peaks[i].second);
-    CHECK(results[i].detections.self_noise()[0] == Catch::Approx(static_cast<float>(i % num_groups) + 1.F));
+    CHECK_THAT(results[i].detections.self_noise()[0], Catch::Matchers::WithinRel(static_cast<float>(i % num_groups) + 1.F));
   }
 }
 
@@ -202,12 +203,12 @@ TEST_CASE("run_lot_core forwards lot.planes/lot.groups to run_batch_core unchang
   REQUIRE(results[0].detections.peak_y().size() == 1);
   CHECK(results[0].detections.peak_y()[0] == 2);
   CHECK(results[0].detections.peak_x()[0] == 2);
-  CHECK(results[0].detections.self_noise()[0] == Catch::Approx(1.F));
+  CHECK_THAT(results[0].detections.self_noise()[0], Catch::Matchers::WithinRel(1.F));
 
   REQUIRE(results[1].detections.peak_y().size() == 1);
   CHECK(results[1].detections.peak_y()[0] == 4);
   CHECK(results[1].detections.peak_x()[0] == 4);
-  CHECK(results[1].detections.self_noise()[0] == Catch::Approx(2.F));
+  CHECK_THAT(results[1].detections.self_noise()[0], Catch::Matchers::WithinRel(2.F));
 }
 
 TEST_CASE("run_batch_core processes multi-band items (band_slices on the shared PlaneConfig) in the same batch as "

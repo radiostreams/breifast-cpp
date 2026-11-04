@@ -14,6 +14,7 @@
 using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_mask_or;
 using breifast::gpu::PinnedVector;
+using Catch::Matchers::Equals;
 
 namespace
 {
@@ -89,7 +90,7 @@ TEST_CASE("gpu_mask_or matches a fixed 4x37 mask with a band that skips channel 
   const Result result = run_gpu_mask_or(channels, 1, 4);
 
   CHECK(result.any);
-  CHECK(result.mask == expected);
+  CHECK_THAT(result.mask, Equals(expected));
 }
 
 TEST_CASE("gpu_mask_or ignores channels outside the band and zeroes a stale out_any", "[gpu][mask_or]")
@@ -106,7 +107,7 @@ TEST_CASE("gpu_mask_or ignores channels outside the band and zeroes a stale out_
   const Result result = run_gpu_mask_or(channels, 1, 3);
 
   CHECK_FALSE(result.any);
-  CHECK(result.mask == "0000000000000000000");
+  CHECK_THAT(result.mask, Equals("0000000000000000000"));
 }
 
 TEST_CASE("gpu_mask_or handles a single-channel band", "[gpu][mask_or]")
@@ -122,7 +123,7 @@ TEST_CASE("gpu_mask_or handles a single-channel band", "[gpu][mask_or]")
   const Result result = run_gpu_mask_or(channels, 2, 3);
 
   CHECK(result.any);
-  CHECK(result.mask == "0010000000000100");
+  CHECK_THAT(result.mask, Equals("0010000000000100"));
 }
 
 TEST_CASE("gpu_mask_or covers the partial last block of a 1000-pixel plane", "[gpu][mask_or]")
@@ -145,7 +146,7 @@ TEST_CASE("gpu_mask_or covers the partial last block of a 1000-pixel plane", "[g
   const Result result = run_gpu_mask_or({channel0, channel1, channel2}, 0, 3);
 
   CHECK(result.any);
-  CHECK(result.mask == expected);
+  CHECK_THAT(result.mask, Equals(expected));
 }
 
 TEST_CASE("gpu_mask_or covers a plane that is an exact multiple of the block size", "[gpu][mask_or]")
@@ -164,7 +165,7 @@ TEST_CASE("gpu_mask_or covers a plane that is an exact multiple of the block siz
   const Result result = run_gpu_mask_or({channel0, channel1}, 0, 2);
 
   CHECK(result.any);
-  CHECK(result.mask == expected);
+  CHECK_THAT(result.mask, Equals(expected));
 }
 
 TEST_CASE("gpu_mask_or covers a plane spanning many blocks", "[gpu][mask_or]")
@@ -183,7 +184,7 @@ TEST_CASE("gpu_mask_or covers a plane spanning many blocks", "[gpu][mask_or]")
   const Result result = run_gpu_mask_or({channel0, channel1}, 0, 2);
 
   CHECK(result.any);
-  CHECK(result.mask == expected);
+  CHECK_THAT(result.mask, Equals(expected));
 }
 
 TEST_CASE("gpu_mask_or rejects an invalid band or an empty plane", "[gpu][mask_or]")

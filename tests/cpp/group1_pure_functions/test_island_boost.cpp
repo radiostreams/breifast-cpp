@@ -4,6 +4,7 @@
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include "cpu/islands.hpp"
@@ -49,9 +50,9 @@ TEST_CASE("island_boost matches numpy for three islands of a seeded-random basel
   REQUIRE(labels.size() == n_y * n_x);
   REQUIRE(baseline.size() == n_y * n_x);
 
-  CHECK(island_boost(labels, baseline, n_y, n_x, 1, 7.5F) == Approx(17.838232040405273).epsilon(1e-6));
-  CHECK(island_boost(labels, baseline, n_y, n_x, 2, 7.5F) == Approx(15.0).epsilon(1e-6));
-  CHECK(island_boost(labels, baseline, n_y, n_x, 3, 7.5F) == Approx(-18.930294036865234).epsilon(1e-6));
+  CHECK_THAT(island_boost(labels, baseline, n_y, n_x, 1, 7.5F), Catch::Matchers::WithinRel(17.838232040405273, 1e-6));
+  CHECK_THAT(island_boost(labels, baseline, n_y, n_x, 2, 7.5F), Catch::Matchers::WithinRel(15.0, 1e-6));
+  CHECK_THAT(island_boost(labels, baseline, n_y, n_x, 3, 7.5F), Catch::Matchers::WithinRel(-18.930294036865234, 1e-6));
 }
 
 TEST_CASE("island_boost gives the first pixel in raster order when two ratios tie on magnitude", "[island_boost]")

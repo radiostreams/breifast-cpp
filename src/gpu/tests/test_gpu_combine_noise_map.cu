@@ -1,6 +1,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
+#include <catch2/matchers/catch_matchers_vector.hpp>
 #include <cuda_runtime.h>
 
 #include <cstddef>
@@ -19,6 +20,7 @@ using breifast::gpu::gpu_combine_noise_map_constant;
 using breifast::gpu::gpu_combine_noise_map_rms;
 using breifast::gpu::PinnedVector;
 using Catch::Approx;
+using Catch::Matchers::Equals;
 
 namespace
 {
@@ -176,20 +178,12 @@ void check_noise_maps_match_host(size_t n_plane_pixels)
   const auto expected_rms = host_combine_noise_map_rms(rms_values, floor, selfnoise_values, dde_values);
   const auto out_rms = run_gpu_combine_noise_map_rms(rms_values, floor, selfnoise_values, dde_values);
   REQUIRE(out_rms.size() == n_plane_pixels);
-  for (size_t i_pixel = 0; i_pixel < n_plane_pixels; ++i_pixel)
-  {
-    INFO("rms pixel " << i_pixel);
-    CHECK(out_rms[i_pixel] == Approx(expected_rms[i_pixel]).epsilon(1e-5).margin(1e-5));
-  }
+  CHECK_THAT(out_rms, Catch::Matchers::Approx(expected_rms).epsilon(1e-5).margin(1e-5));
 
   const auto expected_constant = host_combine_noise_map_constant(selfnoise_values, dde_values);
   const auto out_constant = run_gpu_combine_noise_map_constant(selfnoise_values, dde_values);
   REQUIRE(out_constant.size() == n_plane_pixels);
-  for (size_t i_pixel = 0; i_pixel < n_plane_pixels; ++i_pixel)
-  {
-    INFO("constant pixel " << i_pixel);
-    CHECK(out_constant[i_pixel] == Approx(expected_constant[i_pixel]).epsilon(1e-5).margin(1e-5));
-  }
+  CHECK_THAT(out_constant, Catch::Matchers::Approx(expected_constant).epsilon(1e-5).margin(1e-5));
 }
 } // namespace
 
@@ -206,11 +200,7 @@ TEST_CASE("gpu_combine_noise_map_rms matches a seeded-random 23-pixel map agains
   const auto out = run_gpu_combine_noise_map_rms(rms, rms_floor, selfnoise_offset, dde_noise);
 
   REQUIRE(out.size() == n_pixels);
-  for (size_t i_pixel = 0; i_pixel < n_pixels; ++i_pixel)
-  {
-    INFO("pixel " << i_pixel);
-    CHECK(out[i_pixel] == Approx(expected[i_pixel]).epsilon(1e-5));
-  }
+  CHECK_THAT(out, Catch::Matchers::Approx(expected).epsilon(1e-5));
 }
 
 TEST_CASE("gpu_combine_noise_map_constant matches a seeded-random 23-pixel map against a numpy reference",
@@ -226,11 +216,7 @@ TEST_CASE("gpu_combine_noise_map_constant matches a seeded-random 23-pixel map a
   const auto out = run_gpu_combine_noise_map_constant(selfnoise_offset, dde_noise);
 
   REQUIRE(out.size() == n_pixels);
-  for (size_t i_pixel = 0; i_pixel < n_pixels; ++i_pixel)
-  {
-    INFO("pixel " << i_pixel);
-    CHECK(out[i_pixel] == Approx(expected[i_pixel]).epsilon(1e-5));
-  }
+  CHECK_THAT(out, Catch::Matchers::Approx(expected).epsilon(1e-5));
 }
 
 TEST_CASE("gpu_combine_noise_map_rms raises the pixels below the floor to it and keeps the others",
@@ -243,7 +229,7 @@ TEST_CASE("gpu_combine_noise_map_rms raises the pixels below the floor to it and
   const auto out = run_gpu_combine_noise_map_rms(rms_values, 2.F, zeros, zeros, -1.F);
 
   const std::vector<float> expected = {2.F, 2.F, 4.F, 2.F, 2.F, 2.F, 3.5F};
-  CHECK(out == expected);
+  CHECK_THAT(out, Equals(expected));
 }
 
 TEST_CASE("gpu_combine_noise_map overwrites the stale values of out_noise_map", "[gpu][combine_noise_map]")
@@ -253,15 +239,15 @@ TEST_CASE("gpu_combine_noise_map overwrites the stale values of out_noise_map", 
       run_gpu_combine_noise_map_rms(rms, rms_floor, selfnoise_offset, dde_noise, std::numeric_limits<float>::quiet_NaN());
   const auto from_garbage_rms = run_gpu_combine_noise_map_rms(rms, rms_floor, selfnoise_offset, dde_noise, 1.0e30F);
   const auto from_zero_rms = run_gpu_combine_noise_map_rms(rms, rms_floor, selfnoise_offset, dde_noise);
-  CHECK(from_nan_rms == from_zero_rms);
-  CHECK(from_garbage_rms == from_zero_rms);
+  CHECK_THAT(from_nan_rms, Equals(from_zero_rms));
+  CHECK_THAT(from_garbage_rms, Equals(from_zero_rms));
 
   const auto from_nan_constant = run_gpu_combine_noise_map_constant(
       selfnoise_offset, dde_noise, std::numeric_limits<float>::quiet_NaN());
   const auto from_garbage_constant = run_gpu_combine_noise_map_constant(selfnoise_offset, dde_noise, 1.0e30F);
   const auto from_zero_constant = run_gpu_combine_noise_map_constant(selfnoise_offset, dde_noise);
-  CHECK(from_nan_constant == from_zero_constant);
-  CHECK(from_garbage_constant == from_zero_constant);
+  CHECK_THAT(from_nan_constant, Equals(from_zero_constant));
+  CHECK_THAT(from_garbage_constant, Equals(from_zero_constant));
 }
 
 TEST_CASE("gpu_combine_noise_map rejects an empty plane", "[gpu][combine_noise_map]")

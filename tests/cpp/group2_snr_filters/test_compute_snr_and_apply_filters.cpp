@@ -3,6 +3,7 @@
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "plane_lot_dispatch.hpp"
 
@@ -37,7 +38,7 @@ TEST_CASE("compute_snr_and_apply_filters computes plane/noise_map elementwise an
   {
     for (size_t i_x = 0; i_x < 4; ++i_x)
     {
-      CHECK(snr(i_y, i_x) == Catch::Approx(expected_snr[i_y][i_x]).epsilon(1e-6));
+      CHECK_THAT(snr(i_y, i_x), Catch::Matchers::WithinRel(static_cast<double>(expected_snr[i_y][i_x]), 1e-6));
       CHECK(image_mask(i_y, i_x) == expected_mask[i_y][i_x]);
     }
   }
@@ -91,7 +92,7 @@ TEST_CASE("compute_snr_and_apply_filters matches a seeded-random 5x6 plane again
   {
     for (size_t i_x = 0; i_x < 6; ++i_x)
     {
-      CHECK(snr(i_y, i_x) == Catch::Approx(expected_snr[i_y][i_x]).epsilon(1e-4));
+      CHECK_THAT(snr(i_y, i_x), Catch::Matchers::WithinRel(static_cast<double>(expected_snr[i_y][i_x]), 1e-4));
       CHECK(image_mask(i_y, i_x) == expected_mask[i_y][i_x]);
     }
   }
@@ -129,7 +130,7 @@ TEST_CASE("compute_snr_and_apply_filters masks out invalid noise pixels (zero, +
   {
     for (size_t i_x = 0; i_x < 5; ++i_x)
     {
-      CHECK(snr(i_y, i_x) == Catch::Approx(expected_snr[i_y][i_x]).epsilon(1e-6));
+      CHECK_THAT(snr(i_y, i_x), Catch::Matchers::WithinRel(static_cast<double>(expected_snr[i_y][i_x]), 1e-6));
       CHECK(image_mask(i_y, i_x) == expected_mask[i_y][i_x]);
     }
   }
@@ -177,7 +178,7 @@ TEST_CASE("compute_snr_and_apply_filters applies snr_cutoff as the inv_band_size
   {
     for (size_t i_x = 0; i_x < 3; ++i_x)
     {
-      CHECK(snr(i_y, i_x) == Catch::Approx(expected_snr[i_y][i_x]).epsilon(1e-6));
+      CHECK_THAT(snr(i_y, i_x), Catch::Matchers::WithinRel(static_cast<double>(expected_snr[i_y][i_x]), 1e-6));
       CHECK(image_mask(i_y, i_x) == expected_mask[i_y][i_x]);
     }
   }
@@ -222,7 +223,7 @@ TEST_CASE("compute_snr_and_apply_filters applies flux_cutoff against |plane|, no
   {
     for (size_t i_x = 0; i_x < 3; ++i_x)
     {
-      CHECK(snr(i_y, i_x) == Catch::Approx(expected_snr[i_y][i_x]).epsilon(1e-6));
+      CHECK_THAT(snr(i_y, i_x), Catch::Matchers::WithinRel(static_cast<double>(expected_snr[i_y][i_x]), 1e-6));
       CHECK(image_mask(i_y, i_x) == expected_mask[i_y][i_x]);
     }
   }
@@ -262,7 +263,7 @@ TEST_CASE("compute_snr_and_apply_filters rejects noise_map > median_noise * reje
     {
       for (size_t i_x = 0; i_x < 3; ++i_x)
       {
-        CHECK(snr(i_y, i_x) == Catch::Approx(expected_snr[i_y][i_x]).epsilon(1e-6));
+        CHECK_THAT(snr(i_y, i_x), Catch::Matchers::WithinRel(static_cast<double>(expected_snr[i_y][i_x]), 1e-6));
         CHECK(image_mask(i_y, i_x) == expected_mask[i_y][i_x]);
       }
     }
@@ -286,7 +287,7 @@ TEST_CASE("compute_snr_and_apply_filters rejects noise_map > median_noise * reje
     {
       for (size_t i_x = 0; i_x < 3; ++i_x)
       {
-        CHECK(snr(i_y, i_x) == Catch::Approx(expected_snr[i_y][i_x]).epsilon(1e-6));
+        CHECK_THAT(snr(i_y, i_x), Catch::Matchers::WithinRel(static_cast<double>(expected_snr[i_y][i_x]), 1e-6));
         CHECK(image_mask(i_y, i_x) == true);
       }
     }
@@ -405,8 +406,8 @@ TEST_CASE("compute_snr_and_apply_filters histograms are computed from mask0/mask
   CHECK(result.histograms[1][199] == 1);
   CHECK(result.histograms[2][199] == 1);
 
-  CHECK(snr(0, 0) == Catch::Approx(5.F).epsilon(1e-6));
-  CHECK(snr(0, 1) == Catch::Approx(-0.5F).epsilon(1e-6));
+  CHECK_THAT(snr(0, 0), Catch::Matchers::WithinRel(static_cast<double>(5.F), 1e-6));
+  CHECK_THAT(snr(0, 1), Catch::Matchers::WithinRel(static_cast<double>(-0.5F), 1e-6));
   CHECK(image_mask(0, 0) == true);
   CHECK(image_mask(0, 1) == false);
 }
@@ -459,8 +460,8 @@ TEST_CASE("compute_snr_and_apply_filters combines min_sigma/max_sigma via runnin
                                   group, band, config, result);
     REQUIRE(result.min_sigma.has_value());
     REQUIRE(result.max_sigma.has_value());
-    CHECK(*result.min_sigma == Catch::Approx(-2.F));
-    CHECK(*result.max_sigma == Catch::Approx(5.F));
+    CHECK_THAT(*result.min_sigma, Catch::Matchers::WithinRel(-2.F));
+    CHECK_THAT(*result.max_sigma, Catch::Matchers::WithinRel(5.F));
   }
 
   // Call 2: local min=-10 (lower than -2, so min_sigma updates) and local max=3 (lower than 5, so max_sigma stays)
@@ -471,8 +472,8 @@ TEST_CASE("compute_snr_and_apply_filters combines min_sigma/max_sigma via runnin
     auto image_mask = make_mask({{true, true}});
     compute_snr_and_apply_filters(scratch, plane, noise_map, /*median_noise=*/0.F, /*inv_band_size=*/1.F, image_mask,
                                   group, band, config, result);
-    CHECK(*result.min_sigma == Catch::Approx(-10.F));
-    CHECK(*result.max_sigma == Catch::Approx(5.F));
+    CHECK_THAT(*result.min_sigma, Catch::Matchers::WithinRel(-10.F));
+    CHECK_THAT(*result.max_sigma, Catch::Matchers::WithinRel(5.F));
   }
 
   // Call 3: noise_map=0 everywhere -> every pixel is invalid, so mask3 is false everywhere and no pixel ever
@@ -484,8 +485,8 @@ TEST_CASE("compute_snr_and_apply_filters combines min_sigma/max_sigma via runnin
     auto image_mask = make_mask({{true, true}});
     compute_snr_and_apply_filters(scratch, plane, noise_map, /*median_noise=*/0.F, /*inv_band_size=*/1.F, image_mask,
                                   group, band, config, result);
-    CHECK(*result.min_sigma == Catch::Approx(-10.F));
-    CHECK(*result.max_sigma == Catch::Approx(5.F));
+    CHECK_THAT(*result.min_sigma, Catch::Matchers::WithinRel(-10.F));
+    CHECK_THAT(*result.max_sigma, Catch::Matchers::WithinRel(5.F));
   }
 }
 
@@ -512,9 +513,9 @@ TEST_CASE("compute_snr_and_apply_filters never resurrects a caller-supplied imag
                                   group, band, config, result);
     const auto &snr = scratch.snr;
 
-    CHECK(snr(0, 0) == Catch::Approx(100.F));
-    CHECK(snr(0, 1) == Catch::Approx(4.F));
-    CHECK(snr(0, 2) == Catch::Approx(-1.F));
+    CHECK_THAT(snr(0, 0), Catch::Matchers::WithinRel(100.F));
+    CHECK_THAT(snr(0, 1), Catch::Matchers::WithinRel(4.F));
+    CHECK_THAT(snr(0, 2), Catch::Matchers::WithinRel(-1.F));
     CHECK(image_mask(0, 0) == false);
     CHECK(image_mask(0, 1) == true);
     CHECK(image_mask(0, 2) == true);
@@ -540,7 +541,7 @@ TEST_CASE("compute_snr_and_apply_filters never resurrects a caller-supplied imag
                                   group_with_cutoff, band, config, result);
     const auto &snr = scratch.snr;
 
-    CHECK(snr(0, 0) == Catch::Approx(100.F));
+    CHECK_THAT(snr(0, 0), Catch::Matchers::WithinRel(100.F));
     CHECK(image_mask(0, 0) == false);
   }
 }

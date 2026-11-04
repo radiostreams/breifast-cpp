@@ -3,6 +3,7 @@
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "cpu/order_statistics.hpp"
 #include "plane_lot_dispatch.hpp"
@@ -82,6 +83,6 @@ TEST_CASE("compute_rms_noise_map matches a float64 Python reference on a large r
   };
   for (const auto &point : expected)
   {
-    CHECK(noise_map(point.y, point.x) == Catch::Approx(point.value).epsilon(1e-5));
+    CHECK_THAT(noise_map(point.y, point.x), Catch::Matchers::WithinRel(point.value, 1e-5));
   }
 }
