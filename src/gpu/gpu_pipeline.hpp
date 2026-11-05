@@ -198,4 +198,15 @@ void gpu_stamp_abs_extreme(const float *stamps, size_t n_stamps, size_t stamp_pi
  */
 void gpu_stamp_extract(const float *plane, size_t n_y, size_t n_x, const long *centre_y, const long *centre_x,
                        size_t n_stamps, long radius, long inner_boxsize, float *stamps, GpuStream stream = nullptr);
+
+/**
+ * @brief True when any of the `n` bools is true.
+ *
+ * Zeroes `*out_any`, then one block per 256 values, each block reducing its segment with a block OR and issuing one
+ * `atomicOr` per block, so `*out_any` is nonzero when any value is true. Device pointers; the work is enqueued on
+ * `stream`. `n == 0` throws.
+ * @param values `[n]` bools.
+ * @param out_any One int, written (`nonzero` when any value is true).
+ */
+void gpu_any_true(const bool *values, size_t n, int *out_any, GpuStream stream = nullptr);
 } // namespace breifast::gpu
