@@ -181,6 +181,7 @@ test_breifast_core_sources = cpu_sources + [
   'tests/cpp/group1_pure_functions/test_build_gaussian_beam_kernel.cpp',
   'tests/cpp/group1_pure_functions/test_compute_rms_noise_map.cpp',
   'tests/cpp/group1_pure_functions/test_rms_noise_map.cpp',
+  'tests/cpp/group1_pure_functions/test_compact_mask.cpp',
   'tests/cpp/group1_pure_functions/test_combine_noise_map.cpp',
   'tests/cpp/group1_pure_functions/test_compute_rms_noise_map_precision.cpp',
   'tests/cpp/group1_pure_functions/test_max_to_std_ratio.cpp',

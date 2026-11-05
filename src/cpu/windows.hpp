@@ -20,4 +20,12 @@ namespace breifast::plane_lot::detail
 void rms_noise_map(std::span<const float> plane, const size_t n_y_size, const size_t n_x_size, const long boxsize,
                    std::span<float> row_window_sums, std::span<double> column_accumulators, std::span<float> out_rms);
 
+/**
+ * @brief Indices of the true pixels of `mask`, in raster order (row major), matching np.flatnonzero.
+ * @param mask `[n]` bools.
+ * @param out_indices Caller buffer of `mask.size()` elements; the first `return` entries are written.
+ * @return The number of true pixels.
+ */
+size_t compact_mask(std::span<const bool> mask, std::span<size_t> out_indices);
+
 } // namespace breifast::plane_lot::detail

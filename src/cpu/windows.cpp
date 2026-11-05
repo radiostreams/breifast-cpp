@@ -113,4 +113,19 @@ void rms_noise_map(std::span<const float> plane, const size_t n_y_size, const si
   }
 }
 
+size_t compact_mask(std::span<const bool> mask, std::span<size_t> out_indices)
+{
+  size_t index_in = 0;
+  size_t index_out = 0;
+  for (const auto value : mask)
+  {
+    if (value)
+    {
+      out_indices[index_out++] = index_in;
+    }
+    ++index_in;
+  }
+  return index_out;
+}
+
 } // namespace breifast::plane_lot::detail
