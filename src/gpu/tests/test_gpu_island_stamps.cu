@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
+#include <catch2/matchers/catch_matchers_vector.hpp>
 #include <cuda_runtime.h>
 
 #include <algorithm>
@@ -17,7 +18,9 @@
 using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_donut_median_abs;
 using breifast::gpu::gpu_stamp_abs_extreme;
+using breifast::gpu::gpu_stamp_extract;
 using breifast::gpu::PinnedVector;
+using Catch::Matchers::Equals;
 using Catch::Matchers::WithinRel;
 
 namespace
@@ -85,6 +88,15 @@ float host_lmad(const std::vector<float> &stamp, float scale)
   return scale * (m % 2 == 1 ? hi : (lo + hi) / 2.F);
 }
 
+// plane(y, x) = 100 + 10 * y + x, so every pixel is nonzero and the zero fill is easy to see. 6 rows, 7 columns.
+const std::vector<float> stamp_plane = {
+    100.F, 101.F, 102.F, 103.F, 104.F, 105.F, 106.F, 110.F, 111.F, 112.F, 113.F, 114.F, 115.F, 116.F,
+    120.F, 121.F, 122.F, 123.F, 124.F, 125.F, 126.F, 130.F, 131.F, 132.F, 133.F, 134.F, 135.F, 136.F,
+    140.F, 141.F, 142.F, 143.F, 144.F, 145.F, 146.F, 150.F, 151.F, 152.F, 153.F, 154.F, 155.F, 156.F,
+};
+constexpr size_t stamp_plane_n_y = 6;
+constexpr size_t stamp_plane_n_x = 7;
+
 // 21x21 stamp from the LCG, with the central (2 * inner_half + 1)^2 block zeroed.
 std::vector<float> lcg_stamp(uint32_t seed, long inner_half)
 {
@@ -143,6 +155,45 @@ std::vector<float> run_abs_extreme(const std::vector<std::vector<float>> &stamps
 float run_abs_extreme(const std::vector<float> &stamp)
 {
   return run_abs_extreme(std::vector<std::vector<float>>{stamp})[0];
+}
+
+std::vector<float> run_stamp_extract(const std::vector<float> &plane, size_t n_y, size_t n_x,
+                                     const std::vector<long> &centre_y, const std::vector<long> &centre_x, long radius,
+                                     long inner_boxsize)
+{
+  const size_t n_stamps = centre_y.size();
+  const size_t side = static_cast<size_t>(2 * radius + 1);
+  const size_t stamp_pixels = side * side;
+
+  PinnedVector<float> host_plane(plane.begin(), plane.end());
+  DeviceVector<float> device_plane(plane.size());
+  PinnedVector<long> host_cy(centre_y.begin(), centre_y.end());
+  DeviceVector<long> device_cy(n_stamps);
+  PinnedVector<long> host_cx(centre_x.begin(), centre_x.end());
+  DeviceVector<long> device_cx(n_stamps);
+  DeviceVector<float> device_stamps(n_stamps * stamp_pixels);
+
+  cudaStream_t stream{};
+  gpuStreamCreate(&stream);
+
+  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_plane.data()), thrust::raw_pointer_cast(host_plane.data()),
+                             plane.size() * sizeof(float), stream);
+  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_cy.data()), thrust::raw_pointer_cast(host_cy.data()),
+                             n_stamps * sizeof(long), stream);
+  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_cx.data()), thrust::raw_pointer_cast(host_cx.data()),
+                             n_stamps * sizeof(long), stream);
+
+  gpu_stamp_extract(thrust::raw_pointer_cast(device_plane.data()), n_y, n_x, thrust::raw_pointer_cast(device_cy.data()),
+                    thrust::raw_pointer_cast(device_cx.data()), n_stamps, radius, inner_boxsize,
+                    thrust::raw_pointer_cast(device_stamps.data()), stream);
+
+  PinnedVector<float> host_stamps(n_stamps * stamp_pixels);
+  gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_stamps.data()), thrust::raw_pointer_cast(device_stamps.data()),
+                             n_stamps * stamp_pixels * sizeof(float), stream);
+  gpuStreamSynchronize(stream);
+  gpuStreamDestroy(stream);
+
+  return std::vector<float>(host_stamps.begin(), host_stamps.end());
 }
 } // namespace
 
@@ -314,6 +365,125 @@ TEST_CASE("gpu_stamp_abs_extreme rejects zero stamps and zero stamp pixels", "[g
 
   REQUIRE_THROWS_AS(gpu_stamp_abs_extreme(nullptr, 0, 9, out_ptr, stream), std::runtime_error);
   REQUIRE_THROWS_AS(gpu_stamp_abs_extreme(nullptr, 1, 0, out_ptr, stream), std::runtime_error);
+
+  gpuStreamDestroy(stream);
+}
+
+TEST_CASE("gpu_stamp_extract copies the window and zeros the inner box on a 7x7 plane", "[gpu][island_stamps]")
+{
+  std::vector<float> plane(49);
+  for (size_t i = 0; i < plane.size(); ++i)
+  {
+    plane[i] = static_cast<float>(i + 1);
+  }
+
+  const auto stamps = run_stamp_extract(plane, 7, 7, {3L}, {3L}, 3, 1);
+
+  // numpy: a[2:5, 2:5] = 0 for inner_boxsize 1, the 3x3 block around the centre pixel.
+  const std::vector<float> expected = {
+      1.F,  2.F,  3.F,  4.F,  5.F,  6.F,  7.F,  8.F,  9.F,  10.F, 11.F, 12.F, 13.F, 14.F,
+      15.F, 16.F, 0.F,  0.F,  0.F,  20.F, 21.F, 22.F, 23.F, 0.F,  0.F,  0.F,  27.F, 28.F,
+      29.F, 30.F, 0.F,  0.F,  0.F,  34.F, 35.F, 36.F, 37.F, 38.F, 39.F, 40.F, 41.F, 42.F,
+      43.F, 44.F, 45.F, 46.F, 47.F, 48.F, 49.F,
+  };
+
+  REQUIRE(stamps.size() == 49);
+  CHECK_THAT(stamps, Equals(expected));
+}
+
+TEST_CASE("gpu_stamp_extract zeros the cells outside the plane", "[gpu][island_stamps]")
+{
+  // Corner (0, 0): 16 of 25 cells fall outside the plane. The centre cell (100 in the pure-extract reference) is the
+  // fused inner-box zero.
+  const auto corner = run_stamp_extract(stamp_plane, stamp_plane_n_y, stamp_plane_n_x, {0L}, {0L}, 2, 0);
+  const std::vector<float> expected_corner = {
+      0.F,   0.F,   0.F,   0.F,   0.F,
+      0.F,   0.F,   0.F,   0.F,   0.F,
+      0.F,   0.F,   0.F,   101.F, 102.F,
+      0.F,   0.F,   110.F, 111.F, 112.F,
+      0.F,   0.F,   120.F, 121.F, 122.F,
+  };
+  CHECK_THAT(corner, Equals(expected_corner));
+
+  // Opposite corner (5, 6): the window sticks out to the right and below.
+  const auto far = run_stamp_extract(stamp_plane, stamp_plane_n_y, stamp_plane_n_x, {5L}, {6L}, 2, 0);
+  const std::vector<float> expected_far = {
+      134.F, 135.F, 136.F, 0.F, 0.F,
+      144.F, 145.F, 146.F, 0.F, 0.F,
+      154.F, 155.F, 0.F,   0.F, 0.F,
+      0.F,   0.F,   0.F,   0.F, 0.F,
+      0.F,   0.F,   0.F,   0.F, 0.F,
+  };
+  CHECK_THAT(far, Equals(expected_far));
+}
+
+TEST_CASE("gpu_stamp_extract clips the inner box to the radius", "[gpu][island_stamps]")
+{
+  // inner_boxsize 0 zeroes only the centre cell of the 5x5 window around (3, 3).
+  const auto centre_only = run_stamp_extract(stamp_plane, stamp_plane_n_y, stamp_plane_n_x, {3L}, {3L}, 2, 0);
+  const std::vector<float> expected_centre_only = {
+      111.F, 112.F, 113.F, 114.F, 115.F,
+      121.F, 122.F, 123.F, 124.F, 125.F,
+      131.F, 132.F, 0.F,   134.F, 135.F,
+      141.F, 142.F, 143.F, 144.F, 145.F,
+      151.F, 152.F, 153.F, 154.F, 155.F,
+  };
+  CHECK_THAT(centre_only, Equals(expected_centre_only));
+
+  // inner_boxsize at the radius or wider zeroes the whole stamp.
+  CHECK_THAT(run_stamp_extract(stamp_plane, stamp_plane_n_y, stamp_plane_n_x, {3L}, {3L}, 2, 2),
+             Equals(std::vector<float>(25, 0.F)));
+  CHECK_THAT(run_stamp_extract(stamp_plane, stamp_plane_n_y, stamp_plane_n_x, {3L}, {3L}, 2, 100),
+             Equals(std::vector<float>(25, 0.F)));
+
+  // radius 0: a one-pixel stamp, the centre zeroed by any inner_boxsize.
+  CHECK_THAT(run_stamp_extract(stamp_plane, stamp_plane_n_y, stamp_plane_n_x, {0L}, {0L}, 0, 0),
+             Equals(std::vector<float>{0.F}));
+}
+
+TEST_CASE("gpu_stamp_extract extracts each island's stamp independently", "[gpu][island_stamps]")
+{
+  // Two islands on the 6x7 plane, radius 2, inner_boxsize 0, so each stamp has its centre cell zeroed.
+  const auto stamps = run_stamp_extract(stamp_plane, stamp_plane_n_y, stamp_plane_n_x, {1L, 4L}, {2L, 1L}, 2, 0);
+
+  REQUIRE(stamps.size() == 50);
+
+  const std::vector<float> expected0 = {
+      0.F,   0.F,   0.F,   0.F,   0.F,
+      100.F, 101.F, 102.F, 103.F, 104.F,
+      110.F, 111.F, 0.F,   113.F, 114.F,
+      120.F, 121.F, 122.F, 123.F, 124.F,
+      130.F, 131.F, 132.F, 133.F, 134.F,
+  };
+  const std::vector<float> expected1 = {
+      0.F,   120.F, 121.F, 122.F, 123.F,
+      0.F,   130.F, 131.F, 132.F, 133.F,
+      0.F,   140.F, 0.F,   142.F, 143.F,
+      0.F,   150.F, 151.F, 152.F, 153.F,
+      0.F,   0.F,   0.F,   0.F,   0.F,
+  };
+  CHECK_THAT(std::vector<float>(stamps.begin(), stamps.begin() + 25), Equals(expected0));
+  CHECK_THAT(std::vector<float>(stamps.begin() + 25, stamps.end()), Equals(expected1));
+}
+
+TEST_CASE("gpu_stamp_extract rejects zero stamps, an empty plane and negative sizes", "[gpu][island_stamps]")
+{
+  cudaStream_t stream{};
+  gpuStreamCreate(&stream);
+
+  DeviceVector<long> centres(1);
+  DeviceVector<float> stamps(1);
+  float *stamps_ptr = thrust::raw_pointer_cast(stamps.data());
+  const long *centres_ptr = thrust::raw_pointer_cast(centres.data());
+
+  REQUIRE_THROWS_AS(gpu_stamp_extract(nullptr, 6, 7, centres_ptr, centres_ptr, 0, 2, 0, stamps_ptr, stream),
+                    std::runtime_error);
+  REQUIRE_THROWS_AS(gpu_stamp_extract(nullptr, 0, 7, centres_ptr, centres_ptr, 1, 2, 0, stamps_ptr, stream),
+                    std::runtime_error);
+  REQUIRE_THROWS_AS(gpu_stamp_extract(nullptr, 6, 7, centres_ptr, centres_ptr, 1, -1, 0, stamps_ptr, stream),
+                    std::runtime_error);
+  REQUIRE_THROWS_AS(gpu_stamp_extract(nullptr, 6, 7, centres_ptr, centres_ptr, 1, 2, -1, stamps_ptr, stream),
+                    std::runtime_error);
 
   gpuStreamDestroy(stream);
 }

@@ -183,4 +183,19 @@ void gpu_donut_median_abs(const float *stamps, size_t n_stamps, size_t stamp_pix
  */
 void gpu_stamp_abs_extreme(const float *stamps, size_t n_stamps, size_t stamp_pixels, float *out_extreme,
                            GpuStream stream = nullptr);
+
+/**
+ * @brief Extract the `(2 * radius + 1)^2` window around each island's peak into a stamp, with the inner box zeroed.
+ *
+ * One block per stamp. A stamp cell is the plane value where the window is inside the plane, else 0, and every cell of
+ * the `(2 * inner_boxsize + 1)^2` block at the centre is 0 (stamp_zero_inner_box fused in). Device pointers; the work
+ * is enqueued on `stream`.
+ * @param plane `[n_y, n_x]` floats, row major.
+ * @param centre_y,centre_x `[n_stamps]` peak row and column per island.
+ * @param radius Half-width of the window.
+ * @param inner_boxsize Half-width of the zeroed centre, clipped to `radius`.
+ * @param stamps `[n_stamps, (2 * radius + 1)^2]` floats, written completely.
+ */
+void gpu_stamp_extract(const float *plane, size_t n_y, size_t n_x, const long *centre_y, const long *centre_x,
+                       size_t n_stamps, long radius, long inner_boxsize, float *stamps, GpuStream stream = nullptr);
 } // namespace breifast::gpu
