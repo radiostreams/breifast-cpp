@@ -200,6 +200,56 @@ __global__ void stamp_extract_kernel(const float *plane, size_t n_y, size_t n_x,
     out[i] = inside && !inner ? plane[static_cast<size_t>(plane_y) * n_x + static_cast<size_t>(plane_x)] : 0.F;
   }
 }
+
+constexpr size_t BlockDim = 256;
+
+__global__ void donut_std_kernel(const float *stamps, const size_t stamps_pixels, float *out_std)
+{
+  __shared__ double sum[BlockDim];
+  __shared__ double sumsq[BlockDim];
+  __shared__ uint32_t counts[BlockDim];
+  sum[threadIdx.x] = 0.F;
+  sumsq[threadIdx.x] = 0.F;
+  counts[threadIdx.x] = 0;
+  const float *stamp = stamps + blockIdx.x * stamps_pixels;
+
+  __syncthreads();
+  for (size_t i_pixel = threadIdx.x; i_pixel < stamps_pixels; i_pixel += blockDim.x)
+  {
+    const auto value = stamp[i_pixel];
+    if (value != 0.F)
+    {
+      sum[threadIdx.x] += value;
+      sumsq[threadIdx.x] += value * value;
+      ++counts[threadIdx.x];
+    }
+  }
+  __syncthreads();
+
+  for (size_t factor = 1; factor < blockDim.x; factor *= 2)
+  {
+    if (threadIdx.x % (2 * factor) == 0)
+    {
+      sum[threadIdx.x] += sum[threadIdx.x + factor];
+      sumsq[threadIdx.x] += sumsq[threadIdx.x + factor];
+      counts[threadIdx.x] += counts[threadIdx.x + factor];
+    }
+    __syncthreads();
+  }
+
+  if (threadIdx.x == 0)
+  {
+    if (counts[0] == 0)
+    {
+      out_std[blockIdx.x] = 0.F;
+      return;
+    }
+    const auto mean = sum[0] / static_cast<float>(counts[0]);
+    const auto meansq = sumsq[0] / static_cast<float>(counts[0]);
+    const auto var = meansq - mean * mean;
+    out_std[blockIdx.x] = sqrtf(static_cast<float>(var));
+  }
+}
 } // namespace
 
 /**
@@ -230,6 +280,23 @@ void gpu_donut_median_abs(const float *stamps, size_t n_stamps, size_t stamp_pix
   const dim3 grid_size = {static_cast<unsigned int>(n_stamps)};
 
   donut_median_abs_kernel<<<grid_size, block_size, 0, stream>>>(stamps, stamp_pixels, scale, out_lmad);
+  CHECK_LAST_GPU_ERROR();
+}
+
+void gpu_donut_std(const float *stamps, size_t n_stamps, size_t stamp_pixels, float *out_std, GpuStream stream)
+{
+  if (n_stamps == 0)
+  {
+    throw std::runtime_error{"gpu_donut_std: no stamps to process"};
+  }
+  if (stamp_pixels == 0)
+  {
+    throw std::runtime_error{"gpu_donut_std: empty stamps"};
+  }
+
+  const dim3 block_size = {BlockDim};
+  const dim3 grid_size = {static_cast<unsigned int>(n_stamps)};
+  donut_std_kernel<<<grid_size, block_size, 0, stream>>>(stamps, stamp_pixels, out_std);
   CHECK_LAST_GPU_ERROR();
 }
 

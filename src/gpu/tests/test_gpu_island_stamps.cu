@@ -17,6 +17,7 @@
 
 using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_donut_median_abs;
+using breifast::gpu::gpu_donut_std;
 using breifast::gpu::gpu_stamp_abs_extreme;
 using breifast::gpu::gpu_stamp_extract;
 using breifast::gpu::PinnedVector;
@@ -194,6 +195,67 @@ std::vector<float> run_stamp_extract(const std::vector<float> &plane, size_t n_y
   gpuStreamDestroy(stream);
 
   return std::vector<float>(host_stamps.begin(), host_stamps.end());
+}
+
+std::vector<float> run_donut_std(const std::vector<std::vector<float>> &stamps)
+{
+  const size_t n_stamps = stamps.size();
+  const size_t stamp_pixels = stamps.front().size();
+
+  std::vector<float> flat;
+  flat.reserve(n_stamps * stamp_pixels);
+  for (const auto &stamp : stamps)
+  {
+    flat.insert(flat.end(), stamp.begin(), stamp.end());
+  }
+
+  PinnedVector<float> host_stamps(flat.begin(), flat.end());
+  DeviceVector<float> device_stamps(flat.size());
+  DeviceVector<float> device_out(n_stamps);
+
+  cudaStream_t stream{};
+  gpuStreamCreate(&stream);
+
+  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_stamps.data()), thrust::raw_pointer_cast(host_stamps.data()),
+                             flat.size() * sizeof(float), stream);
+  gpu_donut_std(thrust::raw_pointer_cast(device_stamps.data()), n_stamps, stamp_pixels,
+                thrust::raw_pointer_cast(device_out.data()), stream);
+
+  PinnedVector<float> host_out(n_stamps);
+  gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_out.data()), thrust::raw_pointer_cast(device_out.data()),
+                             n_stamps * sizeof(float), stream);
+  gpuStreamSynchronize(stream);
+  gpuStreamDestroy(stream);
+
+  return std::vector<float>(host_out.begin(), host_out.end());
+}
+
+float run_donut_std(const std::vector<float> &stamp)
+{
+  return run_donut_std(std::vector<std::vector<float>>{stamp})[0];
+}
+
+// Independent host oracle: population standard deviation of the nonzero pixels.
+double host_std(const std::vector<float> &stamp)
+{
+  double sum = 0.;
+  double sumsq = 0.;
+  size_t m = 0;
+  for (const float value : stamp)
+  {
+    if (value != 0.F)
+    {
+      sum += value;
+      sumsq += static_cast<double>(value) * static_cast<double>(value);
+      ++m;
+    }
+  }
+  if (m == 0)
+  {
+    return 0.;
+  }
+  const double mean = sum / static_cast<double>(m);
+  return std::sqrt(sumsq / static_cast<double>(m) - mean * mean);
 }
 } // namespace
 
@@ -486,4 +548,46 @@ TEST_CASE("gpu_stamp_extract rejects zero stamps, an empty plane and negative si
                     std::runtime_error);
 
   gpuStreamDestroy(stream);
+}
+
+TEST_CASE("gpu_donut_std matches numpy's population standard deviation on the seeded 9x9 stamp",
+          "[gpu][island_stamps]")
+{
+  // Same stamp as the donut median case; reference np.std of the 68 nonzero pixels.
+  const std::vector<float> stamp = {
+      0.0F,          0.8962366F,   -0.82241356F, -2.6717756F, -1.3640124F, -2.9749396F, 0.18043081F,  4.0206456F,   -1.4766196F,
+      -1.8614247F,   1.4695262F,   1.0706611F,   0.31624275F, -2.7914042F, -0.087755464F, 2.0859096F,  -4.032644F,   -1.3728473F,
+      -5.703668F,    -3.8686132F,  -5.525205F,   -0.7052734F, -3.8023396F, 0.81379306F,  0.47025326F, 0.0F,         -7.550279F,
+      -1.6160787F,   -0.14550284F, 0.33992696F,  0.0F,        0.0F,        0.0F,         -2.4265118F, 3.1826959F,   -2.422604F,
+      -0.097565114F, 2.6531696F,   -1.7508013F,  0.0F,        0.0F,        0.0F,         -3.6751676F, 0.22842069F,  4.0764704F,
+      0.0F,          2.5781481F,   0.3580621F,   0.0F,        0.0F,        0.0F,         -3.5978668F, 0.22354868F,  1.7300688F,
+      -0.56634635F,  2.0487309F,   -0.19955195F, 2.0017426F,  4.315568F,   -2.0269868F,  0.6094158F,  -1.3899227F,  0.38180524F,
+      -3.5615835F,   -1.7379048F,  -0.58858794F, 2.6962917F,  3.435666F,   -3.9705834F,  -2.383927F,  1.9407103F,   -5.977259F,
+      -1.3895096F,   -0.2918608F,  3.771045F,    0.0F,        -0.9816403F, -1.1057277F,  -0.7505862F, 4.570588F,    -1.2840748F,
+  };
+  REQUIRE(stamp.size() == 81);
+
+  CHECK_THAT(run_donut_std(stamp), WithinRel(2.610630869687416, 1e-6));
+}
+
+TEST_CASE("gpu_donut_std spreads over the nonzero pixels and handles empty and single stamps",
+          "[gpu][island_stamps]")
+{
+  // Population std of {-3, 5}: sqrt((16 + 16) / 2) = 4.
+  CHECK_THAT(run_donut_std(std::vector<float>{0.F, -3.F, 0.F, 0.F, 0.F, 0.F, 5.F, 0.F, 0.F}), WithinRel(4.0));
+
+  // A single nonzero pixel has zero spread.
+  std::vector<float> single(25, 0.F);
+  single[7] = -2.5F;
+  CHECK_THAT(run_donut_std(single), WithinRel(0.0));
+
+  // An all-zero stamp has no donut.
+  CHECK_THAT(run_donut_std(std::vector<float>(25, 0.F)), WithinRel(0.0));
+}
+
+TEST_CASE("gpu_donut_std covers a stamp larger than a block against a host reference", "[gpu][island_stamps]")
+{
+  const std::vector<float> stamp = lcg_stamp(7U, 2);
+  REQUIRE(stamp.size() == 441);
+  CHECK_THAT(run_donut_std(stamp), WithinRel(host_std(stamp), 1e-5));
 }

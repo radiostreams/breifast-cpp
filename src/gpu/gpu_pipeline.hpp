@@ -173,6 +173,18 @@ void gpu_donut_median_abs(const float *stamps, size_t n_stamps, size_t stamp_pix
                           GpuStream stream = nullptr);
 
 /**
+ * @brief Population standard deviation of the nonzero pixels of each stamp: the `stddev` of stamp_donut_stats.
+ *
+ * One block per stamp. Over the nonzero pixels (count `m`) it reduces `sum` and `sumsq` in double and writes
+ * `sqrt(sumsq/m - (sum/m)^2)`, or 0 when the stamp has no nonzero pixel. Population (divide by `m`), matching
+ * `xt::stddev`. Device pointers; the work is enqueued on `stream`.
+ * @param stamps `[n_stamps, stamp_pixels]` floats, row major, one stamp per row.
+ * @param stamp_pixels `(2 * radius + 1)^2`.
+ * @param out_std `[n_stamps]` floats, written completely.
+ */
+void gpu_donut_std(const float *stamps, size_t n_stamps, size_t stamp_pixels, float *out_std, GpuStream stream = nullptr);
+
+/**
  * @brief `max(|min|, |max|)` over each stamp, the local-noise extreme of stamp_abs_extreme.
  *
  * One block per stamp, min and max reduced over the stamp and combined into one number per stamp. NaN pixels are
