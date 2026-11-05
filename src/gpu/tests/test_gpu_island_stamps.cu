@@ -19,6 +19,7 @@ using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_donut_median_abs;
 using breifast::gpu::gpu_donut_std;
 using breifast::gpu::gpu_stamp_abs_extreme;
+using breifast::gpu::gpu_stamp_beam_chi2;
 using breifast::gpu::gpu_stamp_extract;
 using breifast::gpu::PinnedVector;
 using Catch::Matchers::Equals;
@@ -256,6 +257,54 @@ double host_std(const std::vector<float> &stamp)
   }
   const double mean = sum / static_cast<double>(m);
   return std::sqrt(sumsq / static_cast<double>(m) - mean * mean);
+}
+
+std::vector<float> run_beam_chi2(const std::vector<std::vector<float>> &stamps, const std::vector<float> &kernel,
+                                 const std::vector<float> &adjacent_noise)
+{
+  const size_t n_stamps = stamps.size();
+  const size_t stamp_pixels = stamps.front().size();
+
+  std::vector<float> flat;
+  flat.reserve(n_stamps * stamp_pixels);
+  for (const auto &stamp : stamps)
+  {
+    flat.insert(flat.end(), stamp.begin(), stamp.end());
+  }
+
+  PinnedVector<float> host_stamps(flat.begin(), flat.end());
+  DeviceVector<float> device_stamps(flat.size());
+  PinnedVector<float> host_kernel(kernel.begin(), kernel.end());
+  DeviceVector<float> device_kernel(kernel.size());
+  PinnedVector<float> host_noise(adjacent_noise.begin(), adjacent_noise.end());
+  DeviceVector<float> device_noise(adjacent_noise.size());
+  DeviceVector<float> device_out(n_stamps);
+
+  cudaStream_t stream{};
+  gpuStreamCreate(&stream);
+
+  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_stamps.data()), thrust::raw_pointer_cast(host_stamps.data()),
+                             flat.size() * sizeof(float), stream);
+  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_kernel.data()), thrust::raw_pointer_cast(host_kernel.data()),
+                             kernel.size() * sizeof(float), stream);
+  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_noise.data()), thrust::raw_pointer_cast(host_noise.data()),
+                             adjacent_noise.size() * sizeof(float), stream);
+  gpu_stamp_beam_chi2(thrust::raw_pointer_cast(device_stamps.data()), thrust::raw_pointer_cast(device_kernel.data()),
+                      n_stamps, stamp_pixels, thrust::raw_pointer_cast(device_noise.data()),
+                      thrust::raw_pointer_cast(device_out.data()), stream);
+
+  PinnedVector<float> host_out(n_stamps);
+  gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_out.data()), thrust::raw_pointer_cast(device_out.data()),
+                             n_stamps * sizeof(float), stream);
+  gpuStreamSynchronize(stream);
+  gpuStreamDestroy(stream);
+
+  return std::vector<float>(host_out.begin(), host_out.end());
+}
+
+float run_beam_chi2(const std::vector<float> &stamp, const std::vector<float> &kernel, float adjacent_noise)
+{
+  return run_beam_chi2(std::vector<std::vector<float>>{stamp}, kernel, std::vector<float>{adjacent_noise})[0];
 }
 } // namespace
 
@@ -590,4 +639,73 @@ TEST_CASE("gpu_donut_std covers a stamp larger than a block against a host refer
   const std::vector<float> stamp = lcg_stamp(7U, 2);
   REQUIRE(stamp.size() == 441);
   CHECK_THAT(run_donut_std(stamp), WithinRel(host_std(stamp), 1e-5));
+}
+
+TEST_CASE("gpu_stamp_beam_chi2 matches numpy on a seeded 5x5 stamp against a Gaussian kernel",
+          "[gpu][island_stamps]")
+{
+  const std::vector<float> stamp = {
+      0.0F,                  0.0F,                  2.7482831478118896F,  0.3115137219429016F,  -0.16898779571056366F,
+      -0.16185835003852844F, 2.898714065551758F,    4.261612892150879F,   3.0758731365203857F,  -1.4817990064620972F,
+      2.083815813064575F,    3.1993911266326904F,   6.7904582023620605F,  3.159256935119629F,   0.0F,
+      0.8286359906196594F,   3.153501033782959F,    4.115147590637207F,   2.176201343536377F,   1.0512244701385498F,
+      -0.7413589358329773F,  -0.6925626993179321F,  1.918543815612793F,   0.0F,                 -1.7913588285446167F,
+  };
+  const std::vector<float> kernel = {
+      0.003224542597308755F, 0.02054551988840103F, 0.038089048117399216F, 0.02054551988840103F,  0.003224542597308755F,
+      0.009138146415352821F, 0.05822468921542168F, 0.10794193297624588F, 0.05822468921542168F,  0.009138146415352821F,
+      0.012931677512824535F, 0.08239558339118958F, 0.15275199711322784F, 0.08239558339118958F,  0.012931677512824535F,
+      0.009138146415352821F, 0.05822468921542168F, 0.10794193297624588F, 0.05822468921542168F,  0.009138146415352821F,
+      0.003224542597308755F, 0.02054551988840103F, 0.038089048117399216F, 0.02054551988840103F,  0.003224542597308755F,
+  };
+  REQUIRE(stamp.size() == 25);
+  REQUIRE(kernel.size() == 25);
+
+  CHECK_THAT(run_beam_chi2(stamp, kernel, 1.3F), WithinRel(0.5573078192176192, 1e-5));
+}
+
+TEST_CASE("gpu_stamp_beam_chi2 scales over the whole stamp and masks the residual", "[gpu][island_stamps]")
+{
+  // 3x3 stamp with one nonzero pixel (4) and a flat kernel of ones: scale = 4/9, residual = 32/9, chi2 = (32/9)^2/4.
+  const std::vector<float> stamp = {0.F, 0.F, 0.F, 0.F, 4.F, 0.F, 0.F, 0.F, 0.F};
+  const std::vector<float> kernel(9, 1.F);
+
+  CHECK_THAT(run_beam_chi2(stamp, kernel, 2.F), WithinRel(3.1604938271604937, 1e-6));
+}
+
+TEST_CASE("gpu_stamp_beam_chi2 is 0 for a perfect fit, an empty stamp and a zero adjacent noise",
+          "[gpu][island_stamps]")
+{
+  const std::vector<float> kernel(9, 1.F);
+
+  // A flat stamp of 2 is exactly 2 * kernel: no residual.
+  CHECK_THAT(run_beam_chi2(std::vector<float>(9, 2.F), kernel, 1.5F), WithinRel(0.F));
+
+  // No nonzero pixel: the guard returns 0.
+  CHECK_THAT(run_beam_chi2(std::vector<float>(9, 0.F), kernel, 1.5F), WithinRel(0.F));
+
+  const std::vector<float> stamp = {1.F, 2.F, 3.F, 4.F, 5.F, 6.F, 7.F, 8.F, 9.F};
+  CHECK_THAT(run_beam_chi2(stamp, kernel, 0.F), WithinRel(0.F)); // adjacent_noise 0 -> 0 instead of a division
+  CHECK(run_beam_chi2(stamp, kernel, 1.F) > 0.F);
+
+  // Radius 0: one pixel always fits itself.
+  CHECK_THAT(run_beam_chi2(std::vector<float>{3.F}, std::vector<float>{0.5F}, 1.F), WithinRel(0.F));
+}
+
+TEST_CASE("gpu_stamp_beam_chi2 rejects zero stamps and zero stamp pixels", "[gpu][island_stamps]")
+{
+  cudaStream_t stream{};
+  gpuStreamCreate(&stream);
+
+  DeviceVector<float> out(1);
+  DeviceVector<float> kernel(9);
+  DeviceVector<float> noise(1);
+  float *out_ptr = thrust::raw_pointer_cast(out.data());
+  const float *kernel_ptr = thrust::raw_pointer_cast(kernel.data());
+  const float *noise_ptr = thrust::raw_pointer_cast(noise.data());
+
+  REQUIRE_THROWS_AS(gpu_stamp_beam_chi2(nullptr, kernel_ptr, 0, 9, noise_ptr, out_ptr, stream), std::runtime_error);
+  REQUIRE_THROWS_AS(gpu_stamp_beam_chi2(nullptr, kernel_ptr, 1, 0, noise_ptr, out_ptr, stream), std::runtime_error);
+
+  gpuStreamDestroy(stream);
 }

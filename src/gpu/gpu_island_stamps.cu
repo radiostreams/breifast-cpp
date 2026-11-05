@@ -250,6 +250,93 @@ __global__ void donut_std_kernel(const float *stamps, const size_t stamps_pixels
     out_std[blockIdx.x] = sqrtf(static_cast<float>(var));
   }
 }
+
+__global__ void kernel_sum_kernel(const float *kernel, size_t n, float *out_sum)
+{
+  __shared__ float tmp[BlockDim];
+  tmp[threadIdx.x] = 0.F;
+  __syncthreads();
+
+  for (size_t i = threadIdx.x; i < n; i += blockDim.x)
+  {
+    tmp[threadIdx.x] += kernel[i];
+  }
+  __syncthreads();
+  for (size_t factor = 1; factor < blockDim.x; factor *= 2)
+  {
+    if (threadIdx.x % (2 * factor) == 0)
+    {
+      tmp[threadIdx.x] += tmp[threadIdx.x + factor];
+    }
+    __syncthreads();
+  }
+  if (threadIdx.x == 0)
+  {
+    *out_sum = tmp[0];
+  }
+}
+
+__global__ void stamp_beam_chi2_kernel(const float *stamps, const float *kernel, const float *kernel_sum,
+                                       const float *adjacent_noise, size_t stamp_pixels, float *out_chi2)
+{
+  const auto i_stamp = blockIdx.x;
+
+  const float *stamp = stamps + i_stamp * stamp_pixels;
+
+  __shared__ float tmp[BlockDim];
+  tmp[threadIdx.x] = 0.F;
+  __syncthreads();
+
+  for (size_t i = threadIdx.x; i < stamp_pixels; i += blockDim.x)
+  {
+    tmp[threadIdx.x] += stamp[i];
+  }
+  __syncthreads();
+  for (size_t factor = 1; factor < blockDim.x; factor *= 2)
+  {
+    if (threadIdx.x % (2 * factor) == 0)
+    {
+      tmp[threadIdx.x] += tmp[threadIdx.x + factor];
+    }
+    __syncthreads();
+  }
+  const auto scale = tmp[0] / *kernel_sum;
+
+  __shared__ uint32_t counts[BlockDim];
+  counts[threadIdx.x] = 0U;
+  tmp[threadIdx.x] = 0.F;
+  __syncthreads();
+
+  for (size_t i = threadIdx.x; i < stamp_pixels; i += blockDim.x)
+  {
+    const auto value = stamp[i];
+    if (value != 0.F)
+    {
+      const auto delta = value - scale * kernel[i];
+      tmp[threadIdx.x] += delta * delta;
+      ++counts[threadIdx.x];
+    }
+  }
+  __syncthreads();
+
+  for (size_t factor = 1; factor < blockDim.x; factor *= 2)
+  {
+    if (threadIdx.x % (2 * factor) == 0)
+    {
+      tmp[threadIdx.x] += tmp[threadIdx.x + factor];
+      counts[threadIdx.x] += counts[threadIdx.x + factor];
+    }
+    __syncthreads();
+  }
+  if (threadIdx.x == 0)
+  {
+    const auto count = counts[0];
+    const auto resid2 = tmp[0];
+    out_chi2[i_stamp] = (count > 0 && adjacent_noise[blockIdx.x] != 0)
+                            ? resid2 / (adjacent_noise[blockIdx.x] * adjacent_noise[blockIdx.x] * count)
+                            : 0.F;
+  }
+}
 } // namespace
 
 /**
@@ -345,5 +432,31 @@ void gpu_stamp_extract(const float *plane, size_t n_y, size_t n_x, const long *c
   stamp_extract_kernel<<<grid_size, block_size, 0, stream>>>(plane, n_y, n_x, centre_y, centre_x, radius, inner_boxsize,
                                                              stamp_pixels, stamps);
   CHECK_LAST_GPU_ERROR();
+}
+
+void gpu_stamp_beam_chi2(const float *stamps, const float *kernel, size_t n_stamps, size_t stamp_pixels,
+                         const float *adjacent_noise, float *out_chi2, GpuStream stream)
+{
+  if (n_stamps == 0)
+  {
+    throw std::runtime_error{"gpu_stamp_beam_chi2: no stamps to process"};
+  }
+  if (stamp_pixels == 0)
+  {
+    throw std::runtime_error{"gpu_stamp_beam_chi2: empty stamps"};
+  }
+
+  float *kernel_sum = nullptr;
+  gpuMallocAsync(&kernel_sum, sizeof(float), stream);
+  kernel_sum_kernel<<<1, BlockDim, 0, stream>>>(kernel, stamp_pixels, kernel_sum);
+  CHECK_LAST_GPU_ERROR();
+
+  const dim3 block_size = {BlockDim};
+  const dim3 grid_size = {static_cast<unsigned int>(n_stamps)};
+  stamp_beam_chi2_kernel<<<grid_size, block_size, 0, stream>>>(stamps, kernel, kernel_sum, adjacent_noise, stamp_pixels,
+                                                               out_chi2);
+  CHECK_LAST_GPU_ERROR();
+
+  gpuFreeAsync(kernel_sum, stream);
 }
 } // namespace breifast::gpu

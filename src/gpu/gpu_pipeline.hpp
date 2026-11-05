@@ -221,4 +221,18 @@ void gpu_stamp_extract(const float *plane, size_t n_y, size_t n_x, const long *c
  * @param out_any One int, written (`nonzero` when any value is true).
  */
 void gpu_any_true(const bool *values, size_t n, int *out_any, GpuStream stream = nullptr);
+
+/**
+ * @brief Reduced chi2 of each stamp against the beam kernel, over the nonzero stamp pixels.
+ *
+ * One block per stamp. The wrapper sums `kernel` once, then `scale = sum(stamp) / sum(kernel)` over the whole stamp,
+ * then `sum((stamp[i] - scale * kernel[i])^2) / (adjacent_noise^2 * count)` over the nonzero pixels, and 0 when there
+ * is no nonzero pixel or `adjacent_noise` is 0. Device pointers; the work is enqueued on `stream`.
+ * @param stamps `[n_stamps, stamp_pixels]` floats, row major, one beam stamp per row.
+ * @param kernel `[stamp_pixels]` floats, the band's beam kernel, shared by every stamp.
+ * @param adjacent_noise `[n_stamps]` floats, one per island.
+ * @param out_chi2 `[n_stamps]` floats, written completely.
+ */
+void gpu_stamp_beam_chi2(const float *stamps, const float *kernel, size_t n_stamps, size_t stamp_pixels,
+                         const float *adjacent_noise, float *out_chi2, GpuStream stream = nullptr);
 } // namespace breifast::gpu
