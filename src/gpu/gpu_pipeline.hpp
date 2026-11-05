@@ -248,4 +248,20 @@ void gpu_stamp_beam_chi2(const float *stamps, const float *kernel, size_t n_stam
  */
 void gpu_compact_mask(const bool *mask, size_t n, size_t *out_indices, size_t *out_count, unsigned int *scratch,
                       GpuStream stream = nullptr);
+
+/**
+ * @brief 4-connected component labels of `mask`, numbered `1..count` in raster order of each island's first pixel.
+ *
+ * A dense min-label propagation: every true pixel starts at its flat index, then repeatedly takes the smallest of its
+ * flat-index label and its four already-true neighbours until a fixed point, so each pixel settles on its component's
+ * smallest index. That index is then ranked among the components. `0` marks background. Device pointers; the work is
+ * enqueued on `stream`, but the propagation converges on the host so this call synchronises `stream`. `n_y * n_x == 0`
+ * throws.
+ * @param mask `[n_y * n_x]` bools, row major.
+ * @param labels `[n_y * n_x]` output labels, `0` outside every island.
+ * @param out_count One `unsigned int`, the number of islands.
+ * @param scratch `[n_y * n_x]` `unsigned int` scan workspace.
+ */
+void gpu_label_islands(const bool *mask, size_t n_y, size_t n_x, unsigned int *labels, unsigned int *out_count,
+                       unsigned int *scratch, GpuStream stream = nullptr);
 } // namespace breifast::gpu
