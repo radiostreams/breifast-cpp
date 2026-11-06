@@ -117,7 +117,8 @@ void gpu_combine_noise_map_constant(float base_noise, const float *selfnoise_off
  * @param out_snr `[n_pixels]` floats, written completely.
  * @param image_mask `[n_pixels]` bools, AND-ed in place, written completely.
  * @param histogram0 `2 * max_sigma_bin` counts under the first mask (only when `histogram_detail > 1`), and likewise
- *        `histogram1` under the second mask; `histogram2` under the third mask when `histogram_detail > 0`.
+ *        `histogram1` under the second mask; `histogram2` under the third mask when `histogram_detail > 0`. Every
+ *        non-null histogram is zeroed on every call, including the ones this band does not fill, matching the CPU.
  * @param out_min_sigma,out_max_sigma One float each; `+inf` and `lowest` when no pixel passes the third mask.
  */
 void gpu_snr_and_filters(const float *plane, const float *noise_map, const float *snr_cutoff, const float *flux_cutoff,
@@ -212,6 +213,20 @@ void gpu_stamp_extract(const float *plane, size_t n_y, size_t n_x, const long *c
                        size_t n_stamps, long radius, long inner_boxsize, float *stamps, GpuStream stream = nullptr);
 
 /**
+ * @brief Extract the `(2 * radius + 1)^2` window around each island's peak into a stamp, without zeroing anything.
+ *
+ * Same clipping behaviour as gpu_stamp_extract(): cells outside the plane are 0, in-plane cells keep the plane value
+ * (including the centre). Use this for beam stamps and for gathering per-island values with `radius = 0`. Device
+ * pointers; the work is enqueued on `stream`. `n_stamps == 0`, an empty plane, or `radius < 0` throws.
+ * @param plane `[n_y, n_x]` floats, row major.
+ * @param centre_y,centre_x `[n_stamps]` peak row and column per island.
+ * @param radius Half-width of the window.
+ * @param stamps `[n_stamps, (2 * radius + 1)^2]` floats, written completely.
+ */
+void gpu_stamp_extract_no_zero(const float *plane, size_t n_y, size_t n_x, const long *centre_y, const long *centre_x,
+                               size_t n_stamps, long radius, float *stamps, GpuStream stream = nullptr);
+
+/**
  * @brief True when any of the `n` bools is true.
  *
  * Zeroes `*out_any`, then one block per 256 values, each block reducing its segment with a block OR and issuing one
@@ -264,6 +279,33 @@ void gpu_compact_mask(const bool *mask, size_t n, size_t *out_indices, size_t *o
  */
 void gpu_label_islands(const bool *mask, size_t n_y, size_t n_x, unsigned int *labels, unsigned int *out_count,
                        unsigned int *scratch, GpuStream stream = nullptr);
+
+/**
+ * @brief Per-label statistics of a labeled image: the `peak_per_label` outputs of the CPU label_islands() pass.
+ *
+ * For every label `1..n_labels`, over the pixels carrying that label:
+ * - `island_size`: pixel count.
+ * - `value`: largest `|image[p]|`, with the first pixel in raster order winning a tie.
+ * - `peak_y`, `peak_x`: coordinates of that winning pixel.
+ * - `out_local_noise`: largest `local_noise[p]`.
+ *
+ * Device pointers. `labels` is compact, `0` for background, `1..n_labels` for islands. The work is enqueued on
+ * `stream`, which is not synchronised by this call. Every output is written for every label. A label with no pixel
+ * gets `value = -FLT_MAX`, `out_local_noise = -FLT_MAX`, `peak_y = peak_x = 0`, `island_size = 0`.
+ * `n_pixels == 0` or `n_x == 0` throws; `n_labels == 0` is a no-op.
+ * @param labels `[n_pixels]` compact labels, row major.
+ * @param image `[n_pixels]` floats whose absolute maximum defines the peak.
+ * @param local_noise `[n_pixels]` floats.
+ * @param n_x Row width, used to turn the peak flat index into `(peak_y, peak_x)`.
+ * @param value `[n_labels]` floats, written.
+ * @param out_local_noise `[n_labels]` floats, written.
+ * @param peak_y `[n_labels]` peak rows, written.
+ * @param peak_x `[n_labels]` peak columns, written.
+ * @param island_size `[n_labels]` pixel counts, written.
+ */
+void gpu_label_stats(const unsigned int *labels, const float *image, const float *local_noise, size_t n_pixels,
+                     size_t n_x, unsigned int n_labels, float *value, float *out_local_noise, long *peak_y,
+                     long *peak_x, unsigned int *island_size, GpuStream stream = nullptr);
 
 /**
  * @brief Batched island boost: for every label in `labels_to_process`, the largest-magnitude

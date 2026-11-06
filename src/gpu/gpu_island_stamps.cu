@@ -201,6 +201,27 @@ __global__ void stamp_extract_kernel(const float *plane, size_t n_y, size_t n_x,
   }
 }
 
+__global__ void stamp_extract_no_zero_kernel(const float *plane, size_t n_y, size_t n_x, const long *centre_y,
+                                               const long *centre_x, long radius, size_t stamp_pixels, float *stamps)
+{
+  const size_t stamp_id = blockIdx.x;
+  const long side = 2 * radius + 1;
+  const long first_y = centre_y[stamp_id] - radius;
+  const long first_x = centre_x[stamp_id] - radius;
+  float *const out = stamps + stamp_id * stamp_pixels;
+
+  for (size_t i = threadIdx.x; i < stamp_pixels; i += blockDim.x)
+  {
+    const long row = static_cast<long>(i / static_cast<size_t>(side));
+    const long col = static_cast<long>(i % static_cast<size_t>(side));
+    const long plane_y = first_y + row;
+    const long plane_x = first_x + col;
+    const bool inside =
+        plane_y >= 0 && plane_y < static_cast<long>(n_y) && plane_x >= 0 && plane_x < static_cast<long>(n_x);
+    out[i] = inside ? plane[static_cast<size_t>(plane_y) * n_x + static_cast<size_t>(plane_x)] : 0.F;
+  }
+}
+
 constexpr size_t BlockDim = 256;
 
 __global__ void donut_std_kernel(const float *stamps, const size_t stamps_pixels, float *out_std)
@@ -431,6 +452,31 @@ void gpu_stamp_extract(const float *plane, size_t n_y, size_t n_x, const long *c
   const dim3 grid_size = {static_cast<unsigned int>(n_stamps)};
   stamp_extract_kernel<<<grid_size, block_size, 0, stream>>>(plane, n_y, n_x, centre_y, centre_x, radius, inner_boxsize,
                                                              stamp_pixels, stamps);
+  CHECK_LAST_GPU_ERROR();
+}
+
+void gpu_stamp_extract_no_zero(const float *plane, size_t n_y, size_t n_x, const long *centre_y, const long *centre_x,
+                              size_t n_stamps, long radius, float *stamps, GpuStream stream)
+{
+  if (n_stamps == 0)
+  {
+    throw std::runtime_error{"gpu_stamp_extract_no_zero: no stamps to process"};
+  }
+  if (n_y == 0 || n_x == 0)
+  {
+    throw std::runtime_error{"gpu_stamp_extract_no_zero: empty plane"};
+  }
+  if (radius < 0)
+  {
+    throw std::runtime_error{"gpu_stamp_extract_no_zero: negative radius"};
+  }
+
+  const size_t side = static_cast<size_t>(2 * radius + 1);
+  const size_t stamp_pixels = side * side;
+  const dim3 block_size = {stamp_block_threads};
+  const dim3 grid_size = {static_cast<unsigned int>(n_stamps)};
+  stamp_extract_no_zero_kernel<<<grid_size, block_size, 0, stream>>>(plane, n_y, n_x, centre_y, centre_x, radius,
+                                                                    stamp_pixels, stamps);
   CHECK_LAST_GPU_ERROR();
 }
 

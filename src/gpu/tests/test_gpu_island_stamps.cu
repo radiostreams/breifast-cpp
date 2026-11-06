@@ -21,6 +21,7 @@ using breifast::gpu::gpu_donut_std;
 using breifast::gpu::gpu_stamp_abs_extreme;
 using breifast::gpu::gpu_stamp_beam_chi2;
 using breifast::gpu::gpu_stamp_extract;
+using breifast::gpu::gpu_stamp_extract_no_zero;
 using breifast::gpu::PinnedVector;
 using Catch::Matchers::Equals;
 using Catch::Matchers::WithinRel;
@@ -188,6 +189,45 @@ std::vector<float> run_stamp_extract(const std::vector<float> &plane, size_t n_y
   gpu_stamp_extract(thrust::raw_pointer_cast(device_plane.data()), n_y, n_x, thrust::raw_pointer_cast(device_cy.data()),
                     thrust::raw_pointer_cast(device_cx.data()), n_stamps, radius, inner_boxsize,
                     thrust::raw_pointer_cast(device_stamps.data()), stream);
+
+  PinnedVector<float> host_stamps(n_stamps * stamp_pixels);
+  gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_stamps.data()), thrust::raw_pointer_cast(device_stamps.data()),
+                             n_stamps * stamp_pixels * sizeof(float), stream);
+  gpuStreamSynchronize(stream);
+  gpuStreamDestroy(stream);
+
+  return std::vector<float>(host_stamps.begin(), host_stamps.end());
+}
+
+std::vector<float> run_stamp_extract_no_zero(const std::vector<float> &plane, size_t n_y, size_t n_x,
+                                             const std::vector<long> &centre_y, const std::vector<long> &centre_x,
+                                             long radius)
+{
+  const size_t n_stamps = centre_y.size();
+  const size_t side = static_cast<size_t>(2 * radius + 1);
+  const size_t stamp_pixels = side * side;
+
+  PinnedVector<float> host_plane(plane.begin(), plane.end());
+  DeviceVector<float> device_plane(plane.size());
+  PinnedVector<long> host_cy(centre_y.begin(), centre_y.end());
+  DeviceVector<long> device_cy(n_stamps);
+  PinnedVector<long> host_cx(centre_x.begin(), centre_x.end());
+  DeviceVector<long> device_cx(n_stamps);
+  DeviceVector<float> device_stamps(n_stamps * stamp_pixels);
+
+  cudaStream_t stream{};
+  gpuStreamCreate(&stream);
+
+  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_plane.data()), thrust::raw_pointer_cast(host_plane.data()),
+                             plane.size() * sizeof(float), stream);
+  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_cy.data()), thrust::raw_pointer_cast(host_cy.data()),
+                             n_stamps * sizeof(long), stream);
+  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_cx.data()), thrust::raw_pointer_cast(host_cx.data()),
+                             n_stamps * sizeof(long), stream);
+
+  gpu_stamp_extract_no_zero(thrust::raw_pointer_cast(device_plane.data()), n_y, n_x,
+                            thrust::raw_pointer_cast(device_cy.data()), thrust::raw_pointer_cast(device_cx.data()),
+                            n_stamps, radius, thrust::raw_pointer_cast(device_stamps.data()), stream);
 
   PinnedVector<float> host_stamps(n_stamps * stamp_pixels);
   gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_stamps.data()), thrust::raw_pointer_cast(device_stamps.data()),
@@ -594,6 +634,65 @@ TEST_CASE("gpu_stamp_extract rejects zero stamps, an empty plane and negative si
   REQUIRE_THROWS_AS(gpu_stamp_extract(nullptr, 6, 7, centres_ptr, centres_ptr, 1, -1, 0, stamps_ptr, stream),
                     std::runtime_error);
   REQUIRE_THROWS_AS(gpu_stamp_extract(nullptr, 6, 7, centres_ptr, centres_ptr, 1, 2, -1, stamps_ptr, stream),
+                    std::runtime_error);
+
+  gpuStreamDestroy(stream);
+}
+
+TEST_CASE("gpu_stamp_extract_no_zero copies the window without zeroing the centre", "[gpu][island_stamps]")
+{
+  std::vector<float> plane(49);
+  for (size_t i = 0; i < plane.size(); ++i)
+  {
+    plane[i] = static_cast<float>(i + 1);
+  }
+
+  const auto stamps = run_stamp_extract_no_zero(plane, 7, 7, {3L}, {3L}, 3);
+
+  std::vector<float> expected(49);
+  for (size_t i = 0; i < expected.size(); ++i)
+  {
+    expected[i] = static_cast<float>(i + 1);
+  }
+  CHECK_THAT(stamps, Equals(expected));
+}
+
+TEST_CASE("gpu_stamp_extract_no_zero still zeros cells outside the plane", "[gpu][island_stamps]")
+{
+  const auto corner = run_stamp_extract_no_zero(stamp_plane, stamp_plane_n_y, stamp_plane_n_x, {0L}, {0L}, 2);
+  const std::vector<float> expected_corner = {
+      0.F,   0.F,   0.F,   0.F,   0.F,
+      0.F,   0.F,   0.F,   0.F,   0.F,
+      0.F,   0.F,   100.F, 101.F, 102.F,
+      0.F,   0.F,   110.F, 111.F, 112.F,
+      0.F,   0.F,   120.F, 121.F, 122.F,
+  };
+  CHECK_THAT(corner, Equals(expected_corner));
+}
+
+TEST_CASE("gpu_stamp_extract_no_zero gathers single values at radius zero", "[gpu][island_stamps]")
+{
+  const auto values =
+      run_stamp_extract_no_zero(stamp_plane, stamp_plane_n_y, stamp_plane_n_x, {0L, 0L, 3L}, {0L, 2L, 3L}, 0);
+  CHECK_THAT(values, Equals(std::vector<float>{100.F, 102.F, 133.F}));
+}
+
+TEST_CASE("gpu_stamp_extract_no_zero rejects zero stamps, an empty plane and negative radius",
+          "[gpu][island_stamps]")
+{
+  cudaStream_t stream{};
+  gpuStreamCreate(&stream);
+
+  DeviceVector<long> centres(1);
+  DeviceVector<float> stamps(1);
+  float *stamps_ptr = thrust::raw_pointer_cast(stamps.data());
+  const long *centres_ptr = thrust::raw_pointer_cast(centres.data());
+
+  REQUIRE_THROWS_AS(gpu_stamp_extract_no_zero(nullptr, 6, 7, centres_ptr, centres_ptr, 0, 2, stamps_ptr, stream),
+                    std::runtime_error);
+  REQUIRE_THROWS_AS(gpu_stamp_extract_no_zero(nullptr, 0, 7, centres_ptr, centres_ptr, 1, 2, stamps_ptr, stream),
+                    std::runtime_error);
+  REQUIRE_THROWS_AS(gpu_stamp_extract_no_zero(nullptr, 6, 7, centres_ptr, centres_ptr, 1, -1, stamps_ptr, stream),
                     std::runtime_error);
 
   gpuStreamDestroy(stream);

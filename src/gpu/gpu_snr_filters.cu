@@ -1,36 +1,13 @@
 #include "gpu_pipeline.hpp"
 
 #include "gpu_runtime.hpp"
+#include "gpu_minmax.cuh"
 #include "common/snr_filter_params.hpp"
 
 namespace breifast::gpu
 {
 namespace
 {
-__device__ void atomic_min_float(float *address, float value)
-{
-  int *address_as_int = reinterpret_cast<int *>(address);
-  int old = *address_as_int;
-  int assumed;
-  do
-  {
-    assumed = old;
-    old = atomicCAS(address_as_int, assumed, __float_as_int(fminf(value, __int_as_float(assumed))));
-  } while (assumed != old);
-}
-
-__device__ void atomic_max_float(float *address, float value)
-{
-  int *address_as_int = reinterpret_cast<int *>(address);
-  int old = *address_as_int;
-  int assumed;
-  do
-  {
-    assumed = old;
-    old = atomicCAS(address_as_int, assumed, __float_as_int(fmaxf(value, __int_as_float(assumed))));
-  } while (assumed != old);
-}
-
 __global__ void min_max_init(float *out_min_sigma, float *out_max_sigma)
 {
   *out_min_sigma = __int_as_float(0x7f800000);  // +inf
@@ -142,8 +119,6 @@ void gpu_snr_and_filters(const float *plane, const float *noise_map, const float
       throw std::runtime_error(
           "gpu_snr_and_filters: histogram0 and histogram1 must be non-null when histogram_detail > 1");
     }
-    gpuMemsetAsync(histogram0, 0, sizeof(unsigned long long) * 2 * params.max_sigma_bin, stream);
-    gpuMemsetAsync(histogram1, 0, sizeof(unsigned long long) * 2 * params.max_sigma_bin, stream);
   }
   if (params.histogram_detail > 0)
   {
@@ -151,6 +126,17 @@ void gpu_snr_and_filters(const float *plane, const float *noise_map, const float
     {
       throw std::runtime_error("gpu_snr_and_filters: histogram2 must be non-null when histogram_detail > 0");
     }
+  }
+  if (histogram0 != nullptr)
+  {
+    gpuMemsetAsync(histogram0, 0, sizeof(unsigned long long) * 2 * params.max_sigma_bin, stream);
+  }
+  if (histogram1 != nullptr)
+  {
+    gpuMemsetAsync(histogram1, 0, sizeof(unsigned long long) * 2 * params.max_sigma_bin, stream);
+  }
+  if (histogram2 != nullptr)
+  {
     gpuMemsetAsync(histogram2, 0, sizeof(unsigned long long) * 2 * params.max_sigma_bin, stream);
   }
   CHECK_LAST_GPU_ERROR();

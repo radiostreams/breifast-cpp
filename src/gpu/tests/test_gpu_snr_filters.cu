@@ -426,6 +426,33 @@ TEST_CASE("gpu_snr_and_filters overwrites the stale values of out_snr and the hi
   }
 }
 
+TEST_CASE("gpu_snr_and_filters zeroes all histograms when histogram_detail is 0", "[gpu][snr_and_filters]")
+{
+  auto params = default_params();
+  params.histogram_detail = 0;
+
+  const auto out = run_gpu_snr_and_filters(plane, noise_map, snr_cutoff, flux_cutoff, params, accept, 0.F, 123456789);
+
+  const std::vector<unsigned long long> zeros(2 * max_sigma_bin, 0);
+  for (const auto &histogram : out.histograms)
+  {
+    CHECK_THAT(histogram, Equals(zeros));
+  }
+}
+
+TEST_CASE("gpu_snr_and_filters zeroes the unused histograms when histogram_detail is 1",
+          "[gpu][snr_and_filters]")
+{
+  auto params = default_params();
+  params.histogram_detail = 1;
+
+  const auto out = run_gpu_snr_and_filters(plane, noise_map, snr_cutoff, flux_cutoff, params, accept, 0.F, 123456789);
+
+  const std::vector<unsigned long long> zeros(2 * max_sigma_bin, 0);
+  CHECK_THAT(out.histograms[0], Equals(zeros));
+  CHECK_THAT(out.histograms[1], Equals(zeros));
+}
+
 TEST_CASE("gpu_snr_and_filters returns the empty summary and zero histograms when no pixel is accepted",
           "[gpu][snr_and_filters]")
 {
