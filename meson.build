@@ -155,7 +155,7 @@ ext_module = py.extension_module(
   include_directories : include_directories('src'),
   dependencies : [py.dependency(), pybind11_dep, xtl_dep, xtensor_dep, xsimd_dep, xtensor_python_dep, numpy_dep,
                   tbb_dep, itt_dep, tracy_headers_dep],
-  link_args : ['-static-libstdc++', '-static-libgcc'],
+  link_args : ['-static-libstdc++', '-static-libgcc', '-Wl,-z,noexecstack'],
   install : true,
 )
 
