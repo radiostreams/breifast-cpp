@@ -264,4 +264,22 @@ void gpu_compact_mask(const bool *mask, size_t n, size_t *out_indices, size_t *o
  */
 void gpu_label_islands(const bool *mask, size_t n_y, size_t n_x, unsigned int *labels, unsigned int *out_count,
                        unsigned int *scratch, GpuStream stream = nullptr);
+
+/**
+ * @brief Batched island boost: for every label in `labels_to_process`, the largest-magnitude
+ *        `flux_per_label[i] / baseline_flux[p]` over the pixels carrying that label, with the first pixel in raster
+ *        order winning a tie.
+ *
+ * Device pointers. The work is enqueued on `stream`; `boost` and `found` are written for all labels.
+ * `n_pixels == 0` or `n_labels == 0` throws.
+ * @param labels_per_pixel `[n_pixels]` labels, row major.
+ * @param baseline_flux `[n_pixels]` floats, row major.
+ * @param labels_to_process `[n_labels]` labels to evaluate.
+ * @param flux_per_label `[n_labels]` floats, the numerator for each label in `labels_to_process`.
+ * @param boost `[n_labels]` floats, written completely; 0 when a label has no pixel.
+ * @param found `[n_labels]` bools, written completely.
+ */
+void gpu_island_boost(const unsigned int *labels_per_pixel, size_t n_pixels, size_t n_labels,
+                      const float *baseline_flux, const unsigned int *labels_to_process, const float *flux_per_label,
+                      float *boost, bool *found, GpuStream stream = nullptr);
 } // namespace breifast::gpu
