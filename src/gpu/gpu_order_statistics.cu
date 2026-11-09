@@ -67,7 +67,7 @@ __global__ void radix_refine_kernel(const float *values, size_t n, bool abs_mode
 // state[1] is the full rank-k key. Even n averages it with rank k-1: the same key when the rank-k key is not the first
 // of its repeats, else the largest key below it.
 __global__ void radix_finalize_kernel(const uint32_t *state, const uint32_t *lower_max, bool abs_mode, size_t n,
-                                      float *out_median)
+                                      float scale, float *out_median)
 {
   if (blockIdx.x == 0 && threadIdx.x == 0)
   {
@@ -75,12 +75,12 @@ __global__ void radix_finalize_kernel(const uint32_t *state, const uint32_t *low
     const float hi = abs_mode ? abs_value(hi_key) : signed_value(hi_key);
     if (n % 2 == 1)
     {
-      *out_median = hi;
+      *out_median = hi * scale;
       return;
     }
     const uint32_t lo_key = static_cast<size_t>(n / 2) > state[0] ? hi_key : lower_max[0];
     const float lo = abs_mode ? abs_value(lo_key) : signed_value(lo_key);
-    *out_median = (lo + hi) / 2.F;
+    *out_median = ((lo + hi) / 2.F) * scale;
   }
 }
 
@@ -89,7 +89,7 @@ __global__ void write_nan_kernel(float *out)
   *out = __int_as_float(0x7FC00000);
 }
 
-void gpu_median_impl(const float *values, size_t n, float *out_median, bool abs_mode, GpuStream stream)
+void gpu_median_impl(const float *values, size_t n, float *out_median, bool abs_mode, float scale, GpuStream stream)
 {
   if (n == 0)
   {
@@ -127,7 +127,7 @@ void gpu_median_impl(const float *values, size_t n, float *out_median, bool abs_
     CHECK_LAST_GPU_ERROR();
   }
 
-  radix_finalize_kernel<<<1, 1, 0, stream>>>(state, lower_max, abs_mode, n, out_median);
+  radix_finalize_kernel<<<1, 1, 0, stream>>>(state, lower_max, abs_mode, n, scale, out_median);
   CHECK_LAST_GPU_ERROR();
 
   gpuFreeAsync(scratch, stream);
@@ -136,11 +136,11 @@ void gpu_median_impl(const float *values, size_t n, float *out_median, bool abs_
 
 void gpu_median(const float *values, size_t n, float *out_median, GpuStream stream)
 {
-  gpu_median_impl(values, n, out_median, false, stream);
+  gpu_median_impl(values, n, out_median, false, 1.F, stream);
 }
 
-void gpu_median_abs(const float *values, size_t n, float *out_median, GpuStream stream)
+void gpu_median_abs(const float *values, size_t n, float *out_median, float scale, GpuStream stream)
 {
-  gpu_median_impl(values, n, out_median, true, stream);
+  gpu_median_impl(values, n, out_median, true, scale, stream);
 }
 } // namespace breifast::gpu

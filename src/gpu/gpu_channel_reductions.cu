@@ -7,14 +7,14 @@ namespace breifast::gpu
 {
 namespace
 {
-__global__ void mask_or_kernel(const bool *accept_mask, size_t n_pixels, int band_start, int band_stop, bool *out_mask,
+__global__ void mask_or_kernel(const bool *accept_mask, size_t n_pixels, long band_start, long band_stop, bool *out_mask,
                                int *out_any)
 {
   const auto i_pixel = blockIdx.x * blockDim.x + threadIdx.x;
   bool accept = false;
   if (i_pixel < n_pixels)
   {
-    for (int i_channel = band_start; i_channel < band_stop; ++i_channel)
+    for (long i_channel = band_start; i_channel < band_stop; ++i_channel)
     {
       accept |= accept_mask[i_channel * n_pixels + i_pixel];
     }
@@ -28,14 +28,14 @@ __global__ void mask_or_kernel(const bool *accept_mask, size_t n_pixels, int ban
 }
 
 __global__ void weighted_band_image_kernel(const float *cube, const float *weights, const float *mean_image,
-                                           float *out_plane, size_t n_pixels, int band_start, int band_stop,
+                                           float *out_plane, size_t n_pixels, long band_start, long band_stop,
                                            float inv_weights_sum, float inv_band_size)
 {
   const auto i_pixel = blockIdx.x * blockDim.x + threadIdx.x;
   if (i_pixel < n_pixels)
   {
     float result = 0.0f;
-    for (int i_channel = band_start; i_channel < band_stop; ++i_channel)
+    for (long i_channel = band_start; i_channel < band_stop; ++i_channel)
     {
       const auto weight = weights[i_channel];
       const float value = cube[i_channel * n_pixels + i_pixel];
@@ -78,7 +78,7 @@ __global__ void spectral_variance_moments_kernel(const float *cube, const bool *
 }
 } // namespace
 
-void gpu_mask_or(const bool *accept_mask, size_t n_pixels, int band_start, int band_stop, bool *out_mask, int *out_any,
+void gpu_mask_or(const bool *accept_mask, size_t n_pixels, long band_start, long band_stop, bool *out_mask, int *out_any,
                  GpuStream stream)
 {
   if (band_start < 0 || band_start >= band_stop)
@@ -101,7 +101,7 @@ void gpu_mask_or(const bool *accept_mask, size_t n_pixels, int band_start, int b
 }
 
 void gpu_weighted_band_image(const float *cube, const float *weights, const float *mean_image, float *out_plane,
-                             size_t n_pixels, int band_start, int band_stop, float inv_weights_sum, float inv_band_size,
+                             size_t n_pixels, long band_start, long band_stop, float inv_weights_sum, float inv_band_size,
                              GpuStream stream)
 {
   if (band_start < 0 || band_start >= band_stop)

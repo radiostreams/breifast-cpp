@@ -20,7 +20,7 @@ using breifast::gpu::PinnedVector;
 namespace
 {
 float run_boost(const std::vector<unsigned int> &labels, const std::vector<float> &baseline_flux,
-                unsigned int label, float flux)
+                unsigned int label, float flux, bool use_label_list = true)
 {
   REQUIRE(labels.size() == baseline_flux.size());
 
@@ -38,8 +38,11 @@ float run_boost(const std::vector<unsigned int> &labels, const std::vector<float
   cudaStream_t stream{};
   gpuStreamCreate(&stream);
 
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_labels_to_process.data()),
-                             thrust::raw_pointer_cast(host_labels_to_process.data()), sizeof(unsigned int), stream);
+  if (use_label_list)
+  {
+    gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_labels_to_process.data()),
+                               thrust::raw_pointer_cast(host_labels_to_process.data()), sizeof(unsigned int), stream);
+  }
   gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_flux_per_label.data()),
                              thrust::raw_pointer_cast(host_flux_per_label.data()), sizeof(float), stream);
   if (!labels.empty())
@@ -54,7 +57,7 @@ float run_boost(const std::vector<unsigned int> &labels, const std::vector<float
 
   gpu_island_boost(thrust::raw_pointer_cast(device_labels.data()), labels.size(), 1,
                    thrust::raw_pointer_cast(device_baseline.data()),
-                   thrust::raw_pointer_cast(device_labels_to_process.data()),
+                   use_label_list ? thrust::raw_pointer_cast(device_labels_to_process.data()) : nullptr,
                    thrust::raw_pointer_cast(device_flux_per_label.data()),
                    thrust::raw_pointer_cast(device_boost.data()),
                    reinterpret_cast<bool *>(thrust::raw_pointer_cast(device_found.data())), stream);
@@ -190,4 +193,12 @@ TEST_CASE("gpu_island_boost matches a host reference across many blocks", "[gpu]
                  Catch::Matchers::WithinRel(host_boost(labels, baseline, label, flux), 1e-6));
     }
   }
+}
+
+TEST_CASE("gpu_island_boost treats a null label list as 1..n_labels", "[gpu][island_boost]")
+{
+  const std::vector<unsigned int> labels = {0, 1, 1, 0, 2};
+  const std::vector<float> baseline = {9.F, 0.5F, -0.5F, 9.F, 9.F};
+  CHECK_THAT(run_boost(labels, baseline, 1, 1.F, false),
+             Catch::Matchers::WithinRel(host_boost(labels, baseline, 1, 1.F), 1e-6));
 }

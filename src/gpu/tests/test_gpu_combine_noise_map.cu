@@ -68,6 +68,7 @@ std::vector<float> run_gpu_combine_noise_map_rms(const std::vector<float> &rms_v
   DeviceVector<float> device_selfnoise(n_plane_pixels);
   DeviceVector<float> device_dde(n_plane_pixels);
   DeviceVector<float> device_out(n_plane_pixels);
+  DeviceVector<float> device_floor(1);
 
   cudaStream_t stream{};
   gpuStreamCreate(&stream);
@@ -80,8 +81,9 @@ std::vector<float> run_gpu_combine_noise_map_rms(const std::vector<float> &rms_v
                              n_plane_pixels * sizeof(float), stream);
   gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_out.data()), thrust::raw_pointer_cast(host_out.data()),
                              n_plane_pixels * sizeof(float), stream);
+  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_floor.data()), &floor, sizeof(float), stream);
 
-  gpu_combine_noise_map_rms(thrust::raw_pointer_cast(device_rms.data()), floor,
+  gpu_combine_noise_map_rms(thrust::raw_pointer_cast(device_rms.data()), thrust::raw_pointer_cast(device_floor.data()),
                             thrust::raw_pointer_cast(device_selfnoise.data()),
                             thrust::raw_pointer_cast(device_dde.data()), selfnoise_scale, dde_scale,
                             thrust::raw_pointer_cast(device_out.data()), n_plane_pixels, stream);
@@ -107,6 +109,7 @@ std::vector<float> run_gpu_combine_noise_map_constant(const std::vector<float> &
   DeviceVector<float> device_selfnoise(n_plane_pixels);
   DeviceVector<float> device_dde(n_plane_pixels);
   DeviceVector<float> device_out(n_plane_pixels);
+  DeviceVector<float> device_base_noise(1);
 
   cudaStream_t stream{};
   gpuStreamCreate(&stream);
@@ -117,8 +120,10 @@ std::vector<float> run_gpu_combine_noise_map_constant(const std::vector<float> &
                              n_plane_pixels * sizeof(float), stream);
   gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_out.data()), thrust::raw_pointer_cast(host_out.data()),
                              n_plane_pixels * sizeof(float), stream);
+  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_base_noise.data()), &base_noise, sizeof(float), stream);
 
-  gpu_combine_noise_map_constant(base_noise, thrust::raw_pointer_cast(device_selfnoise.data()),
+  gpu_combine_noise_map_constant(thrust::raw_pointer_cast(device_base_noise.data()),
+                                 thrust::raw_pointer_cast(device_selfnoise.data()),
                                  thrust::raw_pointer_cast(device_dde.data()), selfnoise_scale, dde_scale,
                                  thrust::raw_pointer_cast(device_out.data()), n_plane_pixels, stream);
 
@@ -254,10 +259,10 @@ TEST_CASE("gpu_combine_noise_map rejects an empty plane", "[gpu][combine_noise_m
 {
   using Catch::Matchers::ContainsSubstring;
   CHECK_THROWS_WITH(
-      gpu_combine_noise_map_rms(nullptr, rms_floor, nullptr, nullptr, selfnoise_scale, dde_scale, nullptr, 0),
+      gpu_combine_noise_map_rms(nullptr, nullptr, nullptr, nullptr, selfnoise_scale, dde_scale, nullptr, 0),
       ContainsSubstring("zero pixels"));
   CHECK_THROWS_WITH(
-      gpu_combine_noise_map_constant(base_noise, nullptr, nullptr, selfnoise_scale, dde_scale, nullptr, 0),
+      gpu_combine_noise_map_constant(nullptr, nullptr, nullptr, selfnoise_scale, dde_scale, nullptr, 0),
       ContainsSubstring("zero pixels"));
 }
 

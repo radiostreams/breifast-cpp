@@ -1,9 +1,12 @@
+#include <cooperative_groups.h>
 #include <thrust/execution_policy.h>
 #include <thrust/scan.h>
 
 #include "gpu_pipeline.hpp"
 
 #include "gpu_runtime.hpp"
+
+namespace cg = cooperative_groups;
 
 namespace breifast::gpu
 {
@@ -22,41 +25,60 @@ __global__ void init_labels_kernel(const bool *const mask, const size_t n, unsig
   }
 }
 
-__global__ void relax_kernel(const bool *const mask, const size_t n_y, const size_t n_x, unsigned int *const labels,
-                             unsigned int *const changed)
+__global__ void converge_labels_kernel(const bool *const mask, const size_t n_y, const size_t n_x,
+                                       unsigned int *const labels, unsigned int *const changed)
 {
-  const size_t index = blockIdx.x * blockDim.x + threadIdx.x;
+  const cg::grid_group grid = cg::this_grid();
   const size_t n = n_y * n_x;
-  if (index >= n || !mask[index])
-  {
-    return;
-  }
 
-  const size_t i_y = index / n_x;
-  const size_t i_x = index % n_x;
+  while (true)
+  {
+    if (blockIdx.x == 0 && threadIdx.x == 0)
+    {
+      *changed = 0U;
+    }
+    grid.sync();
 
-  unsigned int best = labels[index];
-  if (i_x > 0 && labels[index - 1] < best)
-  {
-    best = labels[index - 1];
-  }
-  if (i_x + 1 < n_x && labels[index + 1] < best)
-  {
-    best = labels[index + 1];
-  }
-  if (i_y > 0 && labels[index - n_x] < best)
-  {
-    best = labels[index - n_x];
-  }
-  if (i_y + 1 < n_y && labels[index + n_x] < best)
-  {
-    best = labels[index + n_x];
-  }
+    for (size_t index = blockIdx.x * blockDim.x + threadIdx.x; index < n; index += blockDim.x * gridDim.x)
+    {
+      if (!mask[index])
+      {
+        continue;
+      }
 
-  if (best < labels[index])
-  {
-    labels[index] = best;
-    atomicOr(changed, 1U);
+      const size_t i_y = index / n_x;
+      const size_t i_x = index % n_x;
+
+      unsigned int best = labels[index];
+      if (i_x > 0 && labels[index - 1] < best)
+      {
+        best = labels[index - 1];
+      }
+      if (i_x + 1 < n_x && labels[index + 1] < best)
+      {
+        best = labels[index + 1];
+      }
+      if (i_y > 0 && labels[index - n_x] < best)
+      {
+        best = labels[index - n_x];
+      }
+      if (i_y + 1 < n_y && labels[index + n_x] < best)
+      {
+        best = labels[index + n_x];
+      }
+
+      if (best < labels[index])
+      {
+        labels[index] = best;
+        atomicOr(changed, 1U);
+      }
+    }
+    grid.sync();
+
+    if (*changed == 0U)
+    {
+      break;
+    }
   }
 }
 
@@ -145,7 +167,8 @@ __global__ void island_boost_candidates(const uint32_t *const labels_per_pixel, 
   IslandCandidate best;
   if (valid)
   {
-    const auto label = labels_to_process[label_id];
+    const auto label = labels_to_process != nullptr ? labels_to_process[label_id]
+                                                   : static_cast<uint32_t>(label_id + 1U);
     if (label == labels_per_pixel[pixel_id])
     {
       const float ratio = flux_per_label[label_id] / baseline_flux[pixel_id];
@@ -224,24 +247,46 @@ void gpu_label_islands(const bool *const mask, const size_t n_y, const size_t n_
   init_labels_kernel<<<grid_size, block_size, 0, stream>>>(mask, n, labels);
   CHECK_LAST_GPU_ERROR();
 
+  int device = 0;
+  CHECK_GPU_ERROR(cudaGetDevice(&device));
+  int cooperative_launch = 0;
+  CHECK_GPU_ERROR(cudaDeviceGetAttribute(&cooperative_launch, cudaDevAttrCooperativeLaunch, device));
+  if (cooperative_launch == 0)
+  {
+    throw std::runtime_error("gpu_label_islands: device does not support cooperative launch");
+  }
+
+  int multiprocessor_count = 0;
+  CHECK_GPU_ERROR(cudaDeviceGetAttribute(&multiprocessor_count, cudaDevAttrMultiProcessorCount, device));
+  int blocks_per_multiprocessor = 0;
+  CHECK_GPU_ERROR(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+      &blocks_per_multiprocessor, reinterpret_cast<const void *>(converge_labels_kernel),
+      static_cast<int>(block_dim), 0));
+  const size_t max_cooperative_blocks =
+      static_cast<size_t>(blocks_per_multiprocessor) * static_cast<size_t>(multiprocessor_count);
+  if (max_cooperative_blocks == 0)
+  {
+    throw std::runtime_error("gpu_label_islands: no resident blocks available for cooperative launch");
+  }
+
+  size_t cooperative_blocks = (n + block_dim - 1) / block_dim;
+  if (cooperative_blocks > max_cooperative_blocks)
+  {
+    cooperative_blocks = max_cooperative_blocks;
+  }
+  const dim3 cooperative_grid = {static_cast<unsigned int>(cooperative_blocks)};
+
   unsigned int *changed = nullptr;
   gpuMallocAsync(&changed, sizeof(unsigned int), stream);
 
-  const size_t max_iterations = n;
-  for (size_t iteration = 0; iteration < max_iterations; ++iteration)
-  {
-    gpuMemsetAsync(changed, 0, sizeof(unsigned int), stream);
-    relax_kernel<<<grid_size, block_size, 0, stream>>>(mask, n_y, n_x, labels, changed);
-    CHECK_LAST_GPU_ERROR();
-
-    unsigned int host_changed = 0;
-    gpuMemcpyDeviceToHostAsync(&host_changed, changed, sizeof(unsigned int), stream);
-    gpuStreamSynchronize(stream);
-    if (host_changed == 0)
-    {
-      break;
-    }
-  }
+  const bool *mask_arg = mask;
+  size_t n_y_arg = n_y;
+  size_t n_x_arg = n_x;
+  unsigned int *labels_arg = labels;
+  unsigned int *changed_arg = changed;
+  void *converge_args[] = {&mask_arg, &n_y_arg, &n_x_arg, &labels_arg, &changed_arg};
+  CHECK_GPU_ERROR(cudaLaunchCooperativeKernel(reinterpret_cast<void *>(converge_labels_kernel), cooperative_grid,
+                                              block_size, converge_args, 0, stream));
 
   gpuFreeAsync(changed, stream);
 

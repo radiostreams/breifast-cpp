@@ -65,7 +65,7 @@ struct GpuStream
  * @param out_mask `[n_pixels]` bools, true where any channel of the band is true.
  * @param out_any One int, nonzero when any pixel of `out_mask` is true. Written by this call, no host read-back.
  */
-void gpu_mask_or(const bool *accept_mask, size_t n_pixels, int band_start, int band_stop, bool *out_mask, int *out_any,
+void gpu_mask_or(const bool *accept_mask, size_t n_pixels, long band_start, long band_stop, bool *out_mask, int *out_any,
                  GpuStream stream = nullptr);
 
 /**
@@ -78,7 +78,7 @@ void gpu_mask_or(const bool *accept_mask, size_t n_pixels, int band_start, int b
  * @param out_plane `[n_pixels]` floats, written completely.
  */
 void gpu_weighted_band_image(const float *cube, const float *weights, const float *mean_image, float *out_plane,
-                             size_t n_pixels, int band_start, int band_stop, float inv_weights_sum, float inv_band_size,
+                             size_t n_pixels, long band_start, long band_stop, float inv_weights_sum, float inv_band_size,
                              GpuStream stream = nullptr);
 
 /**
@@ -94,11 +94,11 @@ void gpu_weighted_band_image(const float *cube, const float *weights, const floa
 void gpu_spectral_variance_moments(const float *cube, const bool *nonzero_channels, float *out_sum2, float *out_sum3,
                                    float *out_sum4, size_t n_pixels, int n_channels, GpuStream stream = nullptr);
 
-void gpu_combine_noise_map_rms(const float *rms, float rms_floor, const float *selfnoise_offset, const float *dde_noise,
-                               float selfnoise_scale, float dde_scale, float *out_noise_map, size_t n_pixels,
-                               GpuStream stream = nullptr);
+void gpu_combine_noise_map_rms(const float *rms, const float *rms_floor, const float *selfnoise_offset,
+                               const float *dde_noise, float selfnoise_scale, float dde_scale, float *out_noise_map,
+                               size_t n_pixels, GpuStream stream = nullptr);
 
-void gpu_combine_noise_map_constant(float base_noise, const float *selfnoise_offset, const float *dde_noise,
+void gpu_combine_noise_map_constant(const float *base_noise, const float *selfnoise_offset, const float *dde_noise,
                                     float selfnoise_scale, float dde_scale, float *out_noise_map, size_t n_pixels,
                                     GpuStream stream = nullptr);
 
@@ -113,7 +113,9 @@ void gpu_combine_noise_map_constant(float base_noise, const float *selfnoise_off
  * (when the threshold is nonzero); the final value is `|snr| >= threshold` of the pixels that passed. Device pointers;
  * `snr_cutoff` and `flux_cutoff` may be `nullptr` for no cutoff, and are indexed `[c * n_pixels + p]` for `c` in
  * `[band_start, band_stop)`. The work is enqueued on `stream`; the summary lands in `out_min_sigma`/`out_max_sigma`.
+ * @param median_noise One device float, the noise-map median that scales `reject_noise_threshold`.
  * @param params scalars, see `SnrFilterParams`; `max_sigma_bin` sets the histogram length `2 * max_sigma_bin`.
+ *        The GPU path takes `median_noise` from the device pointer, not from `params.median_noise`.
  * @param out_snr `[n_pixels]` floats, written completely.
  * @param image_mask `[n_pixels]` bools, AND-ed in place, written completely.
  * @param histogram0 `2 * max_sigma_bin` counts under the first mask (only when `histogram_detail > 1`), and likewise
@@ -122,7 +124,8 @@ void gpu_combine_noise_map_constant(float base_noise, const float *selfnoise_off
  * @param out_min_sigma,out_max_sigma One float each; `+inf` and `lowest` when no pixel passes the third mask.
  */
 void gpu_snr_and_filters(const float *plane, const float *noise_map, const float *snr_cutoff, const float *flux_cutoff,
-                         size_t n_pixels, const common::SnrFilterParams &params, float *out_snr, bool *image_mask,
+                         const float *median_noise, size_t n_pixels, const common::SnrFilterParams &params,
+                         float *out_snr, bool *image_mask,
                          unsigned long long *histogram0, unsigned long long *histogram1, unsigned long long *histogram2,
                          float *out_min_sigma, float *out_max_sigma, GpuStream stream = nullptr);
 
@@ -156,8 +159,9 @@ void gpu_median(const float *values, size_t n, float *out_median, GpuStream stre
  * Same as gpu_median() on the absolute values.
  * @param values `[n]` floats, read only.
  * @param out_median One float, written by this call.
+ * @param scale Multiplier applied to the median before writing it.
  */
-void gpu_median_abs(const float *values, size_t n, float *out_median, GpuStream stream = nullptr);
+void gpu_median_abs(const float *values, size_t n, float *out_median, float scale, GpuStream stream = nullptr);
 
 /**
  * @brief Scaled median absolute value of the nonzero pixels of each stamp: the `lmad` of stamp_donut_stats.
@@ -270,8 +274,8 @@ void gpu_compact_mask(const bool *mask, size_t n, size_t *out_indices, size_t *o
  * A dense min-label propagation: every true pixel starts at its flat index, then repeatedly takes the smallest of its
  * flat-index label and its four already-true neighbours until a fixed point, so each pixel settles on its component's
  * smallest index. That index is then ranked among the components. `0` marks background. Device pointers; the work is
- * enqueued on `stream`, but the propagation converges on the host so this call synchronises `stream`. `n_y * n_x == 0`
- * throws.
+ * enqueued on `stream` and converges on the device with a cooperative grid sync, so this call does not synchronise
+ * `stream`. Requires cooperative-launch support. `n_y * n_x == 0` throws.
  * @param mask `[n_y * n_x]` bools, row major.
  * @param labels `[n_y * n_x]` output labels, `0` outside every island.
  * @param out_count One `unsigned int`, the number of islands.
@@ -316,7 +320,7 @@ void gpu_label_stats(const unsigned int *labels, const float *image, const float
  * `n_pixels == 0` or `n_labels == 0` throws.
  * @param labels_per_pixel `[n_pixels]` labels, row major.
  * @param baseline_flux `[n_pixels]` floats, row major.
- * @param labels_to_process `[n_labels]` labels to evaluate.
+ * @param labels_to_process `[n_labels]` labels to evaluate, or `nullptr` to use `1..n_labels`.
  * @param flux_per_label `[n_labels]` floats, the numerator for each label in `labels_to_process`.
  * @param boost `[n_labels]` floats, written completely; 0 when a label has no pixel.
  * @param found `[n_labels]` bools, written completely.

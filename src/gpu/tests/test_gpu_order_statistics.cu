@@ -20,7 +20,7 @@ using Catch::Matchers::WithinRel;
 
 namespace
 {
-float run_median(const std::vector<float> &values, bool abs_mode)
+float run_median(const std::vector<float> &values, bool abs_mode, float abs_scale = 1.F)
 {
   const size_t n = values.size();
   const size_t n_alloc = n == 0 ? 1 : n;
@@ -41,7 +41,7 @@ float run_median(const std::vector<float> &values, bool abs_mode)
   if (abs_mode)
   {
     gpu_median_abs(thrust::raw_pointer_cast(device_values.data()), n, thrust::raw_pointer_cast(device_median.data()),
-                   stream);
+                   abs_scale, stream);
   }
   else
   {
@@ -144,4 +144,10 @@ TEST_CASE("gpu_median writes NaN for empty input", "[gpu][order_statistics]")
 {
   CHECK(std::isnan(run_median({}, false)));
   CHECK(std::isnan(run_median({}, true)));
+}
+
+TEST_CASE("gpu_median_abs applies its scale on the final write", "[gpu][order_statistics]")
+{
+  CHECK_THAT(run_median({-2.F, 4.F, -6.F}, true, 1.4826F), WithinRel(4.F * 1.4826F));
+  CHECK_THAT(run_median({-2.F, 4.F, -6.F, -8.F}, true, 0.5F), WithinRel(5.F * 0.5F));
 }

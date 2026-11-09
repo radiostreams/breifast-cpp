@@ -15,7 +15,8 @@ __global__ void min_max_init(float *out_min_sigma, float *out_max_sigma)
 }
 
 __global__ void snr_and_filters(const float *plane, const float *noise_map, const float *snr_cutoff,
-                                const float *flux_cutoff, const size_t n_pixels, const common::SnrFilterParams params,
+                                const float *flux_cutoff, const float *median_noise, const size_t n_pixels,
+                                const common::SnrFilterParams params,
                                 float *out_snr, bool *image_mask, unsigned long long *histogram0,
                                 unsigned long long *histogram1, unsigned long long *histogram2, float *out_min_sigma,
                                 float *out_max_sigma)
@@ -31,7 +32,7 @@ __global__ void snr_and_filters(const float *plane, const float *noise_map, cons
     const bool snr_cutoff_enabled = snr_cutoff != nullptr;
     const bool flux_cutoff_enabled = flux_cutoff != nullptr;
     const bool noise_rejection_disabled = params.reject_noise_threshold == 0.F;
-    const float noise_rejection_threshold = params.median_noise * params.reject_noise_threshold;
+    const float noise_rejection_threshold = median_noise[0] * params.reject_noise_threshold;
 
     image_mask[i_pixel] &= valid;
 
@@ -96,7 +97,8 @@ __global__ void snr_and_filters(const float *plane, const float *noise_map, cons
 } // namespace
 
 void gpu_snr_and_filters(const float *plane, const float *noise_map, const float *snr_cutoff, const float *flux_cutoff,
-                         size_t n_pixels, const common::SnrFilterParams &params, float *out_snr, bool *image_mask,
+                         const float *median_noise, size_t n_pixels, const common::SnrFilterParams &params,
+                         float *out_snr, bool *image_mask,
                          unsigned long long *histogram0, unsigned long long *histogram1, unsigned long long *histogram2,
                          float *out_min_sigma, float *out_max_sigma, GpuStream stream)
 {
@@ -107,6 +109,10 @@ void gpu_snr_and_filters(const float *plane, const float *noise_map, const float
   if (params.max_sigma_bin <= 0)
   {
     throw std::runtime_error("gpu_snr_and_filters: max_sigma_bin must be positive");
+  }
+  if (median_noise == nullptr)
+  {
+    throw std::runtime_error("gpu_snr_and_filters: median_noise must be non-null");
   }
 
   const size_t threads = 256;
@@ -142,9 +148,9 @@ void gpu_snr_and_filters(const float *plane, const float *noise_map, const float
   CHECK_LAST_GPU_ERROR();
   min_max_init<<<1, 1, 0, stream>>>(out_min_sigma, out_max_sigma);
   CHECK_LAST_GPU_ERROR();
-  snr_and_filters<<<grid_size, block_size, 0, stream>>>(plane, noise_map, snr_cutoff, flux_cutoff, n_pixels, params,
-                                                        out_snr, image_mask, histogram0, histogram1, histogram2,
-                                                        out_min_sigma, out_max_sigma);
+  snr_and_filters<<<grid_size, block_size, 0, stream>>>(plane, noise_map, snr_cutoff, flux_cutoff, median_noise,
+                                                        n_pixels, params, out_snr, image_mask, histogram0, histogram1,
+                                                        histogram2, out_min_sigma, out_max_sigma);
   CHECK_LAST_GPU_ERROR();
 }
 

@@ -132,6 +132,7 @@ Outputs run_gpu_snr_and_filters(const std::vector<float> &plane_values, const st
   PinnedVector<float> host_snr_cutoff(snr_cutoff_values.begin(), snr_cutoff_values.end());
   PinnedVector<float> host_flux_cutoff(flux_cutoff_values.begin(), flux_cutoff_values.end());
   PinnedVector<float> host_out(n, snr_prefill);
+  PinnedVector<float> host_median_noise(1, params.median_noise);
   PinnedVector<uint8_t> host_mask(n);
   for (size_t i_pixel = 0; i_pixel < n; ++i_pixel)
   {
@@ -148,6 +149,7 @@ Outputs run_gpu_snr_and_filters(const std::vector<float> &plane_values, const st
   DeviceVector<float> device_snr_cutoff(snr_cutoff_values.size());
   DeviceVector<float> device_flux_cutoff(flux_cutoff_values.size());
   DeviceVector<float> device_out(n);
+  DeviceVector<float> device_median_noise(1);
   DeviceVector<uint8_t> device_mask(n);
   DeviceVector<unsigned long long> device_histogram0(n_bins);
   DeviceVector<unsigned long long> device_histogram1(n_bins);
@@ -167,6 +169,8 @@ Outputs run_gpu_snr_and_filters(const std::vector<float> &plane_values, const st
                              n * sizeof(float), stream);
   gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_out.data()), thrust::raw_pointer_cast(host_out.data()),
                              n * sizeof(float), stream);
+  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_median_noise.data()),
+                             thrust::raw_pointer_cast(host_median_noise.data()), sizeof(float), stream);
   gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_mask.data()), thrust::raw_pointer_cast(host_mask.data()), n,
                              stream);
   gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_histogram0.data()),
@@ -194,7 +198,8 @@ Outputs run_gpu_snr_and_filters(const std::vector<float> &plane_values, const st
   gpu_snr_and_filters(
       thrust::raw_pointer_cast(device_plane.data()), thrust::raw_pointer_cast(device_noise.data()),
       snr_cutoff_enabled ? thrust::raw_pointer_cast(device_snr_cutoff.data()) : nullptr,
-      flux_cutoff_enabled ? thrust::raw_pointer_cast(device_flux_cutoff.data()) : nullptr, n, params,
+      flux_cutoff_enabled ? thrust::raw_pointer_cast(device_flux_cutoff.data()) : nullptr,
+      thrust::raw_pointer_cast(device_median_noise.data()), n, params,
       thrust::raw_pointer_cast(device_out.data()), reinterpret_cast<bool *>(thrust::raw_pointer_cast(device_mask.data())),
       thrust::raw_pointer_cast(device_histogram0.data()), thrust::raw_pointer_cast(device_histogram1.data()),
       thrust::raw_pointer_cast(device_histogram2.data()), thrust::raw_pointer_cast(device_min.data()),
@@ -473,24 +478,36 @@ TEST_CASE("gpu_snr_and_filters rejects an empty plane, empty bins and missing hi
   using Catch::Matchers::ContainsSubstring;
   SnrFilterParams params = default_params();
 
-  CHECK_THROWS_WITH(gpu_snr_and_filters(nullptr, nullptr, nullptr, nullptr, 0, params, nullptr, nullptr, nullptr,
-                                        nullptr, nullptr, nullptr, nullptr),
-                    ContainsSubstring("zero pixels"));
+  DeviceVector<float> median_noise(1);
+  float *median_noise_ptr = thrust::raw_pointer_cast(median_noise.data());
+
+  CHECK_THROWS_WITH(
+      gpu_snr_and_filters(nullptr, nullptr, nullptr, nullptr, nullptr, 0, params, nullptr, nullptr, nullptr, nullptr,
+                          nullptr, nullptr, nullptr, nullptr),
+      ContainsSubstring("zero pixels"));
 
   params.max_sigma_bin = 0;
-  CHECK_THROWS_WITH(gpu_snr_and_filters(nullptr, nullptr, nullptr, nullptr, n_pixels, params, nullptr, nullptr, nullptr,
-                                        nullptr, nullptr, nullptr, nullptr),
-                    ContainsSubstring("max_sigma_bin must be positive"));
+  CHECK_THROWS_WITH(
+      gpu_snr_and_filters(nullptr, nullptr, nullptr, nullptr, nullptr, n_pixels, params, nullptr, nullptr, nullptr,
+                          nullptr, nullptr, nullptr, nullptr, nullptr),
+      ContainsSubstring("max_sigma_bin must be positive"));
 
   params = default_params();
-  CHECK_THROWS_WITH(gpu_snr_and_filters(nullptr, nullptr, nullptr, nullptr, n_pixels, params, nullptr, nullptr, nullptr,
-                                        nullptr, nullptr, nullptr, nullptr),
-                    ContainsSubstring("histogram0 and histogram1 must be non-null"));
+  CHECK_THROWS_WITH(
+      gpu_snr_and_filters(nullptr, nullptr, nullptr, nullptr, nullptr, n_pixels, params, nullptr, nullptr, nullptr,
+                          nullptr, nullptr, nullptr, nullptr, nullptr),
+      ContainsSubstring("median_noise must be non-null"));
+
+  CHECK_THROWS_WITH(
+      gpu_snr_and_filters(nullptr, nullptr, nullptr, nullptr, median_noise_ptr, n_pixels, params, nullptr, nullptr,
+                          nullptr, nullptr, nullptr, nullptr, nullptr, nullptr),
+      ContainsSubstring("histogram0 and histogram1 must be non-null"));
 
   params.histogram_detail = 1;
-  CHECK_THROWS_WITH(gpu_snr_and_filters(nullptr, nullptr, nullptr, nullptr, n_pixels, params, nullptr, nullptr, nullptr,
-                                        nullptr, nullptr, nullptr, nullptr),
-                    ContainsSubstring("histogram2 must be non-null"));
+  CHECK_THROWS_WITH(
+      gpu_snr_and_filters(nullptr, nullptr, nullptr, nullptr, median_noise_ptr, n_pixels, params, nullptr, nullptr,
+                          nullptr, nullptr, nullptr, nullptr, nullptr, nullptr),
+      ContainsSubstring("histogram2 must be non-null"));
 }
 
 TEST_CASE("gpu_snr_and_filters covers the partial last block of a 1000-pixel plane", "[gpu][snr_and_filters]")
