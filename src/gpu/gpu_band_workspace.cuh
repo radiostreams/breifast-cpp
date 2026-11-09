@@ -118,9 +118,6 @@ struct GpuBandWorkspace
 
   int *any_flag = nullptr;
   unsigned int *label_count = nullptr;
-
-  // stamp_capacity
-  float *adjacent_noise = nullptr;
 };
 
 struct GpuBandResult

@@ -169,13 +169,15 @@ void gpu_median_abs(const float *values, size_t n, float *out_median, float scal
  * One block per stamp. The block keeps the pixels with `value != 0`, takes the median of `abs(value)` with a
  * block-level digit select (the even-count average of the two middle ranks), and writes `scale * median`, or 0 when
  * the stamp has no nonzero pixel. Device pointers; the work is enqueued on `stream`.
- * @param stamps `[n_stamps, stamp_pixels]` floats, row major, one stamp per row.
+ * @param stamps `[capacity, stamp_pixels]` floats, row major, one stamp per row.
+ * @param active_count One device `unsigned int`, the number of valid stamps.
+ * @param capacity Maximum number of stamps the output and stamp arrays can hold.
  * @param stamp_pixels `(2 * radius + 1)^2`.
  * @param scale Multiplier applied to the median, `1.4826` for the donut.
- * @param out_lmad `[n_stamps]` floats, written completely.
+ * @param out_lmad `[capacity]` floats, written for every valid stamp.
  */
-void gpu_donut_median_abs(const float *stamps, size_t n_stamps, size_t stamp_pixels, float scale, float *out_lmad,
-                          GpuStream stream = nullptr);
+void gpu_donut_median_abs(const float *stamps, const unsigned int *active_count, unsigned int capacity,
+                          size_t stamp_pixels, float scale, float *out_lmad, GpuStream stream = nullptr);
 
 /**
  * @brief Population standard deviation of the nonzero pixels of each stamp: the `stddev` of stamp_donut_stats.
@@ -183,23 +185,28 @@ void gpu_donut_median_abs(const float *stamps, size_t n_stamps, size_t stamp_pix
  * One block per stamp. Over the nonzero pixels (count `m`) it reduces `sum` and `sumsq` in double and writes
  * `sqrt(sumsq/m - (sum/m)^2)`, or 0 when the stamp has no nonzero pixel. Population (divide by `m`), matching
  * `xt::stddev`. Device pointers; the work is enqueued on `stream`.
- * @param stamps `[n_stamps, stamp_pixels]` floats, row major, one stamp per row.
+ * @param stamps `[capacity, stamp_pixels]` floats, row major, one stamp per row.
+ * @param active_count One device `unsigned int`, the number of valid stamps.
+ * @param capacity Maximum number of stamps the output and stamp arrays can hold.
  * @param stamp_pixels `(2 * radius + 1)^2`.
- * @param out_std `[n_stamps]` floats, written completely.
+ * @param out_std `[capacity]` floats, written for every valid stamp.
  */
-void gpu_donut_std(const float *stamps, size_t n_stamps, size_t stamp_pixels, float *out_std, GpuStream stream = nullptr);
+void gpu_donut_std(const float *stamps, const unsigned int *active_count, unsigned int capacity,
+                   size_t stamp_pixels, float *out_std, GpuStream stream = nullptr);
 
 /**
  * @brief `max(|min|, |max|)` over each stamp, the local-noise extreme of stamp_abs_extreme.
  *
  * One block per stamp, min and max reduced over the stamp and combined into one number per stamp. NaN pixels are
  * ignored, and a stamp with no other value gives `FLT_MAX`. Device pointers; the work is enqueued on `stream`.
- * @param stamps `[n_stamps, stamp_pixels]` floats, row major, one stamp per row.
+ * @param stamps `[capacity, stamp_pixels]` floats, row major, one stamp per row.
+ * @param active_count One device `unsigned int`, the number of valid stamps.
+ * @param capacity Maximum number of stamps the output and stamp arrays can hold.
  * @param stamp_pixels `(2 * radius + 1)^2`.
- * @param out_extreme `[n_stamps]` floats, written completely.
+ * @param out_extreme `[capacity]` floats, written for every valid stamp.
  */
-void gpu_stamp_abs_extreme(const float *stamps, size_t n_stamps, size_t stamp_pixels, float *out_extreme,
-                           GpuStream stream = nullptr);
+void gpu_stamp_abs_extreme(const float *stamps, const unsigned int *active_count, unsigned int capacity,
+                           size_t stamp_pixels, float *out_extreme, GpuStream stream = nullptr);
 
 /**
  * @brief Extract the `(2 * radius + 1)^2` window around each island's peak into a stamp, with the inner box zeroed.
@@ -208,13 +215,16 @@ void gpu_stamp_abs_extreme(const float *stamps, size_t n_stamps, size_t stamp_pi
  * the `(2 * inner_boxsize + 1)^2` block at the centre is 0 (stamp_zero_inner_box fused in). Device pointers; the work
  * is enqueued on `stream`.
  * @param plane `[n_y, n_x]` floats, row major.
- * @param centre_y,centre_x `[n_stamps]` peak row and column per island.
+ * @param centre_y,centre_x `[capacity]` peak row and column per island.
+ * @param active_count One device `unsigned int`, the number of valid stamps.
+ * @param capacity Maximum number of stamps the output and stamp arrays can hold.
  * @param radius Half-width of the window.
  * @param inner_boxsize Half-width of the zeroed centre, clipped to `radius`.
- * @param stamps `[n_stamps, (2 * radius + 1)^2]` floats, written completely.
+ * @param stamps `[capacity, (2 * radius + 1)^2]` floats, written for every valid stamp.
  */
 void gpu_stamp_extract(const float *plane, size_t n_y, size_t n_x, const long *centre_y, const long *centre_x,
-                       size_t n_stamps, long radius, long inner_boxsize, float *stamps, GpuStream stream = nullptr);
+                       const unsigned int *active_count, unsigned int capacity, long radius, long inner_boxsize,
+                       float *stamps, GpuStream stream = nullptr);
 
 /**
  * @brief Extract the `(2 * radius + 1)^2` window around each island's peak into a stamp, without zeroing anything.
@@ -223,12 +233,15 @@ void gpu_stamp_extract(const float *plane, size_t n_y, size_t n_x, const long *c
  * (including the centre). Use this for beam stamps and for gathering per-island values with `radius = 0`. Device
  * pointers; the work is enqueued on `stream`. `n_stamps == 0`, an empty plane, or `radius < 0` throws.
  * @param plane `[n_y, n_x]` floats, row major.
- * @param centre_y,centre_x `[n_stamps]` peak row and column per island.
+ * @param centre_y,centre_x `[capacity]` peak row and column per island.
+ * @param active_count One device `unsigned int`, the number of valid stamps.
+ * @param capacity Maximum number of stamps the output and stamp arrays can hold.
  * @param radius Half-width of the window.
- * @param stamps `[n_stamps, (2 * radius + 1)^2]` floats, written completely.
+ * @param stamps `[capacity, (2 * radius + 1)^2]` floats, written for every valid stamp.
  */
-void gpu_stamp_extract_no_zero(const float *plane, size_t n_y, size_t n_x, const long *centre_y, const long *centre_x,
-                               size_t n_stamps, long radius, float *stamps, GpuStream stream = nullptr);
+void gpu_stamp_extract_no_zero(const float *plane, size_t n_y, size_t n_x, const long *centre_y,
+                               const long *centre_x, const unsigned int *active_count, unsigned int capacity,
+                               long radius, float *stamps, GpuStream stream = nullptr);
 
 /**
  * @brief True when any of the `n` bools is true.
@@ -246,14 +259,20 @@ void gpu_any_true(const bool *values, size_t n, int *out_any, GpuStream stream =
  *
  * One block per stamp. The wrapper sums `kernel` once, then `scale = sum(stamp) / sum(kernel)` over the whole stamp,
  * then `sum((stamp[i] - scale * kernel[i])^2) / (adjacent_noise^2 * count)` over the nonzero pixels, and 0 when there
- * is no nonzero pixel or `adjacent_noise` is 0. Device pointers; the work is enqueued on `stream`.
- * @param stamps `[n_stamps, stamp_pixels]` floats, row major, one beam stamp per row.
+ * is no nonzero pixel or `adjacent_noise` is 0. `adjacent_noise` is computed on the fly as
+ * `stamp_extreme[i] * inv_max_to_std_ratio`. Device pointers; the work is enqueued on `stream`.
+ * @param stamps `[capacity, stamp_pixels]` floats, row major, one beam stamp per row.
  * @param kernel `[stamp_pixels]` floats, the band's beam kernel, shared by every stamp.
- * @param adjacent_noise `[n_stamps]` floats, one per island.
- * @param out_chi2 `[n_stamps]` floats, written completely.
+ * @param active_count One device `unsigned int`, the number of valid stamps.
+ * @param capacity Maximum number of stamps the arrays can hold.
+ * @param stamp_pixels `(2 * halfsize + 1)^2`.
+ * @param stamp_extreme `[capacity]` floats, the per-island `stamp_abs_extreme` values.
+ * @param inv_max_to_std_ratio `1 / max_to_std_ratio_value`.
+ * @param out_chi2 `[capacity]` floats, written for every valid stamp.
  */
-void gpu_stamp_beam_chi2(const float *stamps, const float *kernel, size_t n_stamps, size_t stamp_pixels,
-                         const float *adjacent_noise, float *out_chi2, GpuStream stream = nullptr);
+void gpu_stamp_beam_chi2(const float *stamps, const float *kernel, const unsigned int *active_count,
+                         unsigned int capacity, size_t stamp_pixels, const float *stamp_extreme,
+                         float inv_max_to_std_ratio, float *out_chi2, GpuStream stream = nullptr);
 
 /**
  * @brief Indices of the true pixels of `mask`, in raster order, into `out_indices`, with the count in `out_count`.
@@ -293,10 +312,11 @@ void gpu_label_islands(const bool *mask, size_t n_y, size_t n_x, unsigned int *l
  * - `peak_y`, `peak_x`: coordinates of that winning pixel.
  * - `out_local_noise`: largest `local_noise[p]`.
  *
- * Device pointers. `labels` is compact, `0` for background, `1..n_labels` for islands. The work is enqueued on
- * `stream`, which is not synchronised by this call. Every output is written for every label. A label with no pixel
- * gets `value = -FLT_MAX`, `out_local_noise = -FLT_MAX`, `peak_y = peak_x = 0`, `island_size = 0`.
- * `n_pixels == 0` or `n_x == 0` throws; `n_labels == 0` is a no-op.
+ * Device pointers. `labels` is compact, `0` for background, `1..*active_count` for islands. The work is enqueued on
+ * `stream`. `capacity` must be at least `*active_count`; this function validates that on entry and throws otherwise.
+ * Every output is written for every label. A label with no pixel gets
+ * `value = -FLT_MAX`, `out_local_noise = -FLT_MAX`, `peak_y = peak_x = 0`, `island_size = 0`.
+ * `n_pixels == 0`, `n_x == 0`, `active_count == nullptr`, or `*active_count > capacity` throws.
  * @param labels `[n_pixels]` compact labels, row major.
  * @param image `[n_pixels]` floats whose absolute maximum defines the peak.
  * @param local_noise `[n_pixels]` floats.
@@ -308,24 +328,28 @@ void gpu_label_islands(const bool *mask, size_t n_y, size_t n_x, unsigned int *l
  * @param island_size `[n_labels]` pixel counts, written.
  */
 void gpu_label_stats(const unsigned int *labels, const float *image, const float *local_noise, size_t n_pixels,
-                     size_t n_x, unsigned int n_labels, float *value, float *out_local_noise, long *peak_y,
-                     long *peak_x, unsigned int *island_size, GpuStream stream = nullptr);
+                     size_t n_x, const unsigned int *active_count, unsigned int capacity, float *value,
+                     float *out_local_noise, long *peak_y, long *peak_x, unsigned int *island_size,
+                     GpuStream stream = nullptr);
 
 /**
- * @brief Batched island boost: for every label in `labels_to_process`, the largest-magnitude
- *        `flux_per_label[i] / baseline_flux[p]` over the pixels carrying that label, with the first pixel in raster
- *        order winning a tie.
+ * @brief Batched island boost: for every compact label `1..*active_count`, the largest-magnitude
+ *        `flux_per_label[label - 1] / baseline_flux[p]` over the pixels carrying that label, with the first pixel in
+ *        raster order winning a tie.
  *
- * Device pointers. The work is enqueued on `stream`; `boost` and `found` are written for all labels.
- * `n_pixels == 0` or `n_labels == 0` throws.
+ * Device pointers. The work is enqueued on `stream`; `boost` and `found` are written for all `capacity` slots.
+ * `n_pixels == 0`, `active_count == nullptr`, or `capacity == 0` throws. `capacity` must be at least
+ * `*active_count`.
  * @param labels_per_pixel `[n_pixels]` labels, row major.
  * @param baseline_flux `[n_pixels]` floats, row major.
- * @param labels_to_process `[n_labels]` labels to evaluate, or `nullptr` to use `1..n_labels`.
- * @param flux_per_label `[n_labels]` floats, the numerator for each label in `labels_to_process`.
- * @param boost `[n_labels]` floats, written completely; 0 when a label has no pixel.
- * @param found `[n_labels]` bools, written completely.
+ * @param n_pixels Number of pixels.
+ * @param active_count One device `unsigned int`, the number of valid labels.
+ * @param capacity Maximum number of labels the output arrays can hold.
+ * @param flux_per_label `[capacity]` floats, one numerator per label slot.
+ * @param boost `[capacity]` floats, written completely; 0 when a label has no pixel.
+ * @param found `[capacity]` bools, written completely.
  */
-void gpu_island_boost(const unsigned int *labels_per_pixel, size_t n_pixels, size_t n_labels,
-                      const float *baseline_flux, const unsigned int *labels_to_process, const float *flux_per_label,
+void gpu_island_boost(const unsigned int *labels_per_pixel, const float *baseline_flux, size_t n_pixels,
+                      const unsigned int *active_count, unsigned int capacity, const float *flux_per_label,
                       float *boost, bool *found, GpuStream stream = nullptr);
 } // namespace breifast::gpu

@@ -48,7 +48,6 @@ TEST_CASE("create_band_workspace allocates every scratch buffer", "[gpu][band_wo
   CHECK(workspace.beam_stamps != nullptr);
   CHECK(workspace.any_flag != nullptr);
   CHECK(workspace.label_count != nullptr);
-  CHECK(workspace.adjacent_noise != nullptr);
 
   destroy_band_workspace(workspace, stream);
   gpuStreamSynchronize(stream);
@@ -65,7 +64,6 @@ TEST_CASE("create_band_workspace allocates every scratch buffer", "[gpu][band_wo
   CHECK(workspace.beam_stamps == nullptr);
   CHECK(workspace.any_flag == nullptr);
   CHECK(workspace.label_count == nullptr);
-  CHECK(workspace.adjacent_noise == nullptr);
   CHECK(workspace.sizes.n_pixels == 0);
 
   gpuStreamDestroy(stream);

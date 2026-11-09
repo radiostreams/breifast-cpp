@@ -9,8 +9,13 @@ namespace breifast::gpu
 {
 namespace
 {
-__global__ void donut_median_abs_kernel(const float *stamps, size_t stamp_pixels, float scale, float *out_lmad)
+__global__ void donut_median_abs_kernel(const unsigned int *active_count, const float *stamps, size_t stamp_pixels,
+                                        float scale, float *out_lmad)
 {
+  if (blockIdx.x >= *active_count)
+  {
+    return;
+  }
   const auto i_stamp = blockIdx.x;
   const auto stamp = stamps + i_stamp * stamp_pixels;
 
@@ -139,8 +144,13 @@ __global__ void donut_median_abs_kernel(const float *stamps, size_t stamp_pixels
 
 constexpr size_t stamp_block_threads = 256;
 
-__global__ void stamp_abs_extreme_kernel(const float *stamps, size_t stamp_pixels, float *out_extreme)
+__global__ void stamp_abs_extreme_kernel(const unsigned int *active_count, const float *stamps, size_t stamp_pixels,
+                                         float *out_extreme)
 {
+  if (blockIdx.x >= *active_count)
+  {
+    return;
+  }
   const size_t i_stamp = blockIdx.x;
   const float *stamp = stamps + i_stamp * stamp_pixels;
 
@@ -175,10 +185,14 @@ __global__ void stamp_abs_extreme_kernel(const float *stamps, size_t stamp_pixel
   }
 }
 
-__global__ void stamp_extract_kernel(const float *plane, size_t n_y, size_t n_x, const long *centre_y,
-                                     const long *centre_x, long radius, long inner_boxsize, size_t stamp_pixels,
-                                     float *stamps)
+__global__ void stamp_extract_kernel(const unsigned int *active_count, const float *plane, size_t n_y, size_t n_x,
+                                     const long *centre_y, const long *centre_x, long radius, long inner_boxsize,
+                                     size_t stamp_pixels, float *stamps)
 {
+  if (blockIdx.x >= *active_count)
+  {
+    return;
+  }
   const size_t stamp_id = blockIdx.x;
   const long side = 2 * radius + 1;
   const long half = inner_boxsize < radius ? inner_boxsize : radius;
@@ -201,9 +215,14 @@ __global__ void stamp_extract_kernel(const float *plane, size_t n_y, size_t n_x,
   }
 }
 
-__global__ void stamp_extract_no_zero_kernel(const float *plane, size_t n_y, size_t n_x, const long *centre_y,
-                                               const long *centre_x, long radius, size_t stamp_pixels, float *stamps)
+__global__ void stamp_extract_no_zero_kernel(const unsigned int *active_count, const float *plane, size_t n_y,
+                                             size_t n_x, const long *centre_y, const long *centre_x, long radius,
+                                             size_t stamp_pixels, float *stamps)
 {
+  if (blockIdx.x >= *active_count)
+  {
+    return;
+  }
   const size_t stamp_id = blockIdx.x;
   const long side = 2 * radius + 1;
   const long first_y = centre_y[stamp_id] - radius;
@@ -224,8 +243,13 @@ __global__ void stamp_extract_no_zero_kernel(const float *plane, size_t n_y, siz
 
 constexpr size_t BlockDim = 256;
 
-__global__ void donut_std_kernel(const float *stamps, const size_t stamps_pixels, float *out_std)
+__global__ void donut_std_kernel(const unsigned int *active_count, const float *stamps, const size_t stamps_pixels,
+                                 float *out_std)
 {
+  if (blockIdx.x >= *active_count)
+  {
+    return;
+  }
   __shared__ double sum[BlockDim];
   __shared__ double sumsq[BlockDim];
   __shared__ uint32_t counts[BlockDim];
@@ -297,10 +321,16 @@ __global__ void kernel_sum_kernel(const float *kernel, size_t n, float *out_sum)
   }
 }
 
-__global__ void stamp_beam_chi2_kernel(const float *stamps, const float *kernel, const float *kernel_sum,
-                                       const float *adjacent_noise, size_t stamp_pixels, float *out_chi2)
+__global__ void stamp_beam_chi2_kernel(const unsigned int *active_count, const float *stamps, const float *kernel,
+                                       const float *kernel_sum, const float *stamp_extreme,
+                                       float inv_max_to_std_ratio, size_t stamp_pixels, float *out_chi2)
 {
+  if (blockIdx.x >= *active_count)
+  {
+    return;
+  }
   const auto i_stamp = blockIdx.x;
+  const float adjacent_noise = stamp_extreme[i_stamp] * inv_max_to_std_ratio;
 
   const float *stamp = stamps + i_stamp * stamp_pixels;
 
@@ -353,8 +383,8 @@ __global__ void stamp_beam_chi2_kernel(const float *stamps, const float *kernel,
   {
     const auto count = counts[0];
     const auto resid2 = tmp[0];
-    out_chi2[i_stamp] = (count > 0 && adjacent_noise[blockIdx.x] != 0)
-                            ? resid2 / (adjacent_noise[blockIdx.x] * adjacent_noise[blockIdx.x] * count)
+    out_chi2[i_stamp] = (count > 0 && adjacent_noise != 0)
+                            ? resid2 / (adjacent_noise * adjacent_noise * count)
                             : 0.F;
   }
 }
@@ -371,12 +401,16 @@ __global__ void stamp_beam_chi2_kernel(const float *stamps, const float *kernel,
  * @param scale Multiplier applied to the median, `1.4826` for the donut.
  * @param out_lmad `[n_stamps]` floats, written completely.
  */
-void gpu_donut_median_abs(const float *stamps, size_t n_stamps, size_t stamp_pixels, float scale, float *out_lmad,
-                          GpuStream stream)
+void gpu_donut_median_abs(const float *stamps, const unsigned int *active_count, unsigned int capacity,
+                          size_t stamp_pixels, float scale, float *out_lmad, GpuStream stream)
 {
-  if (n_stamps == 0)
+  if (capacity == 0)
   {
     throw std::runtime_error{"gpu_donut_median_abs: no stamps to process"};
+  }
+  if (active_count == nullptr)
+  {
+    throw std::runtime_error{"gpu_donut_median_abs: active_count must be non-null"};
   }
   if (stamp_pixels == 0)
   {
@@ -385,17 +419,22 @@ void gpu_donut_median_abs(const float *stamps, size_t n_stamps, size_t stamp_pix
 
   const size_t threads = 256;
   const dim3 block_size = {threads};
-  const dim3 grid_size = {static_cast<unsigned int>(n_stamps)};
+  const dim3 grid_size = {capacity};
 
-  donut_median_abs_kernel<<<grid_size, block_size, 0, stream>>>(stamps, stamp_pixels, scale, out_lmad);
+  donut_median_abs_kernel<<<grid_size, block_size, 0, stream>>>(active_count, stamps, stamp_pixels, scale, out_lmad);
   CHECK_LAST_GPU_ERROR();
 }
 
-void gpu_donut_std(const float *stamps, size_t n_stamps, size_t stamp_pixels, float *out_std, GpuStream stream)
+void gpu_donut_std(const float *stamps, const unsigned int *active_count, unsigned int capacity, size_t stamp_pixels,
+                   float *out_std, GpuStream stream)
 {
-  if (n_stamps == 0)
+  if (capacity == 0)
   {
     throw std::runtime_error{"gpu_donut_std: no stamps to process"};
+  }
+  if (active_count == nullptr)
+  {
+    throw std::runtime_error{"gpu_donut_std: active_count must be non-null"};
   }
   if (stamp_pixels == 0)
   {
@@ -403,17 +442,21 @@ void gpu_donut_std(const float *stamps, size_t n_stamps, size_t stamp_pixels, fl
   }
 
   const dim3 block_size = {BlockDim};
-  const dim3 grid_size = {static_cast<unsigned int>(n_stamps)};
-  donut_std_kernel<<<grid_size, block_size, 0, stream>>>(stamps, stamp_pixels, out_std);
+  const dim3 grid_size = {capacity};
+  donut_std_kernel<<<grid_size, block_size, 0, stream>>>(active_count, stamps, stamp_pixels, out_std);
   CHECK_LAST_GPU_ERROR();
 }
 
-void gpu_stamp_abs_extreme(const float *stamps, size_t n_stamps, size_t stamp_pixels, float *out_extreme,
-                           GpuStream stream)
+void gpu_stamp_abs_extreme(const float *stamps, const unsigned int *active_count, unsigned int capacity,
+                           size_t stamp_pixels, float *out_extreme, GpuStream stream)
 {
-  if (n_stamps == 0)
+  if (capacity == 0)
   {
     throw std::runtime_error{"gpu_stamp_abs_extreme: no stamps to process"};
+  }
+  if (active_count == nullptr)
+  {
+    throw std::runtime_error{"gpu_stamp_abs_extreme: active_count must be non-null"};
   }
   if (stamp_pixels == 0)
   {
@@ -421,17 +464,22 @@ void gpu_stamp_abs_extreme(const float *stamps, size_t n_stamps, size_t stamp_pi
   }
 
   const dim3 block_size = {stamp_block_threads};
-  const dim3 grid_size = {static_cast<unsigned int>(n_stamps)};
-  stamp_abs_extreme_kernel<<<grid_size, block_size, 0, stream>>>(stamps, stamp_pixels, out_extreme);
+  const dim3 grid_size = {capacity};
+  stamp_abs_extreme_kernel<<<grid_size, block_size, 0, stream>>>(active_count, stamps, stamp_pixels, out_extreme);
   CHECK_LAST_GPU_ERROR();
 }
 
 void gpu_stamp_extract(const float *plane, size_t n_y, size_t n_x, const long *centre_y, const long *centre_x,
-                       size_t n_stamps, long radius, long inner_boxsize, float *stamps, GpuStream stream)
+                       const unsigned int *active_count, unsigned int capacity, long radius, long inner_boxsize,
+                       float *stamps, GpuStream stream)
 {
-  if (n_stamps == 0)
+  if (capacity == 0)
   {
     throw std::runtime_error{"gpu_stamp_extract: no stamps to process"};
+  }
+  if (active_count == nullptr)
+  {
+    throw std::runtime_error{"gpu_stamp_extract: active_count must be non-null"};
   }
   if (n_y == 0 || n_x == 0)
   {
@@ -449,18 +497,23 @@ void gpu_stamp_extract(const float *plane, size_t n_y, size_t n_x, const long *c
   const size_t side = static_cast<size_t>(2 * radius + 1);
   const size_t stamp_pixels = side * side;
   const dim3 block_size = {stamp_block_threads};
-  const dim3 grid_size = {static_cast<unsigned int>(n_stamps)};
-  stamp_extract_kernel<<<grid_size, block_size, 0, stream>>>(plane, n_y, n_x, centre_y, centre_x, radius, inner_boxsize,
-                                                             stamp_pixels, stamps);
+  const dim3 grid_size = {capacity};
+  stamp_extract_kernel<<<grid_size, block_size, 0, stream>>>(active_count, plane, n_y, n_x, centre_y, centre_x, radius,
+                                                             inner_boxsize, stamp_pixels, stamps);
   CHECK_LAST_GPU_ERROR();
 }
 
 void gpu_stamp_extract_no_zero(const float *plane, size_t n_y, size_t n_x, const long *centre_y, const long *centre_x,
-                              size_t n_stamps, long radius, float *stamps, GpuStream stream)
+                              const unsigned int *active_count, unsigned int capacity, long radius, float *stamps,
+                              GpuStream stream)
 {
-  if (n_stamps == 0)
+  if (capacity == 0)
   {
     throw std::runtime_error{"gpu_stamp_extract_no_zero: no stamps to process"};
+  }
+  if (active_count == nullptr)
+  {
+    throw std::runtime_error{"gpu_stamp_extract_no_zero: active_count must be non-null"};
   }
   if (n_y == 0 || n_x == 0)
   {
@@ -474,18 +527,23 @@ void gpu_stamp_extract_no_zero(const float *plane, size_t n_y, size_t n_x, const
   const size_t side = static_cast<size_t>(2 * radius + 1);
   const size_t stamp_pixels = side * side;
   const dim3 block_size = {stamp_block_threads};
-  const dim3 grid_size = {static_cast<unsigned int>(n_stamps)};
-  stamp_extract_no_zero_kernel<<<grid_size, block_size, 0, stream>>>(plane, n_y, n_x, centre_y, centre_x, radius,
-                                                                    stamp_pixels, stamps);
+  const dim3 grid_size = {capacity};
+  stamp_extract_no_zero_kernel<<<grid_size, block_size, 0, stream>>>(active_count, plane, n_y, n_x, centre_y, centre_x,
+                                                                    radius, stamp_pixels, stamps);
   CHECK_LAST_GPU_ERROR();
 }
 
-void gpu_stamp_beam_chi2(const float *stamps, const float *kernel, size_t n_stamps, size_t stamp_pixels,
-                         const float *adjacent_noise, float *out_chi2, GpuStream stream)
+void gpu_stamp_beam_chi2(const float *stamps, const float *kernel, const unsigned int *active_count,
+                         unsigned int capacity, size_t stamp_pixels, const float *stamp_extreme,
+                         float inv_max_to_std_ratio, float *out_chi2, GpuStream stream)
 {
-  if (n_stamps == 0)
+  if (capacity == 0)
   {
     throw std::runtime_error{"gpu_stamp_beam_chi2: no stamps to process"};
+  }
+  if (active_count == nullptr)
+  {
+    throw std::runtime_error{"gpu_stamp_beam_chi2: active_count must be non-null"};
   }
   if (stamp_pixels == 0)
   {
@@ -498,9 +556,9 @@ void gpu_stamp_beam_chi2(const float *stamps, const float *kernel, size_t n_stam
   CHECK_LAST_GPU_ERROR();
 
   const dim3 block_size = {BlockDim};
-  const dim3 grid_size = {static_cast<unsigned int>(n_stamps)};
-  stamp_beam_chi2_kernel<<<grid_size, block_size, 0, stream>>>(stamps, kernel, kernel_sum, adjacent_noise, stamp_pixels,
-                                                               out_chi2);
+  const dim3 grid_size = {capacity};
+  stamp_beam_chi2_kernel<<<grid_size, block_size, 0, stream>>>(active_count, stamps, kernel, kernel_sum, stamp_extreme,
+                                                               inv_max_to_std_ratio, stamp_pixels, out_chi2);
   CHECK_LAST_GPU_ERROR();
 
   gpuFreeAsync(kernel_sum, stream);

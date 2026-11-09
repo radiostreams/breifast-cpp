@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 #include <catch2/matchers/catch_matchers_vector.hpp>
 #include <cuda_runtime.h>
 
@@ -45,6 +46,7 @@ LabelStats run_stats(const std::vector<unsigned int> &labels, const std::vector<
   DeviceVector<long> device_peak_y(n_labels);
   DeviceVector<long> device_peak_x(n_labels);
   DeviceVector<unsigned int> device_island_size(n_labels);
+  DeviceVector<unsigned int> device_count(1);
 
   cudaStream_t stream{};
   gpuStreamCreate(&stream);
@@ -56,9 +58,11 @@ LabelStats run_stats(const std::vector<unsigned int> &labels, const std::vector<
   gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_local_noise.data()),
                              thrust::raw_pointer_cast(host_local_noise.data()), local_noise.size() * sizeof(float),
                              stream);
+  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_count.data()), &n_labels, sizeof(unsigned int), stream);
 
   gpu_label_stats(thrust::raw_pointer_cast(device_labels.data()), thrust::raw_pointer_cast(device_image.data()),
-                  thrust::raw_pointer_cast(device_local_noise.data()), labels.size(), n_x, n_labels,
+                  thrust::raw_pointer_cast(device_local_noise.data()), labels.size(), n_x,
+                  thrust::raw_pointer_cast(device_count.data()), n_labels,
                   thrust::raw_pointer_cast(device_value.data()),
                   thrust::raw_pointer_cast(device_local_noise_max.data()),
                   thrust::raw_pointer_cast(device_peak_y.data()), thrust::raw_pointer_cast(device_peak_x.data()),
@@ -221,8 +225,9 @@ TEST_CASE("gpu_label_stats matches a host reference across many blocks", "[gpu][
   CHECK_THAT(actual.island_size, Equals(expected.island_size));
 }
 
-TEST_CASE("gpu_label_stats rejects an empty plane", "[gpu][label_stats]")
+TEST_CASE("gpu_label_stats rejects an empty plane and an undersized capacity", "[gpu][label_stats]")
 {
+  using Catch::Matchers::ContainsSubstring;
   cudaStream_t stream{};
   gpuStreamCreate(&stream);
 
@@ -234,21 +239,31 @@ TEST_CASE("gpu_label_stats rejects an empty plane", "[gpu][label_stats]")
   DeviceVector<long> peak_y(1);
   DeviceVector<long> peak_x(1);
   DeviceVector<unsigned int> island_size(1);
+  DeviceVector<unsigned int> count(1, 2);
 
   REQUIRE_THROWS_AS(gpu_label_stats(thrust::raw_pointer_cast(labels.data()), thrust::raw_pointer_cast(image.data()),
-                                    thrust::raw_pointer_cast(local_noise.data()), 0, 1, 1,
+                                    thrust::raw_pointer_cast(local_noise.data()), 0, 1, nullptr, 1,
                                     thrust::raw_pointer_cast(value.data()),
                                     thrust::raw_pointer_cast(local_noise_max.data()),
                                     thrust::raw_pointer_cast(peak_y.data()), thrust::raw_pointer_cast(peak_x.data()),
                                     thrust::raw_pointer_cast(island_size.data()), stream),
                     std::runtime_error);
   REQUIRE_THROWS_AS(gpu_label_stats(thrust::raw_pointer_cast(labels.data()), thrust::raw_pointer_cast(image.data()),
-                                    thrust::raw_pointer_cast(local_noise.data()), 1, 0, 1,
+                                    thrust::raw_pointer_cast(local_noise.data()), 1, 0, nullptr, 1,
                                     thrust::raw_pointer_cast(value.data()),
                                     thrust::raw_pointer_cast(local_noise_max.data()),
                                     thrust::raw_pointer_cast(peak_y.data()), thrust::raw_pointer_cast(peak_x.data()),
                                     thrust::raw_pointer_cast(island_size.data()), stream),
                     std::runtime_error);
+
+  REQUIRE_THROWS_WITH(gpu_label_stats(thrust::raw_pointer_cast(labels.data()), thrust::raw_pointer_cast(image.data()),
+                                      thrust::raw_pointer_cast(local_noise.data()), 1, 1,
+                                      thrust::raw_pointer_cast(count.data()), 1,
+                                      thrust::raw_pointer_cast(value.data()),
+                                      thrust::raw_pointer_cast(local_noise_max.data()),
+                                      thrust::raw_pointer_cast(peak_y.data()), thrust::raw_pointer_cast(peak_x.data()),
+                                      thrust::raw_pointer_cast(island_size.data()), stream),
+                      ContainsSubstring("exceeds capacity"));
 
   gpuStreamDestroy(stream);
 }

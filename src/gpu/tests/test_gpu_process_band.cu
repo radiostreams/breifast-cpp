@@ -43,6 +43,7 @@ struct Fixture
   DeviceVector<float> cube;
   DeviceVector<float> weights;
   DeviceVector<float> selfnoise_offset;
+  DeviceVector<float> selfnoise_raw;
   DeviceVector<float> dde_noise;
   DeviceVector<uint8_t> accept_mask;
   DeviceVector<uint8_t> nonzero_channels;
@@ -59,6 +60,7 @@ struct Fixture
     cube.assign(n_pixels * n_channels, 1.F);
     weights.assign(n_channels, 1.F);
     selfnoise_offset.assign(n_pixels, 0.F);
+    selfnoise_raw.assign(n_pixels, 1.F);
     dde_noise.assign(n_pixels, 0.F);
     accept_mask.assign(n_pixels * n_channels, accept_value ? 1U : 0U);
     nonzero_channels.assign(n_channels, nonzero_value ? 1U : 0U);
@@ -77,6 +79,7 @@ struct Fixture
     input.sizes.nonzero_channels = n_channels;
     input.sizes.accept_mask = n_pixels * n_channels;
     input.sizes.selfnoise_offset = n_pixels;
+    input.sizes.selfnoise_raw = n_pixels;
     input.sizes.dde_noise = n_pixels;
 
     input.cube = thrust::raw_pointer_cast(cube.data());
@@ -84,6 +87,7 @@ struct Fixture
     input.nonzero_channels = reinterpret_cast<const bool *>(thrust::raw_pointer_cast(nonzero_channels.data()));
     input.accept_mask = reinterpret_cast<const bool *>(thrust::raw_pointer_cast(accept_mask.data()));
     input.selfnoise_offset = thrust::raw_pointer_cast(selfnoise_offset.data());
+    input.selfnoise_raw = thrust::raw_pointer_cast(selfnoise_raw.data());
     input.dde_noise = thrust::raw_pointer_cast(dde_noise.data());
 
     input.n_y = n_y;
@@ -123,6 +127,14 @@ float copy_scalar(const float *value, GpuStream stream)
   gpuMemcpyDeviceToHostAsync(&host_value, value, sizeof(float), stream);
   gpuStreamSynchronize(stream);
   return host_value;
+}
+
+void set_accept_mask(Fixture &fixture, const std::vector<uint8_t> &mask)
+{
+  PinnedVector<uint8_t> host_mask(mask.begin(), mask.end());
+  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(fixture.accept_mask.data()),
+                             thrust::raw_pointer_cast(host_mask.data()), mask.size(), fixture.stream);
+  gpuStreamSynchronize(fixture.stream);
 }
 } // namespace
 
@@ -204,4 +216,31 @@ TEST_CASE("gpu_process_band rejects invalid input", "[gpu][process_band]")
   bad.n_x = 2;
   CHECK_THROWS_WITH(gpu_process_band(bad, fixture.workspace, fixture.result, fixture.stream),
                     ContainsSubstring("overflows"));
+}
+
+TEST_CASE("gpu_process_band errors when island count exceeds stamp_capacity", "[gpu][process_band]")
+{
+  Fixture fixture(true, true, true);
+  fixture.input.threshold = 0.5F;
+
+  std::vector<uint8_t> mask(Fixture::n_pixels * Fixture::n_channels, 0);
+  mask[0] = 1;
+  mask[Fixture::n_pixels - 1] = 1;
+  set_accept_mask(fixture, mask);
+
+  CHECK_THROWS_WITH(gpu_process_band(fixture.input, fixture.workspace, fixture.result, fixture.stream),
+                    ContainsSubstring("exceeds island capacity"));
+}
+
+TEST_CASE("gpu_process_band reaches the detection stage when capacity is sufficient", "[gpu][process_band]")
+{
+  Fixture fixture(true, true, true);
+  fixture.input.threshold = 0.5F;
+
+  std::vector<uint8_t> mask(Fixture::n_pixels * Fixture::n_channels, 0);
+  mask[0] = 1;
+  set_accept_mask(fixture, mask);
+
+  CHECK(gpu_process_band(fixture.input, fixture.workspace, fixture.result, fixture.stream) ==
+        GpuBandStatus::detections);
 }

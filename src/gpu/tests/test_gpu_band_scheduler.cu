@@ -30,6 +30,7 @@ struct JobFixture
   DeviceVector<float> cube;
   DeviceVector<float> weights;
   DeviceVector<float> selfnoise_offset;
+  DeviceVector<float> selfnoise_raw;
   DeviceVector<float> dde_noise;
   DeviceVector<uint8_t> accept_mask;
   DeviceVector<uint8_t> nonzero_channels;
@@ -41,6 +42,7 @@ struct JobFixture
     cube.assign(n_pixels * n_channels, 1.F);
     weights.assign(n_channels, 1.F);
     selfnoise_offset.assign(n_pixels, 0.F);
+    selfnoise_raw.assign(n_pixels, 1.F);
     dde_noise.assign(n_pixels, 0.F);
     accept_mask.assign(n_pixels * n_channels, 1U);
     nonzero_channels.assign(n_channels, 1U);
@@ -50,6 +52,7 @@ struct JobFixture
     job.input.sizes.nonzero_channels = n_channels;
     job.input.sizes.accept_mask = n_pixels * n_channels;
     job.input.sizes.selfnoise_offset = n_pixels;
+    job.input.sizes.selfnoise_raw = n_pixels;
     job.input.sizes.dde_noise = n_pixels;
 
     job.input.cube = thrust::raw_pointer_cast(cube.data());
@@ -57,6 +60,7 @@ struct JobFixture
     job.input.nonzero_channels = reinterpret_cast<const bool *>(thrust::raw_pointer_cast(nonzero_channels.data()));
     job.input.accept_mask = reinterpret_cast<const bool *>(thrust::raw_pointer_cast(accept_mask.data()));
     job.input.selfnoise_offset = thrust::raw_pointer_cast(selfnoise_offset.data());
+    job.input.selfnoise_raw = thrust::raw_pointer_cast(selfnoise_raw.data());
     job.input.dde_noise = thrust::raw_pointer_cast(dde_noise.data());
 
     job.input.n_y = n_y;

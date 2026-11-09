@@ -1,5 +1,6 @@
 #include "gpu_process_band.cuh"
 
+#include <algorithm>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -18,6 +19,14 @@ int read_flag(int *flag, GpuStream stream)
   gpuMemcpyDeviceToHostAsync(&host_flag, flag, sizeof(int), stream);
   gpuStreamSynchronize(stream);
   return host_flag;
+}
+
+unsigned int read_count(const unsigned int *count, GpuStream stream)
+{
+  unsigned int host_count = 0;
+  gpuMemcpyDeviceToHostAsync(&host_count, count, sizeof(unsigned int), stream);
+  gpuStreamSynchronize(stream);
+  return host_count;
 }
 
 void require_size(const char *name, const std::size_t actual, const std::size_t required)
@@ -64,7 +73,8 @@ GpuBandStatus gpu_process_band(const GpuBandInput &input, GpuBandWorkspace &work
     throw std::runtime_error("gpu_process_band: max_sigma_bin must be positive");
   }
   if (input.cube == nullptr || input.weights == nullptr || input.nonzero_channels == nullptr ||
-      input.accept_mask == nullptr || input.selfnoise_offset == nullptr || input.dde_noise == nullptr)
+      input.accept_mask == nullptr || input.selfnoise_offset == nullptr || input.selfnoise_raw == nullptr ||
+      input.dde_noise == nullptr)
   {
     throw std::runtime_error("gpu_process_band: required input pointer is null");
   }
@@ -74,14 +84,11 @@ GpuBandStatus gpu_process_band(const GpuBandInput &input, GpuBandWorkspace &work
   require_size("nonzero_channels", input.sizes.nonzero_channels, input.n_channels);
   require_size("accept_mask", input.sizes.accept_mask, channel_pixels);
   require_size("selfnoise_offset", input.sizes.selfnoise_offset, input.n_pixels);
+  require_size("selfnoise_raw", input.sizes.selfnoise_raw, input.n_pixels);
   require_size("dde_noise", input.sizes.dde_noise, input.n_pixels);
   if (input.mean_image != nullptr)
   {
     require_size("mean_image", input.sizes.mean_image, channel_pixels);
-  }
-  if (input.selfnoise_raw != nullptr)
-  {
-    require_size("selfnoise_raw", input.sizes.selfnoise_raw, input.n_pixels);
   }
   if (input.snr_cutoff != nullptr)
   {
@@ -106,6 +113,44 @@ GpuBandStatus gpu_process_band(const GpuBandInput &input, GpuBandWorkspace &work
   if (result.histogram_bins != static_cast<std::size_t>(2 * input.max_sigma_bin))
   {
     throw std::runtime_error("gpu_process_band: histogram_bins must equal 2 * max_sigma_bin");
+  }
+  if (input.boxsize < 0 || input.inner_boxsize < 0)
+  {
+    throw std::runtime_error("gpu_process_band: boxsize and inner_boxsize must be non-negative");
+  }
+
+  const long radius = input.boxsize / 2;
+  const std::size_t stamp_side = static_cast<std::size_t>(2 * radius + 1);
+  const std::size_t stamp_pixels = stamp_side * stamp_side;
+  if (stamp_pixels != workspace.sizes.stamp_pixels)
+  {
+    throw std::runtime_error("gpu_process_band: stamp_pixels mismatch with boxsize");
+  }
+
+  std::size_t beam_stamp_pixels = 0;
+  if (input.beam_kernel != nullptr)
+  {
+    if (input.beam_halfsize < 0)
+    {
+      throw std::runtime_error("gpu_process_band: beam_halfsize must be non-negative");
+    }
+    const std::size_t beam_side = static_cast<std::size_t>(2 * input.beam_halfsize + 1);
+    beam_stamp_pixels = beam_side * beam_side;
+    if (beam_stamp_pixels != workspace.sizes.beam_stamp_pixels)
+    {
+      throw std::runtime_error("gpu_process_band: beam_stamp_pixels mismatch with beam_halfsize");
+    }
+    if (!(input.max_to_std_ratio_value > 0.F))
+    {
+      throw std::runtime_error("gpu_process_band: max_to_std_ratio_value must be positive");
+    }
+  }
+
+  const unsigned int island_capacity =
+      static_cast<unsigned int>(std::min(workspace.sizes.stamp_capacity, result.n_pixels));
+  if (island_capacity == 0)
+  {
+    throw std::runtime_error("gpu_process_band: island capacity must be greater than 0");
   }
 
   const std::size_t band_size = static_cast<std::size_t>(input.band_stop - input.band_start);
@@ -165,7 +210,70 @@ GpuBandStatus gpu_process_band(const GpuBandInput &input, GpuBandWorkspace &work
     return GpuBandStatus::no_detections;
   }
 
-  throw std::runtime_error("gpu_process_band: detection stage not implemented");
+  gpu_label_islands(workspace.mask, input.n_y, input.n_x, workspace.labels, workspace.label_count,
+                    workspace.label_scratch, stream);
+
+  const unsigned int label_count = read_count(workspace.label_count, stream);
+  if (label_count > island_capacity)
+  {
+    throw std::runtime_error("gpu_process_band: island count " + std::to_string(label_count) +
+                             " exceeds island capacity " + std::to_string(island_capacity));
+  }
+
+  gpu_label_stats(workspace.labels, workspace.snr, workspace.noise_map, input.n_pixels, input.n_x,
+                  workspace.label_count, island_capacity, result.peak_value, result.peak_local_noise,
+                  result.peak_y, result.peak_x, result.island_size, stream);
+
+  gpu_stamp_extract(workspace.plane, input.n_y, input.n_x, result.peak_y, result.peak_x, workspace.label_count,
+                    island_capacity, radius, input.inner_boxsize, workspace.donut_stamps, stream);
+  gpu_stamp_abs_extreme(workspace.donut_stamps, workspace.label_count, island_capacity, stamp_pixels,
+                        result.stamp_extreme, stream);
+  gpu_donut_std(workspace.donut_stamps, workspace.label_count, island_capacity, stamp_pixels, result.donut_std, stream);
+  gpu_donut_median_abs(workspace.donut_stamps, workspace.label_count, island_capacity, stamp_pixels, 1.4826F,
+                       result.donut_lmad, stream);
+
+  if (input.beam_kernel != nullptr)
+  {
+    gpu_stamp_extract_no_zero(workspace.plane, input.n_y, input.n_x, result.peak_y, result.peak_x,
+                              workspace.label_count, island_capacity, input.beam_halfsize, workspace.beam_stamps,
+                              stream);
+    gpu_stamp_beam_chi2(workspace.beam_stamps, input.beam_kernel, workspace.label_count, island_capacity,
+                        beam_stamp_pixels, result.stamp_extreme, 1.F / input.max_to_std_ratio_value,
+                        result.beam_chi2, stream);
+  }
+  else
+  {
+    gpuMemsetAsync(result.beam_chi2, 0, island_capacity * sizeof(float), stream);
+  }
+
+  gpu_stamp_extract_no_zero(workspace.plane, input.n_y, input.n_x, result.peak_y, result.peak_x,
+                            workspace.label_count, island_capacity, 0, result.flux, stream);
+  gpu_stamp_extract_no_zero(workspace.noise_map, input.n_y, input.n_x, result.peak_y, result.peak_x,
+                            workspace.label_count, island_capacity, 0, result.noise_at_peak, stream);
+  if (input.use_rms_noise_estimator)
+  {
+    gpu_stamp_extract_no_zero(workspace.rms_map, input.n_y, input.n_x, result.peak_y, result.peak_x,
+                              workspace.label_count, island_capacity, 0, result.rms_at_peak, stream);
+  }
+  else
+  {
+    gpuMemsetAsync(result.rms_at_peak, 0, island_capacity * sizeof(float), stream);
+  }
+  gpu_stamp_extract_no_zero(input.selfnoise_raw, input.n_y, input.n_x, result.peak_y, result.peak_x,
+                            workspace.label_count, island_capacity, 0, result.selfnoise_at_peak, stream);
+
+  if (input.baseline_flux != nullptr)
+  {
+    gpu_island_boost(workspace.labels, input.baseline_flux, input.n_pixels, workspace.label_count, island_capacity,
+                     result.flux, result.boost, result.boost_found, stream);
+  }
+  else
+  {
+    gpuMemsetAsync(result.boost, 0, island_capacity * sizeof(float), stream);
+    gpuMemsetAsync(result.boost_found, 0, island_capacity * sizeof(bool), stream);
+  }
+
+  return GpuBandStatus::detections;
 }
 
 void gpu_process_bands(std::vector<GpuBandJob> &jobs)

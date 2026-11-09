@@ -45,14 +45,16 @@ std::vector<float> run_donut(const std::vector<std::vector<float>> &stamps, floa
   PinnedVector<float> host_stamps(flat.begin(), flat.end());
   DeviceVector<float> device_stamps(flat.size());
   DeviceVector<float> device_out(n_stamps);
+  DeviceVector<unsigned int> device_count(1, static_cast<unsigned int>(n_stamps));
 
   cudaStream_t stream{};
   gpuStreamCreate(&stream);
 
   gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_stamps.data()), thrust::raw_pointer_cast(host_stamps.data()),
                              flat.size() * sizeof(float), stream);
-  gpu_donut_median_abs(thrust::raw_pointer_cast(device_stamps.data()), n_stamps, stamp_pixels, scale,
-                       thrust::raw_pointer_cast(device_out.data()), stream);
+  gpu_donut_median_abs(thrust::raw_pointer_cast(device_stamps.data()),
+                       thrust::raw_pointer_cast(device_count.data()), static_cast<unsigned int>(n_stamps),
+                       stamp_pixels, scale, thrust::raw_pointer_cast(device_out.data()), stream);
 
   PinnedVector<float> host_out(n_stamps);
   gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_out.data()), thrust::raw_pointer_cast(device_out.data()),
@@ -137,14 +139,16 @@ std::vector<float> run_abs_extreme(const std::vector<std::vector<float>> &stamps
   PinnedVector<float> host_stamps(flat.begin(), flat.end());
   DeviceVector<float> device_stamps(flat.size());
   DeviceVector<float> device_out(n_stamps);
+  DeviceVector<unsigned int> device_count(1, static_cast<unsigned int>(n_stamps));
 
   cudaStream_t stream{};
   gpuStreamCreate(&stream);
 
   gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_stamps.data()), thrust::raw_pointer_cast(host_stamps.data()),
                              flat.size() * sizeof(float), stream);
-  gpu_stamp_abs_extreme(thrust::raw_pointer_cast(device_stamps.data()), n_stamps, stamp_pixels,
-                        thrust::raw_pointer_cast(device_out.data()), stream);
+  gpu_stamp_abs_extreme(thrust::raw_pointer_cast(device_stamps.data()),
+                        thrust::raw_pointer_cast(device_count.data()), static_cast<unsigned int>(n_stamps),
+                        stamp_pixels, thrust::raw_pointer_cast(device_out.data()), stream);
 
   PinnedVector<float> host_out(n_stamps);
   gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_out.data()), thrust::raw_pointer_cast(device_out.data()),
@@ -175,6 +179,7 @@ std::vector<float> run_stamp_extract(const std::vector<float> &plane, size_t n_y
   PinnedVector<long> host_cx(centre_x.begin(), centre_x.end());
   DeviceVector<long> device_cx(n_stamps);
   DeviceVector<float> device_stamps(n_stamps * stamp_pixels);
+  DeviceVector<unsigned int> device_count(1, static_cast<unsigned int>(n_stamps));
 
   cudaStream_t stream{};
   gpuStreamCreate(&stream);
@@ -186,9 +191,10 @@ std::vector<float> run_stamp_extract(const std::vector<float> &plane, size_t n_y
   gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_cx.data()), thrust::raw_pointer_cast(host_cx.data()),
                              n_stamps * sizeof(long), stream);
 
-  gpu_stamp_extract(thrust::raw_pointer_cast(device_plane.data()), n_y, n_x, thrust::raw_pointer_cast(device_cy.data()),
-                    thrust::raw_pointer_cast(device_cx.data()), n_stamps, radius, inner_boxsize,
-                    thrust::raw_pointer_cast(device_stamps.data()), stream);
+  gpu_stamp_extract(thrust::raw_pointer_cast(device_plane.data()), n_y, n_x,
+                    thrust::raw_pointer_cast(device_cy.data()), thrust::raw_pointer_cast(device_cx.data()),
+                    thrust::raw_pointer_cast(device_count.data()), static_cast<unsigned int>(n_stamps), radius,
+                    inner_boxsize, thrust::raw_pointer_cast(device_stamps.data()), stream);
 
   PinnedVector<float> host_stamps(n_stamps * stamp_pixels);
   gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_stamps.data()), thrust::raw_pointer_cast(device_stamps.data()),
@@ -214,6 +220,7 @@ std::vector<float> run_stamp_extract_no_zero(const std::vector<float> &plane, si
   PinnedVector<long> host_cx(centre_x.begin(), centre_x.end());
   DeviceVector<long> device_cx(n_stamps);
   DeviceVector<float> device_stamps(n_stamps * stamp_pixels);
+  DeviceVector<unsigned int> device_count(1, static_cast<unsigned int>(n_stamps));
 
   cudaStream_t stream{};
   gpuStreamCreate(&stream);
@@ -227,7 +234,8 @@ std::vector<float> run_stamp_extract_no_zero(const std::vector<float> &plane, si
 
   gpu_stamp_extract_no_zero(thrust::raw_pointer_cast(device_plane.data()), n_y, n_x,
                             thrust::raw_pointer_cast(device_cy.data()), thrust::raw_pointer_cast(device_cx.data()),
-                            n_stamps, radius, thrust::raw_pointer_cast(device_stamps.data()), stream);
+                            thrust::raw_pointer_cast(device_count.data()), static_cast<unsigned int>(n_stamps),
+                            radius, thrust::raw_pointer_cast(device_stamps.data()), stream);
 
   PinnedVector<float> host_stamps(n_stamps * stamp_pixels);
   gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_stamps.data()), thrust::raw_pointer_cast(device_stamps.data()),
@@ -253,14 +261,16 @@ std::vector<float> run_donut_std(const std::vector<std::vector<float>> &stamps)
   PinnedVector<float> host_stamps(flat.begin(), flat.end());
   DeviceVector<float> device_stamps(flat.size());
   DeviceVector<float> device_out(n_stamps);
+  DeviceVector<unsigned int> device_count(1, static_cast<unsigned int>(n_stamps));
 
   cudaStream_t stream{};
   gpuStreamCreate(&stream);
 
   gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_stamps.data()), thrust::raw_pointer_cast(host_stamps.data()),
                              flat.size() * sizeof(float), stream);
-  gpu_donut_std(thrust::raw_pointer_cast(device_stamps.data()), n_stamps, stamp_pixels,
-                thrust::raw_pointer_cast(device_out.data()), stream);
+  gpu_donut_std(thrust::raw_pointer_cast(device_stamps.data()),
+                thrust::raw_pointer_cast(device_count.data()), static_cast<unsigned int>(n_stamps),
+                stamp_pixels, thrust::raw_pointer_cast(device_out.data()), stream);
 
   PinnedVector<float> host_out(n_stamps);
   gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_out.data()), thrust::raw_pointer_cast(device_out.data()),
@@ -300,7 +310,7 @@ double host_std(const std::vector<float> &stamp)
 }
 
 std::vector<float> run_beam_chi2(const std::vector<std::vector<float>> &stamps, const std::vector<float> &kernel,
-                                 const std::vector<float> &adjacent_noise)
+                                 const std::vector<float> &adjacent_noise, float inv_max_to_std_ratio = 1.F)
 {
   const size_t n_stamps = stamps.size();
   const size_t stamp_pixels = stamps.front().size();
@@ -312,12 +322,19 @@ std::vector<float> run_beam_chi2(const std::vector<std::vector<float>> &stamps, 
     flat.insert(flat.end(), stamp.begin(), stamp.end());
   }
 
+  std::vector<float> extreme(adjacent_noise.size());
+  for (size_t i = 0; i < extreme.size(); ++i)
+  {
+    extreme[i] = adjacent_noise[i] / inv_max_to_std_ratio;
+  }
+
   PinnedVector<float> host_stamps(flat.begin(), flat.end());
   DeviceVector<float> device_stamps(flat.size());
   PinnedVector<float> host_kernel(kernel.begin(), kernel.end());
   DeviceVector<float> device_kernel(kernel.size());
-  PinnedVector<float> host_noise(adjacent_noise.begin(), adjacent_noise.end());
-  DeviceVector<float> device_noise(adjacent_noise.size());
+  PinnedVector<float> host_extreme(extreme.begin(), extreme.end());
+  DeviceVector<float> device_extreme(extreme.size());
+  DeviceVector<unsigned int> device_count(1, static_cast<unsigned int>(n_stamps));
   DeviceVector<float> device_out(n_stamps);
 
   cudaStream_t stream{};
@@ -327,10 +344,11 @@ std::vector<float> run_beam_chi2(const std::vector<std::vector<float>> &stamps, 
                              flat.size() * sizeof(float), stream);
   gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_kernel.data()), thrust::raw_pointer_cast(host_kernel.data()),
                              kernel.size() * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_noise.data()), thrust::raw_pointer_cast(host_noise.data()),
-                             adjacent_noise.size() * sizeof(float), stream);
+  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_extreme.data()),
+                             thrust::raw_pointer_cast(host_extreme.data()), extreme.size() * sizeof(float), stream);
   gpu_stamp_beam_chi2(thrust::raw_pointer_cast(device_stamps.data()), thrust::raw_pointer_cast(device_kernel.data()),
-                      n_stamps, stamp_pixels, thrust::raw_pointer_cast(device_noise.data()),
+                      thrust::raw_pointer_cast(device_count.data()), static_cast<unsigned int>(n_stamps), stamp_pixels,
+                      thrust::raw_pointer_cast(device_extreme.data()), inv_max_to_std_ratio,
                       thrust::raw_pointer_cast(device_out.data()), stream);
 
   PinnedVector<float> host_out(n_stamps);
@@ -342,10 +360,13 @@ std::vector<float> run_beam_chi2(const std::vector<std::vector<float>> &stamps, 
   return std::vector<float>(host_out.begin(), host_out.end());
 }
 
-float run_beam_chi2(const std::vector<float> &stamp, const std::vector<float> &kernel, float adjacent_noise)
+float run_beam_chi2(const std::vector<float> &stamp, const std::vector<float> &kernel, float adjacent_noise,
+                    float inv_max_to_std_ratio = 1.F)
 {
-  return run_beam_chi2(std::vector<std::vector<float>>{stamp}, kernel, std::vector<float>{adjacent_noise})[0];
+  return run_beam_chi2(std::vector<std::vector<float>>{stamp}, kernel, std::vector<float>{adjacent_noise},
+                       inv_max_to_std_ratio)[0];
 }
+
 } // namespace
 
 TEST_CASE("gpu_donut_median_abs matches numpy on a seeded 9x9 stamp with a zeroed centre", "[gpu][island_stamps]")
@@ -429,10 +450,12 @@ TEST_CASE("gpu_donut_median_abs rejects zero stamps and zero stamp pixels", "[gp
   gpuStreamCreate(&stream);
 
   DeviceVector<float> out(1);
+  DeviceVector<unsigned int> count(1, 1);
   float *out_ptr = thrust::raw_pointer_cast(out.data());
+  const unsigned int *count_ptr = thrust::raw_pointer_cast(count.data());
 
-  REQUIRE_THROWS_AS(gpu_donut_median_abs(nullptr, 0, 9, lmad_scale, out_ptr, stream), std::runtime_error);
-  REQUIRE_THROWS_AS(gpu_donut_median_abs(nullptr, 1, 0, lmad_scale, out_ptr, stream), std::runtime_error);
+  REQUIRE_THROWS_AS(gpu_donut_median_abs(nullptr, nullptr, 0, 9, lmad_scale, out_ptr, stream), std::runtime_error);
+  REQUIRE_THROWS_AS(gpu_donut_median_abs(nullptr, count_ptr, 1, 0, lmad_scale, out_ptr, stream), std::runtime_error);
 
   gpuStreamDestroy(stream);
 }
@@ -512,10 +535,12 @@ TEST_CASE("gpu_stamp_abs_extreme rejects zero stamps and zero stamp pixels", "[g
   gpuStreamCreate(&stream);
 
   DeviceVector<float> out(1);
+  DeviceVector<unsigned int> count(1, 1);
   float *out_ptr = thrust::raw_pointer_cast(out.data());
+  const unsigned int *count_ptr = thrust::raw_pointer_cast(count.data());
 
-  REQUIRE_THROWS_AS(gpu_stamp_abs_extreme(nullptr, 0, 9, out_ptr, stream), std::runtime_error);
-  REQUIRE_THROWS_AS(gpu_stamp_abs_extreme(nullptr, 1, 0, out_ptr, stream), std::runtime_error);
+  REQUIRE_THROWS_AS(gpu_stamp_abs_extreme(nullptr, nullptr, 0, 9, out_ptr, stream), std::runtime_error);
+  REQUIRE_THROWS_AS(gpu_stamp_abs_extreme(nullptr, count_ptr, 1, 0, out_ptr, stream), std::runtime_error);
 
   gpuStreamDestroy(stream);
 }
@@ -624,16 +649,18 @@ TEST_CASE("gpu_stamp_extract rejects zero stamps, an empty plane and negative si
 
   DeviceVector<long> centres(1);
   DeviceVector<float> stamps(1);
+  DeviceVector<unsigned int> count(1, 1);
   float *stamps_ptr = thrust::raw_pointer_cast(stamps.data());
   const long *centres_ptr = thrust::raw_pointer_cast(centres.data());
+  const unsigned int *count_ptr = thrust::raw_pointer_cast(count.data());
 
-  REQUIRE_THROWS_AS(gpu_stamp_extract(nullptr, 6, 7, centres_ptr, centres_ptr, 0, 2, 0, stamps_ptr, stream),
+  REQUIRE_THROWS_AS(gpu_stamp_extract(nullptr, 6, 7, centres_ptr, centres_ptr, nullptr, 0, 2, 0, stamps_ptr, stream),
                     std::runtime_error);
-  REQUIRE_THROWS_AS(gpu_stamp_extract(nullptr, 0, 7, centres_ptr, centres_ptr, 1, 2, 0, stamps_ptr, stream),
+  REQUIRE_THROWS_AS(gpu_stamp_extract(nullptr, 0, 7, centres_ptr, centres_ptr, count_ptr, 1, 2, 0, stamps_ptr, stream),
                     std::runtime_error);
-  REQUIRE_THROWS_AS(gpu_stamp_extract(nullptr, 6, 7, centres_ptr, centres_ptr, 1, -1, 0, stamps_ptr, stream),
+  REQUIRE_THROWS_AS(gpu_stamp_extract(nullptr, 6, 7, centres_ptr, centres_ptr, count_ptr, 1, -1, 0, stamps_ptr, stream),
                     std::runtime_error);
-  REQUIRE_THROWS_AS(gpu_stamp_extract(nullptr, 6, 7, centres_ptr, centres_ptr, 1, 2, -1, stamps_ptr, stream),
+  REQUIRE_THROWS_AS(gpu_stamp_extract(nullptr, 6, 7, centres_ptr, centres_ptr, count_ptr, 1, 2, -1, stamps_ptr, stream),
                     std::runtime_error);
 
   gpuStreamDestroy(stream);
@@ -688,12 +715,18 @@ TEST_CASE("gpu_stamp_extract_no_zero rejects zero stamps, an empty plane and neg
   float *stamps_ptr = thrust::raw_pointer_cast(stamps.data());
   const long *centres_ptr = thrust::raw_pointer_cast(centres.data());
 
-  REQUIRE_THROWS_AS(gpu_stamp_extract_no_zero(nullptr, 6, 7, centres_ptr, centres_ptr, 0, 2, stamps_ptr, stream),
-                    std::runtime_error);
-  REQUIRE_THROWS_AS(gpu_stamp_extract_no_zero(nullptr, 0, 7, centres_ptr, centres_ptr, 1, 2, stamps_ptr, stream),
-                    std::runtime_error);
-  REQUIRE_THROWS_AS(gpu_stamp_extract_no_zero(nullptr, 6, 7, centres_ptr, centres_ptr, 1, -1, stamps_ptr, stream),
-                    std::runtime_error);
+  DeviceVector<unsigned int> count(1, 1);
+  const unsigned int *count_ptr = thrust::raw_pointer_cast(count.data());
+
+  REQUIRE_THROWS_AS(
+      gpu_stamp_extract_no_zero(nullptr, 6, 7, centres_ptr, centres_ptr, nullptr, 0, 2, stamps_ptr, stream),
+      std::runtime_error);
+  REQUIRE_THROWS_AS(
+      gpu_stamp_extract_no_zero(nullptr, 0, 7, centres_ptr, centres_ptr, count_ptr, 1, 2, stamps_ptr, stream),
+      std::runtime_error);
+  REQUIRE_THROWS_AS(
+      gpu_stamp_extract_no_zero(nullptr, 6, 7, centres_ptr, centres_ptr, count_ptr, 1, -1, stamps_ptr, stream),
+      std::runtime_error);
 
   gpuStreamDestroy(stream);
 }
@@ -772,6 +805,14 @@ TEST_CASE("gpu_stamp_beam_chi2 scales over the whole stamp and masks the residua
   CHECK_THAT(run_beam_chi2(stamp, kernel, 2.F), WithinRel(3.1604938271604937, 1e-6));
 }
 
+TEST_CASE("gpu_stamp_beam_chi2 computes adjacent noise on the fly", "[gpu][island_stamps]")
+{
+  const std::vector<float> stamp = {0.F, 0.F, 0.F, 0.F, 4.F, 0.F, 0.F, 0.F, 0.F};
+  const std::vector<float> kernel(9, 1.F);
+
+  CHECK_THAT(run_beam_chi2(stamp, kernel, 2.F, 2.F), WithinRel(3.1604938271604937, 1e-6));
+}
+
 TEST_CASE("gpu_stamp_beam_chi2 is 0 for a perfect fit, an empty stamp and a zero adjacent noise",
           "[gpu][island_stamps]")
 {
@@ -798,13 +839,17 @@ TEST_CASE("gpu_stamp_beam_chi2 rejects zero stamps and zero stamp pixels", "[gpu
 
   DeviceVector<float> out(1);
   DeviceVector<float> kernel(9);
-  DeviceVector<float> noise(1);
+  DeviceVector<float> extreme(1);
+  DeviceVector<unsigned int> count(1, 1);
   float *out_ptr = thrust::raw_pointer_cast(out.data());
   const float *kernel_ptr = thrust::raw_pointer_cast(kernel.data());
-  const float *noise_ptr = thrust::raw_pointer_cast(noise.data());
+  const float *extreme_ptr = thrust::raw_pointer_cast(extreme.data());
+  const unsigned int *count_ptr = thrust::raw_pointer_cast(count.data());
 
-  REQUIRE_THROWS_AS(gpu_stamp_beam_chi2(nullptr, kernel_ptr, 0, 9, noise_ptr, out_ptr, stream), std::runtime_error);
-  REQUIRE_THROWS_AS(gpu_stamp_beam_chi2(nullptr, kernel_ptr, 1, 0, noise_ptr, out_ptr, stream), std::runtime_error);
+  REQUIRE_THROWS_AS(
+      gpu_stamp_beam_chi2(nullptr, kernel_ptr, nullptr, 0, 9, extreme_ptr, 1.F, out_ptr, stream), std::runtime_error);
+  REQUIRE_THROWS_AS(
+      gpu_stamp_beam_chi2(nullptr, kernel_ptr, count_ptr, 1, 0, extreme_ptr, 1.F, out_ptr, stream), std::runtime_error);
 
   gpuStreamDestroy(stream);
 }

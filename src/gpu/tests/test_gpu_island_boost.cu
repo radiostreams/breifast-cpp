@@ -3,6 +3,7 @@
 #include <catch2/matchers/catch_matchers_string.hpp>
 #include <cuda_runtime.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <limits>
@@ -20,31 +21,29 @@ using breifast::gpu::PinnedVector;
 namespace
 {
 float run_boost(const std::vector<unsigned int> &labels, const std::vector<float> &baseline_flux,
-                unsigned int label, float flux, bool use_label_list = true)
+                unsigned int label, float flux)
 {
   REQUIRE(labels.size() == baseline_flux.size());
+  REQUIRE(label > 0U);
+
+  const unsigned int active_count = labels.empty() ? 0U : *std::max_element(labels.begin(), labels.end());
+  const unsigned int capacity = std::max(active_count, label);
 
   PinnedVector<unsigned int> host_labels(labels.begin(), labels.end());
   PinnedVector<float> host_baseline(baseline_flux.begin(), baseline_flux.end());
-  PinnedVector<unsigned int> host_labels_to_process(1, label);
-  PinnedVector<float> host_flux_per_label(1, flux);
+  PinnedVector<unsigned int> host_count(1, active_count);
+  PinnedVector<float> host_flux(capacity, 0.F);
+  host_flux[label - 1U] = flux;
   DeviceVector<unsigned int> device_labels(labels.size());
   DeviceVector<float> device_baseline(baseline_flux.size());
-  DeviceVector<unsigned int> device_labels_to_process(1);
-  DeviceVector<float> device_flux_per_label(1);
-  DeviceVector<float> device_boost(1);
-  DeviceVector<unsigned char> device_found(1);
+  DeviceVector<unsigned int> device_count(1);
+  DeviceVector<float> device_flux(capacity);
+  DeviceVector<float> device_boost(capacity);
+  DeviceVector<unsigned char> device_found(capacity);
 
   cudaStream_t stream{};
   gpuStreamCreate(&stream);
 
-  if (use_label_list)
-  {
-    gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_labels_to_process.data()),
-                               thrust::raw_pointer_cast(host_labels_to_process.data()), sizeof(unsigned int), stream);
-  }
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_flux_per_label.data()),
-                             thrust::raw_pointer_cast(host_flux_per_label.data()), sizeof(float), stream);
   if (!labels.empty())
   {
     gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_labels.data()),
@@ -54,18 +53,22 @@ float run_boost(const std::vector<unsigned int> &labels, const std::vector<float
                                thrust::raw_pointer_cast(host_baseline.data()), baseline_flux.size() * sizeof(float),
                                stream);
   }
+  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_count.data()),
+                             thrust::raw_pointer_cast(host_count.data()), sizeof(unsigned int), stream);
+  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_flux.data()),
+                             thrust::raw_pointer_cast(host_flux.data()), capacity * sizeof(float), stream);
 
-  gpu_island_boost(thrust::raw_pointer_cast(device_labels.data()), labels.size(), 1,
-                   thrust::raw_pointer_cast(device_baseline.data()),
-                   use_label_list ? thrust::raw_pointer_cast(device_labels_to_process.data()) : nullptr,
-                   thrust::raw_pointer_cast(device_flux_per_label.data()),
-                   thrust::raw_pointer_cast(device_boost.data()),
+  gpu_island_boost(thrust::raw_pointer_cast(device_labels.data()), thrust::raw_pointer_cast(device_baseline.data()),
+                   labels.size(), thrust::raw_pointer_cast(device_count.data()), capacity,
+                   thrust::raw_pointer_cast(device_flux.data()), thrust::raw_pointer_cast(device_boost.data()),
                    reinterpret_cast<bool *>(thrust::raw_pointer_cast(device_found.data())), stream);
 
   float boost = 0.F;
   unsigned char found = 0;
-  gpuMemcpyDeviceToHostAsync(&boost, thrust::raw_pointer_cast(device_boost.data()), sizeof(float), stream);
-  gpuMemcpyDeviceToHostAsync(&found, thrust::raw_pointer_cast(device_found.data()), sizeof(unsigned char), stream);
+  gpuMemcpyDeviceToHostAsync(&boost, thrust::raw_pointer_cast(device_boost.data()) + (label - 1U), sizeof(float),
+                             stream);
+  gpuMemcpyDeviceToHostAsync(&found, thrust::raw_pointer_cast(device_found.data()) + (label - 1U), sizeof(unsigned char),
+                             stream);
   gpuStreamSynchronize(stream);
   gpuStreamDestroy(stream);
 
@@ -193,12 +196,4 @@ TEST_CASE("gpu_island_boost matches a host reference across many blocks", "[gpu]
                  Catch::Matchers::WithinRel(host_boost(labels, baseline, label, flux), 1e-6));
     }
   }
-}
-
-TEST_CASE("gpu_island_boost treats a null label list as 1..n_labels", "[gpu][island_boost]")
-{
-  const std::vector<unsigned int> labels = {0, 1, 1, 0, 2};
-  const std::vector<float> baseline = {9.F, 0.5F, -0.5F, 9.F, 9.F};
-  CHECK_THAT(run_boost(labels, baseline, 1, 1.F, false),
-             Catch::Matchers::WithinRel(host_boost(labels, baseline, 1, 1.F), 1e-6));
 }

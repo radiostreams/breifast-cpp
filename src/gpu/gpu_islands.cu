@@ -105,130 +105,66 @@ __global__ void scatter_labels_kernel(const bool *const mask, const size_t n, un
   }
 }
 
-static constexpr size_t warp_size = 32;
-static constexpr size_t boost_block_pixels = warp_size;
-static constexpr size_t boost_block_labels = 8;
-static constexpr size_t reduction_block_size = 256;
-static constexpr size_t max_reduction_warps = (reduction_block_size + warp_size - 1) / warp_size;
-static constexpr unsigned int full_warp_mask = 0xFFFFFFFFU;
+constexpr size_t boost_block_size = 256;
+constexpr size_t max_boost_blocks = 4096;
 
-struct IslandCandidate
+__global__ void island_boost_atomic_kernel(const unsigned int *const labels_per_pixel, const size_t n_pixels,
+                                           const float *const baseline_flux, const unsigned int *const active_count,
+                                           const unsigned int capacity, const float *const flux_per_label,
+                                           unsigned long long *const keys)
 {
-  float abs_ratio = 0.F;
-  float ratio = 0.F;
-  size_t index = 0;
-  bool found = false;
-};
-
-__device__ bool better(const IslandCandidate &candidate, const IslandCandidate &best)
-{
-  if (!candidate.found)
+  for (size_t index = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x; index < n_pixels;
+       index += static_cast<size_t>(blockDim.x) * gridDim.x)
   {
-    return false;
-  }
-  if (!best.found)
-  {
-    return true;
-  }
-  if (candidate.abs_ratio != best.abs_ratio)
-  {
-    return candidate.abs_ratio > best.abs_ratio;
-  }
-  return candidate.index < best.index;
-}
-
-__device__ IslandCandidate warp_reduce(IslandCandidate best, const unsigned int mask)
-{
-  for (int offset = static_cast<int>(warp_size) / 2; offset > 0; offset >>= 1)
-  {
-    IslandCandidate other;
-    other.abs_ratio = __shfl_down_sync(mask, best.abs_ratio, offset);
-    other.ratio = __shfl_down_sync(mask, best.ratio, offset);
-    other.index = __shfl_down_sync(mask, best.index, offset);
-    other.found = __shfl_down_sync(mask, best.found ? 1 : 0, offset) != 0;
-
-    if (better(other, best))
+    const unsigned int label = labels_per_pixel[index];
+    if (label == 0U || label > capacity || label > *active_count)
     {
-      best = other;
+      continue;
     }
-  }
-  return best;
-}
 
-__global__ void island_boost_candidates(const uint32_t *const labels_per_pixel, const size_t n_pixels,
-                                        const size_t n_labels, const float *const baseline_flux,
-                                        const uint32_t *const labels_to_process, const float *const flux_per_label,
-                                        IslandCandidate *const candidates)
-{
-  const size_t pixel_id = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  const size_t label_id = static_cast<size_t>(blockIdx.y) * blockDim.y + threadIdx.y;
-  const bool valid = pixel_id < n_pixels && label_id < n_labels;
-
-  IslandCandidate best;
-  if (valid)
-  {
-    const auto label = labels_to_process != nullptr ? labels_to_process[label_id]
-                                                   : static_cast<uint32_t>(label_id + 1U);
-    if (label == labels_per_pixel[pixel_id])
+    const float ratio = flux_per_label[label - 1U] / baseline_flux[index];
+    const float abs_value = fabsf(ratio);
+    if (isnan(abs_value))
     {
-      const float ratio = flux_per_label[label_id] / baseline_flux[pixel_id];
-      best.abs_ratio = fabsf(ratio);
-      best.ratio = ratio;
-      best.index = pixel_id;
-      best.found = true;
+      continue;
     }
-  }
 
-  best = warp_reduce(best, full_warp_mask);
-
-  if (threadIdx.x == 0 && label_id < n_labels)
-  {
-    candidates[label_id * gridDim.x + blockIdx.x] = best;
+    const unsigned long long key = (static_cast<unsigned long long>(__float_as_uint(abs_value)) << 32) |
+                                   static_cast<unsigned long long>(0xFFFFFFFFU - static_cast<unsigned int>(index));
+    atomicMax(&keys[label], key);
   }
 }
 
-__global__ void island_boost_reduction(const IslandCandidate *const candidates, const size_t n_labels,
-                                       const size_t n_blocks, float *const boost, bool *const found)
+__global__ void island_boost_finalize_kernel(const unsigned long long *const keys,
+                                             const float *const baseline_flux, const unsigned int *const active_count,
+                                             const unsigned int capacity, const float *const flux_per_label,
+                                             float *const boost, bool *const found)
 {
-  __shared__ IslandCandidate warp_candidates[max_reduction_warps];
-
-  const size_t label = blockIdx.x;
-  if (label >= n_labels)
+  const unsigned int slot = blockIdx.x * blockDim.x + threadIdx.x;
+  if (slot >= capacity)
   {
     return;
   }
 
-  IslandCandidate best;
-  for (size_t i = threadIdx.x; i < n_blocks; i += blockDim.x)
+  const unsigned int label = slot + 1U;
+  if (label > *active_count)
   {
-    const IslandCandidate candidate = candidates[label * n_blocks + i];
-    if (better(candidate, best))
-    {
-      best = candidate;
-    }
+    boost[slot] = 0.F;
+    found[slot] = false;
+    return;
   }
 
-  best = warp_reduce(best, full_warp_mask);
-
-  const size_t lane = threadIdx.x % warp_size;
-  const size_t warp = threadIdx.x / warp_size;
-  if (lane == 0)
+  const unsigned long long key = keys[label];
+  if (key == 0ULL)
   {
-    warp_candidates[warp] = best;
+    boost[slot] = 0.F;
+    found[slot] = false;
+    return;
   }
-  __syncthreads();
 
-  const size_t n_warps = (blockDim.x + warp_size - 1) / warp_size;
-  if (warp == 0)
-  {
-    best = lane < n_warps ? warp_candidates[lane] : IslandCandidate{};
-    best = warp_reduce(best, full_warp_mask);
-    if (lane == 0)
-    {
-      boost[label] = best.found ? best.ratio : 0.F;
-      found[label] = best.found;
-    }
-  }
+  const unsigned int index = 0xFFFFFFFFU - static_cast<unsigned int>(key & 0xFFFFFFFFULL);
+  boost[slot] = flux_per_label[slot] / baseline_flux[index];
+  found[slot] = true;
 }
 } // namespace
 
@@ -298,33 +234,44 @@ void gpu_label_islands(const bool *const mask, const size_t n_y, const size_t n_
   CHECK_LAST_GPU_ERROR();
 }
 
-void gpu_island_boost(const unsigned int *const labels_per_pixel, const size_t n_pixels, const size_t n_labels,
-                      const float *const baseline_flux, const unsigned int *const labels_to_process,
+void gpu_island_boost(const unsigned int *const labels_per_pixel, const float *const baseline_flux,
+                      const size_t n_pixels, const unsigned int *const active_count, const unsigned int capacity,
                       const float *const flux_per_label, float *const boost, bool *const found, GpuStream stream)
 {
-  if (n_pixels == 0 || n_labels == 0)
+  if (n_pixels == 0)
   {
-    throw std::runtime_error("gpu_island_boost: n_pixels and n_labels must be greater than 0");
+    throw std::runtime_error("gpu_island_boost: n_pixels must be greater than 0");
+  }
+  if (active_count == nullptr)
+  {
+    throw std::runtime_error("gpu_island_boost: active_count must be non-null");
+  }
+  if (capacity == 0)
+  {
+    throw std::runtime_error("gpu_island_boost: capacity must be greater than 0");
   }
 
-  const size_t n_blocks = (n_pixels + boost_block_pixels - 1) / boost_block_pixels;
-  const size_t label_blocks = (n_labels + boost_block_labels - 1) / boost_block_labels;
+  unsigned long long *keys = nullptr;
+  gpuMallocAsync(&keys, (capacity + 1U) * sizeof(unsigned long long), stream);
+  gpuMemsetAsync(keys, 0, (capacity + 1U) * sizeof(unsigned long long), stream);
 
-  IslandCandidate *candidates = nullptr;
-  gpuMallocAsync(reinterpret_cast<void **>(&candidates), n_labels * n_blocks * sizeof(IslandCandidate), stream);
-
-  const dim3 candidate_block = {boost_block_pixels, boost_block_labels};
-  const dim3 candidate_grid = {static_cast<unsigned int>(n_blocks), static_cast<unsigned int>(label_blocks)};
-  island_boost_candidates<<<candidate_grid, candidate_block, 0, stream>>>(labels_per_pixel, n_pixels, n_labels,
-                                                                         baseline_flux, labels_to_process,
-                                                                         flux_per_label, candidates);
+  size_t n_blocks = (n_pixels + boost_block_size - 1) / boost_block_size;
+  if (n_blocks > max_boost_blocks)
+  {
+    n_blocks = max_boost_blocks;
+  }
+  const dim3 block_size = {boost_block_size};
+  const dim3 atomic_grid = {static_cast<unsigned int>(n_blocks)};
+  island_boost_atomic_kernel<<<atomic_grid, block_size, 0, stream>>>(labels_per_pixel, n_pixels, baseline_flux,
+                                                                    active_count, capacity, flux_per_label, keys);
   CHECK_LAST_GPU_ERROR();
 
-  const dim3 reduction_grid = {static_cast<unsigned int>(n_labels)};
-  island_boost_reduction<<<reduction_grid, reduction_block_size, 0, stream>>>(candidates, n_labels, n_blocks, boost,
-                                                                              found);
+  const dim3 finalize_grid = {static_cast<unsigned int>((capacity + boost_block_size - 1) / boost_block_size)};
+  island_boost_finalize_kernel<<<finalize_grid, block_size, 0, stream>>>(keys, baseline_flux, active_count, capacity,
+                                                                        flux_per_label, boost, found);
   CHECK_LAST_GPU_ERROR();
 
-  gpuFreeAsync(candidates, stream);
+  gpuFreeAsync(keys, stream);
 }
+
 } // namespace breifast::gpu

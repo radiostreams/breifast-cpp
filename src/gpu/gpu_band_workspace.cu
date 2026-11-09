@@ -47,7 +47,6 @@ GpuBandWorkspace create_band_workspace(const GpuBandWorkspaceSizes &sizes, GpuSt
 
     gpuMallocAsync(&workspace.any_flag, sizeof(int), stream);
     gpuMallocAsync(&workspace.label_count, sizeof(unsigned int), stream);
-    gpuMallocAsync(&workspace.adjacent_noise, sizes.stamp_capacity * sizeof(float), stream);
   }
   catch (...)
   {
@@ -72,7 +71,6 @@ void destroy_band_workspace(GpuBandWorkspace &workspace, GpuStream stream)
   free_buffer(workspace.beam_stamps, stream);
   free_buffer(workspace.any_flag, stream);
   free_buffer(workspace.label_count, stream);
-  free_buffer(workspace.adjacent_noise, stream);
   workspace = GpuBandWorkspace{};
 }
 
