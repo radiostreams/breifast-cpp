@@ -9,11 +9,13 @@ namespace breifast::gpu
 {
 namespace
 {
-template <typename T> void free_buffer(T *&buffer, GpuStream stream)
+template <typename T> void free_buffer(T *&buffer, GpuStream stream) noexcept
 {
   if (buffer != nullptr)
   {
-    gpuFreeAsync(buffer, stream);
+    // Cleanup must never throw: freeing runs after a plane may have failed, and a
+    // sticky CUDA error would otherwise abort the remaining frees and leak them.
+    (void)cudaFreeAsync(buffer, stream);
     buffer = nullptr;
   }
 }
@@ -57,7 +59,7 @@ GpuBandWorkspace create_band_workspace(const GpuBandWorkspaceSizes &sizes, GpuSt
   return workspace;
 }
 
-void destroy_band_workspace(GpuBandWorkspace &workspace, GpuStream stream)
+void destroy_band_workspace(GpuBandWorkspace &workspace, GpuStream stream) noexcept
 {
   free_buffer(workspace.plane, stream);
   free_buffer(workspace.noise_map, stream);
@@ -128,7 +130,7 @@ GpuBandResult create_band_result(const std::size_t n_pixels, const std::size_t h
   return result;
 }
 
-void destroy_band_result(GpuBandResult &result, GpuStream stream)
+void destroy_band_result(GpuBandResult &result, GpuStream stream) noexcept
 {
   free_buffer(result.peak_value, stream);
   free_buffer(result.peak_local_noise, stream);

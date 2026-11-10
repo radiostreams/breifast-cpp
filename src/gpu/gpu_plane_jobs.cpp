@@ -272,7 +272,7 @@ GpuPlaneJobs build_plane_jobs(const GpuPlaneJobSpec &spec)
   return result;
 }
 
-void destroy_plane_jobs(GpuPlaneJobs &plane_jobs)
+void destroy_plane_jobs(GpuPlaneJobs &plane_jobs) noexcept
 {
   for (auto &job : plane_jobs.jobs)
   {

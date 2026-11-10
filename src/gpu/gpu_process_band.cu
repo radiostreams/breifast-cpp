@@ -309,14 +309,16 @@ void gpu_process_bands(std::vector<GpuBandJob> &jobs)
   }
 }
 
-void destroy_band_job(GpuBandJob &job)
+void destroy_band_job(GpuBandJob &job) noexcept
 {
   if (job.stream.handle_ != nullptr)
   {
     destroy_band_result(job.result, job.stream);
     destroy_band_workspace(job.workspace, job.stream);
-    gpuStreamSynchronize(job.stream);
-    gpuStreamDestroy(job.stream);
+    // A failed plane can leave the stream in an error state; cleanup still has to
+    // destroy every buffer and the stream instead of stopping at the first error.
+    (void)cudaStreamSynchronize(job.stream);
+    (void)cudaStreamDestroy(job.stream);
   }
   job = GpuBandJob{};
 }

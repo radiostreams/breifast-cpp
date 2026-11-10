@@ -33,5 +33,5 @@ struct GpuBandJob
 };
 
 void gpu_process_bands(std::vector<GpuBandJob> &jobs);
-void destroy_band_job(GpuBandJob &job);
+void destroy_band_job(GpuBandJob &job) noexcept;
 } // namespace breifast::gpu

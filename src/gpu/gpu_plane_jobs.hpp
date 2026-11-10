@@ -74,7 +74,7 @@ struct GpuPlaneJobs
 };
 
 GpuPlaneJobs build_plane_jobs(const GpuPlaneJobSpec &spec);
-void destroy_plane_jobs(GpuPlaneJobs &plane_jobs);
+void destroy_plane_jobs(GpuPlaneJobs &plane_jobs) noexcept;
 
 void *gpu_upload_buffer(const void *host, std::size_t bytes);
 void gpu_free_buffer(void *device) noexcept;

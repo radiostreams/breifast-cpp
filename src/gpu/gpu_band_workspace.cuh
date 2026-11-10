@@ -156,8 +156,8 @@ struct GpuBandResult
 };
 
 GpuBandWorkspace create_band_workspace(const GpuBandWorkspaceSizes &sizes, GpuStream stream);
-void destroy_band_workspace(GpuBandWorkspace &workspace, GpuStream stream);
+void destroy_band_workspace(GpuBandWorkspace &workspace, GpuStream stream) noexcept;
 
 GpuBandResult create_band_result(std::size_t n_pixels, std::size_t histogram_bins, GpuStream stream);
-void destroy_band_result(GpuBandResult &result, GpuStream stream);
+void destroy_band_result(GpuBandResult &result, GpuStream stream) noexcept;
 } // namespace breifast::gpu
