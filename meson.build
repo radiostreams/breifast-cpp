@@ -251,6 +251,6 @@ run_target('wheel-gpu',
   command : [uv, 'build', '--wheel', '--no-build-isolation',
              '--config-setting', 'setup-args=-Dgpu=enabled',
              '--python', devshell_python,
-             '-o', meson.project_source_root() / 'dist',
+             '-o', meson.project_source_root() / 'dist-gpu',
              meson.project_source_root()],
 )

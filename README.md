@@ -127,6 +127,7 @@ GPU wheel:
 meson compile wheel-gpu -C builddir
 ```
 
-Both produce `dist/breifast_helpers_cpp-0.1.0-cp3xx-cp3xx-linux_x86_64.whl`.
-The GPU wheel is built with `-Dgpu=enabled` and hard-requires a CUDA device
-when imported; the default wheel stays CPU-only.
+These produce `dist/breifast_helpers_cpp-...whl` and
+`dist-gpu/breifast_helpers_cpp-...whl` respectively, so the two variants can
+coexist. The GPU wheel is built with `-Dgpu=enabled` and hard-requires a CUDA
+device when imported; the default wheel stays CPU-only.
