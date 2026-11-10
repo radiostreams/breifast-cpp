@@ -4,6 +4,7 @@
 #include <stdexcept>
 #include <string>
 
+#include "device_vector.hpp"
 #include "gpu_pipeline.hpp"
 
 namespace breifast::gpu
@@ -28,7 +29,7 @@ struct GpuBandInputSizes
 
 struct GpuBandInput
 {
-  GpuBandInputSizes sizes;
+  GpuBandInputSizes sizes{};
   const float *cube = nullptr;
   const float *weights = nullptr;
   const bool *nonzero_channels = nullptr;
@@ -99,65 +100,73 @@ inline void validate_band_workspace_sizes(const GpuBandWorkspaceSizes &sizes)
 
 struct GpuBandWorkspace
 {
+  explicit GpuBandWorkspace(const GpuBandWorkspaceSizes &sizes);
+
+  GpuBandWorkspace(const GpuBandWorkspace &) = delete;
+  GpuBandWorkspace &operator=(const GpuBandWorkspace &) = delete;
+  GpuBandWorkspace(GpuBandWorkspace &&) noexcept;
+  GpuBandWorkspace &operator=(GpuBandWorkspace &&) noexcept;
+  ~GpuBandWorkspace();
+
   GpuBandWorkspaceSizes sizes;
 
-  float *plane = nullptr;
-  float *noise_map = nullptr;
-  float *snr = nullptr;
-  bool *mask = nullptr;
-  float *row_sums = nullptr;
-  float *rms_map = nullptr;
+  DeviceVector<float> plane;
+  DeviceVector<float> noise_map;
+  DeviceVector<float> snr;
+  DeviceVector<bool> mask;
+  DeviceVector<float> row_sums;
+  DeviceVector<float> rms_map;
 
-  unsigned int *labels = nullptr;
-  unsigned int *label_scratch = nullptr;
+  DeviceVector<unsigned int> labels;
+  DeviceVector<unsigned int> label_scratch;
 
-  // stamp_capacity * stamp_pixels
-  float *donut_stamps = nullptr;
-  // stamp_capacity * beam_stamp_pixels
-  float *beam_stamps = nullptr;
+  DeviceVector<float> donut_stamps;
+  DeviceVector<float> beam_stamps;
 
-  int *any_flag = nullptr;
-  unsigned int *label_count = nullptr;
+  DeviceVector<int> any_flag;
+  DeviceVector<unsigned int> label_count;
 };
 
 struct GpuBandResult
 {
+  GpuBandResult(std::size_t n_pixels, std::size_t histogram_bins);
+
+  GpuBandResult(const GpuBandResult &) = delete;
+  GpuBandResult &operator=(const GpuBandResult &) = delete;
+  GpuBandResult(GpuBandResult &&) noexcept;
+  GpuBandResult &operator=(GpuBandResult &&) noexcept;
+  ~GpuBandResult();
+
   std::size_t n_pixels = 0;
   std::size_t histogram_bins = 0;
   unsigned int label_count = 0;
 
-  float *peak_value = nullptr;
-  float *peak_local_noise = nullptr;
-  long *peak_y = nullptr;
-  long *peak_x = nullptr;
-  unsigned int *island_size = nullptr;
+  DeviceVector<float> peak_value;
+  DeviceVector<float> peak_local_noise;
+  DeviceVector<long> peak_y;
+  DeviceVector<long> peak_x;
+  DeviceVector<unsigned int> island_size;
 
-  float *stamp_extreme = nullptr;
-  float *donut_std = nullptr;
-  float *donut_lmad = nullptr;
-  float *beam_chi2 = nullptr;
-  float *flux = nullptr;
-  float *boost = nullptr;
-  bool *boost_found = nullptr;
+  DeviceVector<float> stamp_extreme;
+  DeviceVector<float> donut_std;
+  DeviceVector<float> donut_lmad;
+  DeviceVector<float> beam_chi2;
+  DeviceVector<float> flux;
+  DeviceVector<float> boost;
+  DeviceVector<bool> boost_found;
 
-  float *noise_at_peak = nullptr;
-  float *rms_at_peak = nullptr;
-  float *selfnoise_at_peak = nullptr;
+  DeviceVector<float> noise_at_peak;
+  DeviceVector<float> rms_at_peak;
+  DeviceVector<float> selfnoise_at_peak;
 
-  unsigned long long *histogram0 = nullptr;
-  unsigned long long *histogram1 = nullptr;
-  unsigned long long *histogram2 = nullptr;
+  DeviceVector<unsigned long long> histogram0;
+  DeviceVector<unsigned long long> histogram1;
+  DeviceVector<unsigned long long> histogram2;
 
-  float *min_sigma = nullptr;
-  float *max_sigma = nullptr;
-  float *median_noise = nullptr;
-  float *rms_floor = nullptr;
-  float *global_mad = nullptr;
+  DeviceVector<float> min_sigma;
+  DeviceVector<float> max_sigma;
+  DeviceVector<float> median_noise;
+  DeviceVector<float> rms_floor;
+  DeviceVector<float> global_mad;
 };
-
-GpuBandWorkspace create_band_workspace(const GpuBandWorkspaceSizes &sizes, GpuStream stream);
-void destroy_band_workspace(GpuBandWorkspace &workspace, GpuStream stream) noexcept;
-
-GpuBandResult create_band_result(std::size_t n_pixels, std::size_t histogram_bins, GpuStream stream);
-void destroy_band_result(GpuBandResult &result, GpuStream stream) noexcept;
 } // namespace breifast::gpu

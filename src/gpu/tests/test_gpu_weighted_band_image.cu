@@ -14,7 +14,6 @@
 
 using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_weighted_band_image;
-using breifast::gpu::PinnedVector;
 using Catch::Approx;
 using Catch::Matchers::Equals;
 
@@ -89,10 +88,10 @@ std::vector<float> run_gpu_weighted_band_image(const std::vector<float> &cube_va
 {
   const bool subtract_mean = !mean_values.empty();
 
-  PinnedVector<float> host_cube(cube_values.begin(), cube_values.end());
-  PinnedVector<float> host_weights(weights_values.begin(), weights_values.end());
-  PinnedVector<float> host_out(n_plane_pixels, prefill);
-  PinnedVector<float> host_mean;
+  std::vector<float> host_cube(cube_values.begin(), cube_values.end());
+  std::vector<float> host_weights(weights_values.begin(), weights_values.end());
+  std::vector<float> host_out(n_plane_pixels, prefill);
+  std::vector<float> host_mean;
   if (subtract_mean)
   {
     host_mean.assign(mean_values.begin(), mean_values.end());

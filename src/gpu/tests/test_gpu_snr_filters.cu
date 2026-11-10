@@ -19,7 +19,6 @@
 
 using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_snr_and_filters;
-using breifast::gpu::PinnedVector;
 using breifast::common::SnrFilterParams;
 using Catch::Matchers::Equals;
 using Catch::Matchers::RangeEquals;
@@ -127,22 +126,22 @@ Outputs run_gpu_snr_and_filters(const std::vector<float> &plane_values, const st
   const size_t n = plane_values.size();
   const size_t n_bins = static_cast<size_t>(2 * params.max_sigma_bin);
 
-  PinnedVector<float> host_plane(plane_values.begin(), plane_values.end());
-  PinnedVector<float> host_noise(noise_values.begin(), noise_values.end());
-  PinnedVector<float> host_snr_cutoff(snr_cutoff_values.begin(), snr_cutoff_values.end());
-  PinnedVector<float> host_flux_cutoff(flux_cutoff_values.begin(), flux_cutoff_values.end());
-  PinnedVector<float> host_out(n, snr_prefill);
-  PinnedVector<float> host_median_noise(1, params.median_noise);
-  PinnedVector<uint8_t> host_mask(n);
+  std::vector<float> host_plane(plane_values.begin(), plane_values.end());
+  std::vector<float> host_noise(noise_values.begin(), noise_values.end());
+  std::vector<float> host_snr_cutoff(snr_cutoff_values.begin(), snr_cutoff_values.end());
+  std::vector<float> host_flux_cutoff(flux_cutoff_values.begin(), flux_cutoff_values.end());
+  std::vector<float> host_out(n, snr_prefill);
+  std::vector<float> host_median_noise(1, params.median_noise);
+  std::vector<uint8_t> host_mask(n);
   for (size_t i_pixel = 0; i_pixel < n; ++i_pixel)
   {
     host_mask[i_pixel] = accepted[i_pixel] == '1';
   }
-  PinnedVector<unsigned long long> host_histogram0(n_bins, histogram_prefill);
-  PinnedVector<unsigned long long> host_histogram1(n_bins, histogram_prefill);
-  PinnedVector<unsigned long long> host_histogram2(n_bins, histogram_prefill);
-  PinnedVector<float> host_min(1);
-  PinnedVector<float> host_max(1);
+  std::vector<unsigned long long> host_histogram0(n_bins, histogram_prefill);
+  std::vector<unsigned long long> host_histogram1(n_bins, histogram_prefill);
+  std::vector<unsigned long long> host_histogram2(n_bins, histogram_prefill);
+  std::vector<float> host_min(1);
+  std::vector<float> host_max(1);
 
   DeviceVector<float> device_plane(n);
   DeviceVector<float> device_noise(n);

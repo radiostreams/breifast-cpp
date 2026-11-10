@@ -15,7 +15,6 @@
 
 using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_label_stats;
-using breifast::gpu::PinnedVector;
 using Catch::Matchers::Equals;
 
 namespace
@@ -35,9 +34,9 @@ LabelStats run_stats(const std::vector<unsigned int> &labels, const std::vector<
   REQUIRE(labels.size() == image.size());
   REQUIRE(labels.size() == local_noise.size());
 
-  PinnedVector<unsigned int> host_labels(labels.begin(), labels.end());
-  PinnedVector<float> host_image(image.begin(), image.end());
-  PinnedVector<float> host_local_noise(local_noise.begin(), local_noise.end());
+  std::vector<unsigned int> host_labels(labels.begin(), labels.end());
+  std::vector<float> host_image(image.begin(), image.end());
+  std::vector<float> host_local_noise(local_noise.begin(), local_noise.end());
   DeviceVector<unsigned int> device_labels(labels.size());
   DeviceVector<float> device_image(image.size());
   DeviceVector<float> device_local_noise(local_noise.size());
@@ -68,11 +67,11 @@ LabelStats run_stats(const std::vector<unsigned int> &labels, const std::vector<
                   thrust::raw_pointer_cast(device_peak_y.data()), thrust::raw_pointer_cast(device_peak_x.data()),
                   thrust::raw_pointer_cast(device_island_size.data()), stream);
 
-  PinnedVector<float> host_value(n_labels);
-  PinnedVector<float> host_local_noise_max(n_labels);
-  PinnedVector<long> host_peak_y(n_labels);
-  PinnedVector<long> host_peak_x(n_labels);
-  PinnedVector<unsigned int> host_island_size(n_labels);
+  std::vector<float> host_value(n_labels);
+  std::vector<float> host_local_noise_max(n_labels);
+  std::vector<long> host_peak_y(n_labels);
+  std::vector<long> host_peak_x(n_labels);
+  std::vector<unsigned int> host_island_size(n_labels);
   gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_value.data()),
                              thrust::raw_pointer_cast(device_value.data()), n_labels * sizeof(float), stream);
   gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_local_noise_max.data()),

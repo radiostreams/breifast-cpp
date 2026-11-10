@@ -15,6 +15,14 @@ if have_gpu
   add_project_arguments('-arch=' + get_option('gpu_arch'), '-lineinfo', language : 'cuda')
   cudart_dep = dependency('cudart', method : 'pkg-config')
   cudart_libdir = cudart_dep.get_variable(pkgconfig : 'libdir')
+
+  cuda_host_include_args = []
+  foreach token : run_command('sh', '-c', 'printf %s "$NIX_CFLAGS_COMPILE"', check : false).stdout().split()
+    if token.startswith('/nix/store') and token.contains('cuda')
+      cuda_host_include_args += ['-isystem', token]
+    endif
+  endforeach
+  cuda_headers_dep = declare_dependency(compile_args : cuda_host_include_args)
 endif
 
 py = import('python').find_installation()

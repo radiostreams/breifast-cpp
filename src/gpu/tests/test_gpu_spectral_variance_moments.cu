@@ -16,7 +16,6 @@
 
 using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_spectral_variance_moments;
-using breifast::gpu::PinnedVector;
 using Catch::Matchers::Equals;
 using Catch::Approx;
 
@@ -67,11 +66,11 @@ struct Sums
 Sums run_gpu_spectral_variance_moments(const std::vector<float> &cube_values, const std::vector<uint8_t> &flags,
                                        size_t n_plane_pixels, size_t n_plane_channels, float prefill = 0.F)
 {
-  PinnedVector<float> host_cube(cube_values.begin(), cube_values.end());
-  PinnedVector<uint8_t> host_flags(flags.begin(), flags.end());
-  PinnedVector<float> host_sum2(n_plane_pixels, prefill);
-  PinnedVector<float> host_sum3(n_plane_pixels, prefill);
-  PinnedVector<float> host_sum4(n_plane_pixels, prefill);
+  std::vector<float> host_cube(cube_values.begin(), cube_values.end());
+  std::vector<uint8_t> host_flags(flags.begin(), flags.end());
+  std::vector<float> host_sum2(n_plane_pixels, prefill);
+  std::vector<float> host_sum3(n_plane_pixels, prefill);
+  std::vector<float> host_sum4(n_plane_pixels, prefill);
 
   DeviceVector<float> device_cube(cube_values.size());
   DeviceVector<uint8_t> device_flags(flags.size());

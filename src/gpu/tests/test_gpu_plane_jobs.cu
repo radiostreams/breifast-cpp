@@ -11,12 +11,11 @@
 
 using breifast::DetectionArrays;
 using breifast::gpu::assemble_plane_detections;
-using breifast::gpu::build_plane_jobs;
-using breifast::gpu::destroy_plane_jobs;
 using breifast::gpu::gpu_process_plane;
 using breifast::gpu::GpuBandStatus;
 using breifast::gpu::GpuPlaneHostResult;
 using breifast::gpu::GpuPlaneJobSpec;
+using breifast::gpu::GpuPlaneJobs;
 using Catch::Approx;
 
 namespace
@@ -50,30 +49,30 @@ struct PlaneInputs
 
   GpuPlaneJobSpec spec() const
   {
-    GpuPlaneJobSpec spec;
-    spec.cube = cube.data();
-    spec.weights = weights.data();
-    spec.nonzero_channels = reinterpret_cast<const bool *>(nonzero_channels.data());
-    spec.accept_mask = reinterpret_cast<const bool *>(accept_mask.data());
-    spec.selfnoise_offset = selfnoise_offset.data();
-    spec.selfnoise_raw = selfnoise_raw.data();
-    spec.dde_noise = dde_noise.data();
-    spec.stokes_label = "I";
-    spec.bands = {{0, 2, 1.F, "band"}};
-    spec.n_y = n_y;
-    spec.n_x = n_x;
-    spec.n_channels = n_channels;
-    spec.boxsize = 1;
-    spec.inner_boxsize = 0;
-    spec.histogram_detail = 1;
-    spec.max_sigma_bin = 5;
-    spec.ddenoise_scaling_factor = 1.F;
-    spec.reject_noise_threshold = 0.F;
-    spec.threshold = 0.5F;
-    spec.max_to_std_ratio_value = 1.F;
-    spec.use_rms_noise_estimator = true;
-    spec.subtract_mean = false;
-    return spec;
+    return GpuPlaneJobSpec{
+        .cube = cube.data(),
+        .weights = weights.data(),
+        .nonzero_channels = reinterpret_cast<const bool *>(nonzero_channels.data()),
+        .accept_mask = reinterpret_cast<const bool *>(accept_mask.data()),
+        .selfnoise_offset = selfnoise_offset.data(),
+        .selfnoise_raw = selfnoise_raw.data(),
+        .dde_noise = dde_noise.data(),
+        .stokes_label = "I",
+        .bands = {{0, 2, 1.F, "band"}},
+        .n_y = n_y,
+        .n_x = n_x,
+        .n_channels = n_channels,
+        .boxsize = 1,
+        .inner_boxsize = 0,
+        .histogram_detail = 1,
+        .max_sigma_bin = 5,
+        .ddenoise_scaling_factor = 1.F,
+        .reject_noise_threshold = 0.F,
+        .threshold = 0.5F,
+        .max_to_std_ratio_value = 1.F,
+        .use_rms_noise_estimator = true,
+        .subtract_mean = false,
+    };
   }
 };
 } // namespace
@@ -81,7 +80,7 @@ struct PlaneInputs
 TEST_CASE("build_plane_jobs creates runnable jobs", "[gpu][plane_jobs]")
 {
   PlaneInputs inputs;
-  auto plane_jobs = build_plane_jobs(inputs.spec());
+  GpuPlaneJobs plane_jobs(inputs.spec());
 
   REQUIRE(plane_jobs.jobs.size() == 1);
   REQUIRE(plane_jobs.labels.size() == 1);
@@ -107,7 +106,6 @@ TEST_CASE("build_plane_jobs creates runnable jobs", "[gpu][plane_jobs]")
   CHECK(detections.peak_x()[0] == 0);
   CHECK(detections.flux()[0] == Approx(1.F));
 
-  destroy_plane_jobs(plane_jobs);
 }
 
 TEST_CASE("build_plane_jobs uploads a fixed beam kernel", "[gpu][plane_jobs]")
@@ -119,12 +117,11 @@ TEST_CASE("build_plane_jobs uploads a fixed beam kernel", "[gpu][plane_jobs]")
   spec.fixed_beam_kernel = &kernel;
   spec.fixed_beam_halfsize = 0;
 
-  auto plane_jobs = build_plane_jobs(spec);
+  GpuPlaneJobs plane_jobs(spec);
   REQUIRE(plane_jobs.jobs.size() == 1);
   CHECK(plane_jobs.jobs[0].input.beam_kernel != nullptr);
   CHECK(plane_jobs.jobs[0].input.beam_halfsize == 0);
   CHECK(plane_jobs.jobs[0].workspace_sizes.beam_stamp_pixels == 1);
-  destroy_plane_jobs(plane_jobs);
 }
 
 TEST_CASE("build_plane_jobs builds a per-band Gaussian beam kernel", "[gpu][plane_jobs]")
@@ -139,10 +136,9 @@ TEST_CASE("build_plane_jobs builds a per-band Gaussian beam kernel", "[gpu][plan
   spec.beam_minor_axis = beam_minor.data();
   spec.beam_position_angle = beam_angle.data();
 
-  auto plane_jobs = build_plane_jobs(spec);
+  GpuPlaneJobs plane_jobs(spec);
   REQUIRE(plane_jobs.jobs.size() == 1);
   CHECK(plane_jobs.jobs[0].input.beam_kernel != nullptr);
   CHECK(plane_jobs.jobs[0].input.beam_halfsize == 4);
   CHECK(plane_jobs.jobs[0].workspace_sizes.beam_stamp_pixels == 81);
-  destroy_plane_jobs(plane_jobs);
 }

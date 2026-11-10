@@ -13,7 +13,6 @@
 
 using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_mask_or;
-using breifast::gpu::PinnedVector;
 using Catch::Matchers::Equals;
 
 namespace
@@ -31,7 +30,7 @@ Result run_gpu_mask_or(const std::vector<std::string> &channels, int band_start,
   const size_t n_pixels = channels.front().size();
   const size_t n_channels = channels.size();
 
-  PinnedVector<uint8_t> host_mask(n_channels * n_pixels);
+  std::vector<uint8_t> host_mask(n_channels * n_pixels);
   for (size_t i_channel = 0; i_channel < n_channels; ++i_channel)
   {
     for (size_t i_pixel = 0; i_pixel < n_pixels; ++i_pixel)
@@ -40,8 +39,8 @@ Result run_gpu_mask_or(const std::vector<std::string> &channels, int band_start,
     }
   }
 
-  PinnedVector<uint8_t> host_out(n_pixels);
-  PinnedVector<int> host_any(1);
+  std::vector<uint8_t> host_out(n_pixels);
+  std::vector<int> host_any(1);
 
   DeviceVector<uint8_t> device_mask(n_channels * n_pixels);
   DeviceVector<uint8_t> device_out(n_pixels);

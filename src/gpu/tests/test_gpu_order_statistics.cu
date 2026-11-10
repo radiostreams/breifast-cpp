@@ -15,7 +15,6 @@
 using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_median;
 using breifast::gpu::gpu_median_abs;
-using breifast::gpu::PinnedVector;
 using Catch::Matchers::WithinRel;
 
 namespace
@@ -25,7 +24,7 @@ float run_median(const std::vector<float> &values, bool abs_mode, float abs_scal
   const size_t n = values.size();
   const size_t n_alloc = n == 0 ? 1 : n;
 
-  PinnedVector<float> host_values(values.begin(), values.end());
+  std::vector<float> host_values(values.begin(), values.end());
   DeviceVector<float> device_values(n_alloc);
   DeviceVector<float> device_median(1);
 

@@ -18,7 +18,6 @@
 using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_combine_noise_map_constant;
 using breifast::gpu::gpu_combine_noise_map_rms;
-using breifast::gpu::PinnedVector;
 using Catch::Approx;
 using Catch::Matchers::Equals;
 
@@ -59,10 +58,10 @@ std::vector<float> run_gpu_combine_noise_map_rms(const std::vector<float> &rms_v
 {
   const size_t n_plane_pixels = rms_values.size();
 
-  PinnedVector<float> host_rms(rms_values.begin(), rms_values.end());
-  PinnedVector<float> host_selfnoise(selfnoise_values.begin(), selfnoise_values.end());
-  PinnedVector<float> host_dde(dde_values.begin(), dde_values.end());
-  PinnedVector<float> host_out(n_plane_pixels, prefill);
+  std::vector<float> host_rms(rms_values.begin(), rms_values.end());
+  std::vector<float> host_selfnoise(selfnoise_values.begin(), selfnoise_values.end());
+  std::vector<float> host_dde(dde_values.begin(), dde_values.end());
+  std::vector<float> host_out(n_plane_pixels, prefill);
 
   DeviceVector<float> device_rms(n_plane_pixels);
   DeviceVector<float> device_selfnoise(n_plane_pixels);
@@ -102,9 +101,9 @@ std::vector<float> run_gpu_combine_noise_map_constant(const std::vector<float> &
 {
   const size_t n_plane_pixels = selfnoise_values.size();
 
-  PinnedVector<float> host_selfnoise(selfnoise_values.begin(), selfnoise_values.end());
-  PinnedVector<float> host_dde(dde_values.begin(), dde_values.end());
-  PinnedVector<float> host_out(n_plane_pixels, prefill);
+  std::vector<float> host_selfnoise(selfnoise_values.begin(), selfnoise_values.end());
+  std::vector<float> host_dde(dde_values.begin(), dde_values.end());
+  std::vector<float> host_out(n_plane_pixels, prefill);
 
   DeviceVector<float> device_selfnoise(n_plane_pixels);
   DeviceVector<float> device_dde(n_plane_pixels);

@@ -11,7 +11,6 @@
 
 using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_any_true;
-using breifast::gpu::PinnedVector;
 
 namespace
 {
@@ -21,7 +20,7 @@ int run_any_true(const std::vector<unsigned char> &values)
   const size_t n = values.size();
   const size_t n_alloc = n == 0 ? 1 : n;
 
-  PinnedVector<unsigned char> host_values(values.begin(), values.end());
+  std::vector<unsigned char> host_values(values.begin(), values.end());
   DeviceVector<unsigned char> device_values(n_alloc);
   DeviceVector<int> device_out(1);
 

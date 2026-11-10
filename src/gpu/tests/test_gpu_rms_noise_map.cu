@@ -18,7 +18,6 @@
 
 using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_rms_noise_map;
-using breifast::gpu::PinnedVector;
 using Catch::Approx;
 
 namespace
@@ -58,9 +57,9 @@ std::vector<float> run_gpu_rms_noise_map(const std::vector<float> &plane_values,
 {
   const size_t n_plane_pixels = n_rows * n_cols;
 
-  PinnedVector<float> host_plane(plane_values.begin(), plane_values.end());
-  PinnedVector<float> host_rows(n_plane_pixels, prefill);
-  PinnedVector<float> host_out(n_plane_pixels, prefill);
+  std::vector<float> host_plane(plane_values.begin(), plane_values.end());
+  std::vector<float> host_rows(n_plane_pixels, prefill);
+  std::vector<float> host_out(n_plane_pixels, prefill);
 
   DeviceVector<float> device_plane(n_plane_pixels);
   DeviceVector<float> device_rows(n_plane_pixels);

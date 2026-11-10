@@ -1,9 +1,11 @@
 #pragma once
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <vector>
 
+#include "device_vector.hpp"
 #include "gpu_band_workspace.cuh"
 #include "gpu_plane_detections.hpp"
 
@@ -58,24 +60,46 @@ struct GpuPlaneJobSpec
   bool beam_size_enabled = false;
 };
 
+struct GpuPlaneSizes
+{
+  std::size_t n_pixels = 0;
+  std::size_t channel_pixels = 0;
+};
+
 struct GpuPlaneJobs
 {
-  std::vector<GpuBandJob> jobs;
-  std::vector<GpuBandLabels> labels;
-  std::vector<void *> buffers;
+  explicit GpuPlaneJobs(const GpuPlaneJobSpec &spec);
 
-  const float *cube = nullptr;
-  const bool *nonzero_channels = nullptr;
+  GpuPlaneJobs(const GpuPlaneJobs &) = delete;
+  GpuPlaneJobs &operator=(const GpuPlaneJobs &) = delete;
+  GpuPlaneJobs(GpuPlaneJobs &&) noexcept = default;
+  GpuPlaneJobs &operator=(GpuPlaneJobs &&) noexcept = default;
+  ~GpuPlaneJobs() = default;
+
   std::size_t n_y = 0;
   std::size_t n_x = 0;
   std::size_t n_channels = 0;
   float max_to_std_ratio_value = 1.F;
   bool use_rms_noise_estimator = true;
+
+  DeviceVector<float> cube;
+  DeviceVector<float> weights;
+  DeviceVector<bool> nonzero_channels;
+  DeviceVector<bool> accept_mask;
+  DeviceVector<float> selfnoise_offset;
+  DeviceVector<float> selfnoise_raw;
+  DeviceVector<float> dde_noise;
+  std::optional<DeviceVector<float>> mean_image;
+  std::optional<DeviceVector<float>> snr_cutoff;
+  std::optional<DeviceVector<float>> flux_cutoff;
+  std::optional<DeviceVector<float>> baseline_flux;
+  std::optional<DeviceVector<float>> fixed_beam_kernel;
+  std::vector<DeviceVector<float>> band_beam_kernels;
+
+  std::vector<GpuBandJob> jobs;
+  std::vector<GpuBandLabels> labels;
+
+private:
+  GpuPlaneJobs(const GpuPlaneJobSpec &spec, const GpuPlaneSizes &sizes);
 };
-
-GpuPlaneJobs build_plane_jobs(const GpuPlaneJobSpec &spec);
-void destroy_plane_jobs(GpuPlaneJobs &plane_jobs) noexcept;
-
-void *gpu_upload_buffer(const void *host, std::size_t bytes);
-void gpu_free_buffer(void *device) noexcept;
 } // namespace breifast::gpu

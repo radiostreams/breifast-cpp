@@ -12,7 +12,6 @@
 
 using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_label_islands;
-using breifast::gpu::PinnedVector;
 using Catch::Matchers::Equals;
 
 namespace
@@ -22,7 +21,7 @@ std::vector<unsigned int> run_label(const std::vector<unsigned char> &mask, size
 {
   const size_t n = mask.size();
 
-  PinnedVector<unsigned char> host_mask(mask.begin(), mask.end());
+  std::vector<unsigned char> host_mask(mask.begin(), mask.end());
   DeviceVector<unsigned char> device_mask(n);
   DeviceVector<unsigned int> device_labels(n);
   DeviceVector<unsigned int> device_count(1);
@@ -37,7 +36,7 @@ std::vector<unsigned int> run_label(const std::vector<unsigned char> &mask, size
                     thrust::raw_pointer_cast(device_labels.data()), thrust::raw_pointer_cast(device_count.data()),
                     thrust::raw_pointer_cast(device_scratch.data()), stream);
 
-  PinnedVector<unsigned int> host_labels(n);
+  std::vector<unsigned int> host_labels(n);
   unsigned int count = 0;
   gpuMemcpyDeviceToHostAsync(&count, thrust::raw_pointer_cast(device_count.data()), sizeof(unsigned int), stream);
   gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_labels.data()),

@@ -277,6 +277,56 @@ GpuBandStatus gpu_process_band(const GpuBandInput &input, GpuBandWorkspace &work
   return GpuBandStatus::detections;
 }
 
+GpuBandJob::GpuBandJob(GpuBandInput input, const GpuBandWorkspaceSizes &workspace_sizes,
+                       std::size_t result_n_pixels, std::size_t result_histogram_bins)
+    : input(input), workspace_sizes(workspace_sizes), result_n_pixels(result_n_pixels),
+      result_histogram_bins(result_histogram_bins)
+{
+  cudaStream_t raw_stream{};
+  gpuStreamCreate(&raw_stream);
+  stream = GpuStream{raw_stream};
+}
+
+GpuBandJob::GpuBandJob(GpuBandJob &&other) noexcept
+    : input(other.input), workspace_sizes(other.workspace_sizes), result_n_pixels(other.result_n_pixels),
+      result_histogram_bins(other.result_histogram_bins), workspace(std::move(other.workspace)),
+      result(std::move(other.result)), stream(other.stream), status(other.status), error(std::move(other.error))
+{
+  other.stream = GpuStream{};
+}
+
+GpuBandJob &GpuBandJob::operator=(GpuBandJob &&other) noexcept
+{
+  if (this != &other)
+  {
+    if (stream.handle_ != nullptr)
+    {
+      (void)cudaStreamSynchronize(stream);
+      (void)cudaStreamDestroy(stream);
+    }
+    input = other.input;
+    workspace_sizes = other.workspace_sizes;
+    result_n_pixels = other.result_n_pixels;
+    result_histogram_bins = other.result_histogram_bins;
+    workspace = std::move(other.workspace);
+    result = std::move(other.result);
+    stream = other.stream;
+    status = other.status;
+    error = std::move(other.error);
+    other.stream = GpuStream{};
+  }
+  return *this;
+}
+
+GpuBandJob::~GpuBandJob()
+{
+  if (stream.handle_ != nullptr)
+  {
+    (void)cudaStreamSynchronize(stream);
+    (void)cudaStreamDestroy(stream);
+  }
+}
+
 void gpu_process_bands(std::vector<GpuBandJob> &jobs)
 {
   std::vector<std::thread> threads;
@@ -289,12 +339,9 @@ void gpu_process_bands(std::vector<GpuBandJob> &jobs)
         {
           try
           {
-            cudaStream_t raw_stream{};
-            gpuStreamCreate(&raw_stream);
-            job.stream = GpuStream{raw_stream};
-            job.workspace = create_band_workspace(job.workspace_sizes, job.stream);
-            job.result = create_band_result(job.result_n_pixels, job.result_histogram_bins, job.stream);
-            job.status = gpu_process_band(job.input, job.workspace, job.result, job.stream);
+            job.workspace.emplace(job.workspace_sizes);
+            job.result.emplace(job.result_n_pixels, job.result_histogram_bins);
+            job.status = gpu_process_band(job.input, *job.workspace, *job.result, job.stream);
           }
           catch (...)
           {
@@ -307,18 +354,5 @@ void gpu_process_bands(std::vector<GpuBandJob> &jobs)
   {
     thread.join();
   }
-}
-
-void destroy_band_job(GpuBandJob &job) noexcept
-{
-  if (job.stream.handle_ != nullptr)
-  {
-    // Synchronous cudaFree must not run while the stream still uses the buffers.
-    (void)cudaStreamSynchronize(job.stream);
-    destroy_band_result(job.result, job.stream);
-    destroy_band_workspace(job.workspace, job.stream);
-    (void)cudaStreamDestroy(job.stream);
-  }
-  job = GpuBandJob{};
 }
 } // namespace breifast::gpu

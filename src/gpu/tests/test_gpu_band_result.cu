@@ -13,13 +13,10 @@
 
 using breifast::gpu::assemble_plane_bands;
 using breifast::gpu::copy_band_result;
-using breifast::gpu::create_band_result;
-using breifast::gpu::destroy_band_result;
 using breifast::gpu::GpuBandHostResult;
 using breifast::gpu::GpuBandStatus;
 using breifast::gpu::GpuPlaneHostResult;
 using breifast::gpu::GpuBandResult;
-using breifast::gpu::PinnedVector;
 using Catch::Matchers::Equals;
 
 TEST_CASE("copy_band_result copies per-island arrays, histograms and scalars", "[gpu][band_result]")
@@ -31,7 +28,7 @@ TEST_CASE("copy_band_result copies per-island arrays, histograms and scalars", "
   cudaStream_t stream{};
   gpuStreamCreate(&stream);
 
-  auto source = create_band_result(n_pixels, histogram_bins, stream);
+  GpuBandResult source(n_pixels, histogram_bins);
   source.label_count = label_count;
 
   const std::vector<float> floats = {1.F, 2.F};
@@ -100,7 +97,6 @@ TEST_CASE("copy_band_result copies per-island arrays, histograms and scalars", "
   CHECK(destination.rms_floor == rms_floor);
   CHECK(destination.global_mad == global_mad);
 
-  destroy_band_result(source, stream);
   gpuStreamSynchronize(stream);
   gpuStreamDestroy(stream);
 }

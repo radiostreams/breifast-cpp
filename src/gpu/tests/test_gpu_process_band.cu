@@ -14,19 +14,15 @@
 #include "gpu_process_band.cuh"
 #include "gpu_runtime.hpp"
 
-using breifast::gpu::create_band_result;
-using breifast::gpu::create_band_workspace;
-using breifast::gpu::destroy_band_result;
-using breifast::gpu::destroy_band_workspace;
 using breifast::gpu::DeviceVector;
 using breifast::gpu::GpuBandInput;
 using breifast::gpu::GpuBandResult;
+using breifast::gpu::GpuBandInputSizes;
 using breifast::gpu::GpuBandStatus;
 using breifast::gpu::GpuBandWorkspace;
 using breifast::gpu::GpuBandWorkspaceSizes;
 using breifast::gpu::GpuStream;
 using breifast::gpu::gpu_process_band;
-using breifast::gpu::PinnedVector;
 using Catch::Matchers::ContainsSubstring;
 using Catch::Matchers::WithinRel;
 
@@ -53,7 +49,19 @@ struct Fixture
   GpuBandInput input;
   cudaStream_t stream{};
 
+  static GpuBandWorkspaceSizes workspace_sizes()
+  {
+    return GpuBandWorkspaceSizes{
+        .n_pixels = n_pixels,
+        .stamp_capacity = 1,
+        .stamp_pixels = 1,
+        .beam_stamp_pixels = 0,
+        .histogram_bins = histogram_bins,
+    };
+  }
+
   Fixture(bool nonzero_value, bool accept_value, bool use_rms)
+      : workspace(workspace_sizes()), result(n_pixels, histogram_bins)
   {
     gpuStreamCreate(&stream);
 
@@ -65,57 +73,48 @@ struct Fixture
     accept_mask.assign(n_pixels * n_channels, accept_value ? 1U : 0U);
     nonzero_channels.assign(n_channels, nonzero_value ? 1U : 0U);
 
-    GpuBandWorkspaceSizes sizes;
-    sizes.n_pixels = n_pixels;
-    sizes.stamp_capacity = 1;
-    sizes.stamp_pixels = 1;
-    sizes.beam_stamp_pixels = 0;
-    sizes.histogram_bins = histogram_bins;
-    workspace = create_band_workspace(sizes, stream);
-    result = create_band_result(n_pixels, histogram_bins, stream);
-
-    input.sizes.cube = n_pixels * n_channels;
-    input.sizes.weights = n_channels;
-    input.sizes.nonzero_channels = n_channels;
-    input.sizes.accept_mask = n_pixels * n_channels;
-    input.sizes.selfnoise_offset = n_pixels;
-    input.sizes.selfnoise_raw = n_pixels;
-    input.sizes.dde_noise = n_pixels;
-
-    input.cube = thrust::raw_pointer_cast(cube.data());
-    input.weights = thrust::raw_pointer_cast(weights.data());
-    input.nonzero_channels = reinterpret_cast<const bool *>(thrust::raw_pointer_cast(nonzero_channels.data()));
-    input.accept_mask = reinterpret_cast<const bool *>(thrust::raw_pointer_cast(accept_mask.data()));
-    input.selfnoise_offset = thrust::raw_pointer_cast(selfnoise_offset.data());
-    input.selfnoise_raw = thrust::raw_pointer_cast(selfnoise_raw.data());
-    input.dde_noise = thrust::raw_pointer_cast(dde_noise.data());
-
-    input.n_y = n_y;
-    input.n_x = n_x;
-    input.n_pixels = n_pixels;
-    input.n_channels = n_channels;
-    input.band_start = 0;
-    input.band_stop = 2;
-    input.boxsize = 1;
-    input.inner_boxsize = 0;
-    input.beam_halfsize = 0;
-    input.histogram_detail = 0;
-    input.max_sigma_bin = 5;
-    input.selfnoise_scale_factor = 1.F;
-    input.inv_band_size = 0.5F;
-    input.inv_weights_sum = 0.5F;
-    input.ddenoise_scaling_factor = 1.F;
-    input.reject_noise_threshold = 0.F;
-    input.threshold = 2.F;
-    input.max_to_std_ratio_value = 1.F;
-    input.use_rms_noise_estimator = use_rms;
-    input.subtract_mean = false;
+    input = GpuBandInput{
+        .sizes = GpuBandInputSizes{
+            .cube = n_pixels * n_channels,
+            .weights = n_channels,
+            .nonzero_channels = n_channels,
+            .accept_mask = n_pixels * n_channels,
+            .selfnoise_offset = n_pixels,
+            .selfnoise_raw = n_pixels,
+            .dde_noise = n_pixels,
+        },
+        .cube = cube.data(),
+        .weights = weights.data(),
+        .nonzero_channels = reinterpret_cast<const bool *>(nonzero_channels.data()),
+        .accept_mask = reinterpret_cast<const bool *>(accept_mask.data()),
+        .selfnoise_offset = selfnoise_offset.data(),
+        .selfnoise_raw = selfnoise_raw.data(),
+        .dde_noise = dde_noise.data(),
+        .n_y = n_y,
+        .n_x = n_x,
+        .n_pixels = n_pixels,
+        .n_channels = n_channels,
+        .band_start = 0,
+        .band_stop = 2,
+        .boxsize = 1,
+        .inner_boxsize = 0,
+        .beam_halfsize = 0,
+        .histogram_detail = 0,
+        .max_sigma_bin = 5,
+        .selfnoise_scale_factor = 1.F,
+        .inv_band_size = 0.5F,
+        .inv_weights_sum = 0.5F,
+        .ddenoise_scaling_factor = 1.F,
+        .reject_noise_threshold = 0.F,
+        .threshold = 2.F,
+        .max_to_std_ratio_value = 1.F,
+        .use_rms_noise_estimator = use_rms,
+        .subtract_mean = false,
+    };
   }
 
   ~Fixture()
   {
-    destroy_band_result(result, stream);
-    destroy_band_workspace(workspace, stream);
     gpuStreamSynchronize(stream);
     gpuStreamDestroy(stream);
   }
@@ -131,7 +130,7 @@ float copy_scalar(const float *value, GpuStream stream)
 
 void set_accept_mask(Fixture &fixture, const std::vector<uint8_t> &mask)
 {
-  PinnedVector<uint8_t> host_mask(mask.begin(), mask.end());
+  std::vector<uint8_t> host_mask(mask.begin(), mask.end());
   gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(fixture.accept_mask.data()),
                              thrust::raw_pointer_cast(host_mask.data()), mask.size(), fixture.stream);
   gpuStreamSynchronize(fixture.stream);
@@ -162,7 +161,7 @@ TEST_CASE("gpu_process_band runs the RMS noise stage and reports no detections",
   CHECK_THAT(copy_scalar(fixture.result.median_noise, fixture.stream), WithinRel(1.F, 1e-6));
   CHECK_THAT(copy_scalar(fixture.result.global_mad, fixture.stream), WithinRel(1.4826F, 1e-6));
 
-  PinnedVector<unsigned long long> histogram(Fixture::histogram_bins, 1ULL);
+  std::vector<unsigned long long> histogram(Fixture::histogram_bins, 1ULL);
   gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(histogram.data()), fixture.result.histogram0,
                              Fixture::histogram_bins * sizeof(unsigned long long), fixture.stream);
   gpuStreamSynchronize(fixture.stream);

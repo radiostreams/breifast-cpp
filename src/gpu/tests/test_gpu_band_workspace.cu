@@ -1,34 +1,32 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
-#include <cuda_runtime.h>
-
 #include "gpu_band_workspace.cuh"
-#include "gpu_runtime.hpp"
 
-using breifast::gpu::create_band_result;
-using breifast::gpu::create_band_workspace;
-using breifast::gpu::destroy_band_result;
-using breifast::gpu::destroy_band_workspace;
 using breifast::gpu::GpuBandResult;
 using breifast::gpu::GpuBandWorkspace;
 using breifast::gpu::GpuBandWorkspaceSizes;
 using breifast::gpu::max_stamp_capacity;
 using Catch::Matchers::ContainsSubstring;
 
-TEST_CASE("create_band_workspace allocates every scratch buffer", "[gpu][band_workspace]")
+namespace
 {
-  GpuBandWorkspaceSizes sizes;
-  sizes.n_pixels = 1024;
-  sizes.stamp_capacity = 8;
-  sizes.stamp_pixels = 25;
-  sizes.beam_stamp_pixels = 49;
-  sizes.histogram_bins = 10;
+GpuBandWorkspaceSizes make_sizes()
+{
+  return GpuBandWorkspaceSizes{
+      .n_pixels = 1024,
+      .stamp_capacity = 8,
+      .stamp_pixels = 25,
+      .beam_stamp_pixels = 49,
+      .histogram_bins = 10,
+  };
+}
+} // namespace
 
-  cudaStream_t stream{};
-  gpuStreamCreate(&stream);
-
-  auto workspace = create_band_workspace(sizes, stream);
+TEST_CASE("GpuBandWorkspace allocates every scratch buffer", "[gpu][band_workspace]")
+{
+  const auto sizes = make_sizes();
+  const GpuBandWorkspace workspace(sizes);
 
   CHECK(workspace.sizes.n_pixels == sizes.n_pixels);
   CHECK(workspace.sizes.stamp_capacity == sizes.stamp_capacity);
@@ -36,144 +34,87 @@ TEST_CASE("create_band_workspace allocates every scratch buffer", "[gpu][band_wo
   CHECK(workspace.sizes.beam_stamp_pixels == sizes.beam_stamp_pixels);
   CHECK(workspace.sizes.histogram_bins == sizes.histogram_bins);
 
-  CHECK(workspace.plane != nullptr);
-  CHECK(workspace.noise_map != nullptr);
-  CHECK(workspace.snr != nullptr);
-  CHECK(workspace.mask != nullptr);
-  CHECK(workspace.row_sums != nullptr);
-  CHECK(workspace.rms_map != nullptr);
-  CHECK(workspace.labels != nullptr);
-  CHECK(workspace.label_scratch != nullptr);
-  CHECK(workspace.donut_stamps != nullptr);
-  CHECK(workspace.beam_stamps != nullptr);
-  CHECK(workspace.any_flag != nullptr);
-  CHECK(workspace.label_count != nullptr);
-
-  destroy_band_workspace(workspace, stream);
-  gpuStreamSynchronize(stream);
-
-  CHECK(workspace.plane == nullptr);
-  CHECK(workspace.noise_map == nullptr);
-  CHECK(workspace.snr == nullptr);
-  CHECK(workspace.mask == nullptr);
-  CHECK(workspace.row_sums == nullptr);
-  CHECK(workspace.rms_map == nullptr);
-  CHECK(workspace.labels == nullptr);
-  CHECK(workspace.label_scratch == nullptr);
-  CHECK(workspace.donut_stamps == nullptr);
-  CHECK(workspace.beam_stamps == nullptr);
-  CHECK(workspace.any_flag == nullptr);
-  CHECK(workspace.label_count == nullptr);
-  CHECK(workspace.sizes.n_pixels == 0);
-
-  gpuStreamDestroy(stream);
+  CHECK(workspace.plane.size() == sizes.n_pixels);
+  CHECK(workspace.noise_map.size() == sizes.n_pixels);
+  CHECK(workspace.snr.size() == sizes.n_pixels);
+  CHECK(workspace.mask.size() == sizes.n_pixels);
+  CHECK(workspace.row_sums.size() == sizes.n_pixels);
+  CHECK(workspace.rms_map.size() == sizes.n_pixels);
+  CHECK(workspace.labels.size() == sizes.n_pixels);
+  CHECK(workspace.label_scratch.size() == sizes.n_pixels);
+  CHECK(workspace.donut_stamps.size() == sizes.stamp_capacity * sizes.stamp_pixels);
+  CHECK(workspace.beam_stamps.size() == sizes.stamp_capacity * sizes.beam_stamp_pixels);
+  CHECK(workspace.any_flag.size() == 1);
+  CHECK(workspace.label_count.size() == 1);
 }
 
-TEST_CASE("create_band_workspace skips beam stamps when beam is disabled", "[gpu][band_workspace]")
+TEST_CASE("GpuBandWorkspace skips beam stamps when beam is disabled", "[gpu][band_workspace]")
 {
-  GpuBandWorkspaceSizes sizes;
-  sizes.n_pixels = 64;
-  sizes.stamp_capacity = 2;
-  sizes.stamp_pixels = 9;
+  auto sizes = make_sizes();
   sizes.beam_stamp_pixels = 0;
-  sizes.histogram_bins = 4;
 
-  cudaStream_t stream{};
-  gpuStreamCreate(&stream);
-
-  auto workspace = create_band_workspace(sizes, stream);
-  CHECK(workspace.donut_stamps != nullptr);
-  CHECK(workspace.beam_stamps == nullptr);
-
-  destroy_band_workspace(workspace, stream);
-  gpuStreamSynchronize(stream);
-  gpuStreamDestroy(stream);
+  const GpuBandWorkspace workspace(sizes);
+  CHECK(workspace.donut_stamps.empty() == false);
+  CHECK(workspace.beam_stamps.empty() == true);
 }
 
-TEST_CASE("create_band_workspace rejects invalid sizes and the stamp cap", "[gpu][band_workspace]")
+TEST_CASE("GpuBandWorkspace rejects invalid sizes and the stamp cap", "[gpu][band_workspace]")
 {
-  cudaStream_t stream{};
-  gpuStreamCreate(&stream);
-
-  GpuBandWorkspaceSizes sizes;
-  sizes.n_pixels = 64;
-  sizes.stamp_capacity = 2;
-  sizes.stamp_pixels = 9;
-  sizes.histogram_bins = 4;
+  const auto sizes = make_sizes();
 
   auto bad = sizes;
   bad.n_pixels = 0;
-  CHECK_THROWS_WITH(create_band_workspace(bad, stream), ContainsSubstring("n_pixels"));
+  CHECK_THROWS_WITH(GpuBandWorkspace(bad), ContainsSubstring("n_pixels"));
 
   bad = sizes;
   bad.stamp_pixels = 0;
-  CHECK_THROWS_WITH(create_band_workspace(bad, stream), ContainsSubstring("stamp_pixels"));
+  CHECK_THROWS_WITH(GpuBandWorkspace(bad), ContainsSubstring("stamp_pixels"));
 
   bad = sizes;
   bad.stamp_capacity = 0;
-  CHECK_THROWS_WITH(create_band_workspace(bad, stream), ContainsSubstring("stamp_capacity"));
+  CHECK_THROWS_WITH(GpuBandWorkspace(bad), ContainsSubstring("stamp_capacity"));
 
   bad = sizes;
   bad.stamp_capacity = max_stamp_capacity + 1;
-  CHECK_THROWS_WITH(create_band_workspace(bad, stream), ContainsSubstring("exceeds the maximum"));
-
-  gpuStreamDestroy(stream);
+  CHECK_THROWS_WITH(GpuBandWorkspace(bad), ContainsSubstring("exceeds the maximum"));
 }
 
-TEST_CASE("create_band_result allocates every output buffer", "[gpu][band_workspace]")
+TEST_CASE("GpuBandResult allocates every output buffer", "[gpu][band_workspace]")
 {
   constexpr std::size_t n_pixels = 64;
   constexpr std::size_t histogram_bins = 10;
 
-  cudaStream_t stream{};
-  gpuStreamCreate(&stream);
-
-  auto result = create_band_result(n_pixels, histogram_bins, stream);
+  const GpuBandResult result(n_pixels, histogram_bins);
 
   CHECK(result.n_pixels == n_pixels);
   CHECK(result.histogram_bins == histogram_bins);
-  CHECK(result.peak_value != nullptr);
-  CHECK(result.peak_local_noise != nullptr);
-  CHECK(result.peak_y != nullptr);
-  CHECK(result.peak_x != nullptr);
-  CHECK(result.island_size != nullptr);
-  CHECK(result.stamp_extreme != nullptr);
-  CHECK(result.donut_std != nullptr);
-  CHECK(result.donut_lmad != nullptr);
-  CHECK(result.beam_chi2 != nullptr);
-  CHECK(result.flux != nullptr);
-  CHECK(result.boost != nullptr);
-  CHECK(result.boost_found != nullptr);
-  CHECK(result.noise_at_peak != nullptr);
-  CHECK(result.rms_at_peak != nullptr);
-  CHECK(result.selfnoise_at_peak != nullptr);
-  CHECK(result.histogram0 != nullptr);
-  CHECK(result.histogram1 != nullptr);
-  CHECK(result.histogram2 != nullptr);
-  CHECK(result.min_sigma != nullptr);
-  CHECK(result.max_sigma != nullptr);
-  CHECK(result.median_noise != nullptr);
-  CHECK(result.rms_floor != nullptr);
-  CHECK(result.global_mad != nullptr);
-
-  destroy_band_result(result, stream);
-  gpuStreamSynchronize(stream);
-
-  CHECK(result.peak_value == nullptr);
-  CHECK(result.histogram2 == nullptr);
-  CHECK(result.global_mad == nullptr);
-  CHECK(result.n_pixels == 0);
-
-  gpuStreamDestroy(stream);
+  CHECK(result.peak_value.size() == n_pixels);
+  CHECK(result.peak_local_noise.size() == n_pixels);
+  CHECK(result.peak_y.size() == n_pixels);
+  CHECK(result.peak_x.size() == n_pixels);
+  CHECK(result.island_size.size() == n_pixels);
+  CHECK(result.stamp_extreme.size() == n_pixels);
+  CHECK(result.donut_std.size() == n_pixels);
+  CHECK(result.donut_lmad.size() == n_pixels);
+  CHECK(result.beam_chi2.size() == n_pixels);
+  CHECK(result.flux.size() == n_pixels);
+  CHECK(result.boost.size() == n_pixels);
+  CHECK(result.boost_found.size() == n_pixels);
+  CHECK(result.noise_at_peak.size() == n_pixels);
+  CHECK(result.rms_at_peak.size() == n_pixels);
+  CHECK(result.selfnoise_at_peak.size() == n_pixels);
+  CHECK(result.histogram0.size() == histogram_bins);
+  CHECK(result.histogram1.size() == histogram_bins);
+  CHECK(result.histogram2.size() == histogram_bins);
+  CHECK(result.min_sigma.size() == 1);
+  CHECK(result.max_sigma.size() == 1);
+  CHECK(result.median_noise.size() == 1);
+  CHECK(result.rms_floor.size() == 1);
+  CHECK(result.global_mad.size() == 1);
 }
 
-TEST_CASE("create_band_result rejects empty sizes", "[gpu][band_workspace]")
+TEST_CASE("GpuBandResult rejects empty sizes", "[gpu][band_workspace]")
 {
-  cudaStream_t stream{};
-  gpuStreamCreate(&stream);
-
-  CHECK_THROWS_WITH(create_band_result(0, 10, stream), ContainsSubstring("n_pixels"));
-  CHECK_THROWS_WITH(create_band_result(10, 0, stream), ContainsSubstring("histogram_bins"));
-
-  gpuStreamDestroy(stream);
+  CHECK_THROWS_WITH(GpuBandResult(0, 10), ContainsSubstring("n_pixels"));
+  CHECK_THROWS_WITH(GpuBandResult(10, 0), ContainsSubstring("histogram_bins"));
 }

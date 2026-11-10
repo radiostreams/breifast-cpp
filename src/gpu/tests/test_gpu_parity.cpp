@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <vector>
 #include <optional>
 
 #include "gpu_lot_integration.hpp"

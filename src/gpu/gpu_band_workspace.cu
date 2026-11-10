@@ -1,82 +1,37 @@
 #include "gpu_band_workspace.cuh"
 
-#include <stdexcept>
-#include <string>
-
-#include "gpu_runtime.hpp"
-
 namespace breifast::gpu
 {
-namespace
+GpuBandWorkspace::GpuBandWorkspace(const GpuBandWorkspaceSizes &sizes) : sizes(sizes)
 {
-template <typename T> void free_buffer(T *&buffer, GpuStream stream) noexcept
-{
-  if (buffer != nullptr)
+  validate_band_workspace_sizes(this->sizes);
+
+  plane.resize(this->sizes.n_pixels);
+  noise_map.resize(this->sizes.n_pixels);
+  snr.resize(this->sizes.n_pixels);
+  mask.resize(this->sizes.n_pixels);
+  row_sums.resize(this->sizes.n_pixels);
+  rms_map.resize(this->sizes.n_pixels);
+
+  labels.resize(this->sizes.n_pixels);
+  label_scratch.resize(this->sizes.n_pixels);
+
+  donut_stamps.resize(this->sizes.stamp_capacity * this->sizes.stamp_pixels);
+  if (this->sizes.beam_stamp_pixels > 0)
   {
-    // Cleanup must never throw: freeing runs after a plane may have failed, and a
-    // sticky CUDA error would otherwise abort the remaining frees and leak them.
-    (void)cudaFree(buffer);
-    buffer = nullptr;
-  }
-}
-} // namespace
-
-GpuBandWorkspace create_band_workspace(const GpuBandWorkspaceSizes &sizes, GpuStream stream)
-{
-  validate_band_workspace_sizes(sizes);
-
-  GpuBandWorkspace workspace;
-  workspace.sizes = sizes;
-
-  try
-  {
-    const std::size_t n_pixels = sizes.n_pixels;
-    gpuMalloc(&workspace.plane, n_pixels * sizeof(float));
-    gpuMalloc(&workspace.noise_map, n_pixels * sizeof(float));
-    gpuMalloc(&workspace.snr, n_pixels * sizeof(float));
-    gpuMalloc(&workspace.mask, n_pixels * sizeof(bool));
-    gpuMalloc(&workspace.row_sums, n_pixels * sizeof(float));
-    gpuMalloc(&workspace.rms_map, n_pixels * sizeof(float));
-
-    gpuMalloc(&workspace.labels, n_pixels * sizeof(unsigned int));
-    gpuMalloc(&workspace.label_scratch, n_pixels * sizeof(unsigned int));
-
-    gpuMalloc(&workspace.donut_stamps, sizes.stamp_capacity * sizes.stamp_pixels * sizeof(float));
-    if (sizes.beam_stamp_pixels > 0)
-    {
-      gpuMalloc(&workspace.beam_stamps, sizes.stamp_capacity * sizes.beam_stamp_pixels * sizeof(float));
-    }
-
-    gpuMalloc(&workspace.any_flag, sizeof(int));
-    gpuMalloc(&workspace.label_count, sizeof(unsigned int));
-  }
-  catch (...)
-  {
-    destroy_band_workspace(workspace, stream);
-    throw;
+    beam_stamps.resize(this->sizes.stamp_capacity * this->sizes.beam_stamp_pixels);
   }
 
-  return workspace;
+  any_flag.resize(1);
+  label_count.resize(1);
 }
 
-void destroy_band_workspace(GpuBandWorkspace &workspace, GpuStream stream) noexcept
-{
-  free_buffer(workspace.plane, stream);
-  free_buffer(workspace.noise_map, stream);
-  free_buffer(workspace.snr, stream);
-  free_buffer(workspace.mask, stream);
-  free_buffer(workspace.row_sums, stream);
-  free_buffer(workspace.rms_map, stream);
-  free_buffer(workspace.labels, stream);
-  free_buffer(workspace.label_scratch, stream);
-  free_buffer(workspace.donut_stamps, stream);
-  free_buffer(workspace.beam_stamps, stream);
-  free_buffer(workspace.any_flag, stream);
-  free_buffer(workspace.label_count, stream);
-  workspace = GpuBandWorkspace{};
-}
+GpuBandWorkspace::GpuBandWorkspace(GpuBandWorkspace &&) noexcept = default;
+GpuBandWorkspace &GpuBandWorkspace::operator=(GpuBandWorkspace &&) noexcept = default;
+GpuBandWorkspace::~GpuBandWorkspace() = default;
 
-GpuBandResult create_band_result(const std::size_t n_pixels, const std::size_t histogram_bins, GpuStream stream)
+GpuBandResult::GpuBandResult(std::size_t n_pixels, std::size_t histogram_bins)
+    : n_pixels(n_pixels), histogram_bins(histogram_bins)
 {
   if (n_pixels == 0)
   {
@@ -87,79 +42,36 @@ GpuBandResult create_band_result(const std::size_t n_pixels, const std::size_t h
     throw std::runtime_error("GpuBandResult: histogram_bins must be greater than 0");
   }
 
-  GpuBandResult result;
-  result.n_pixels = n_pixels;
-  result.histogram_bins = histogram_bins;
+  peak_value.resize(n_pixels);
+  peak_local_noise.resize(n_pixels);
+  peak_y.resize(n_pixels);
+  peak_x.resize(n_pixels);
+  island_size.resize(n_pixels);
 
-  try
-  {
-    gpuMalloc(&result.peak_value, n_pixels * sizeof(float));
-    gpuMalloc(&result.peak_local_noise, n_pixels * sizeof(float));
-    gpuMalloc(&result.peak_y, n_pixels * sizeof(long));
-    gpuMalloc(&result.peak_x, n_pixels * sizeof(long));
-    gpuMalloc(&result.island_size, n_pixels * sizeof(unsigned int));
+  stamp_extreme.resize(n_pixels);
+  donut_std.resize(n_pixels);
+  donut_lmad.resize(n_pixels);
+  beam_chi2.resize(n_pixels);
+  flux.resize(n_pixels);
+  boost.resize(n_pixels);
+  boost_found.resize(n_pixels);
 
-    gpuMalloc(&result.stamp_extreme, n_pixels * sizeof(float));
-    gpuMalloc(&result.donut_std, n_pixels * sizeof(float));
-    gpuMalloc(&result.donut_lmad, n_pixels * sizeof(float));
-    gpuMalloc(&result.beam_chi2, n_pixels * sizeof(float));
-    gpuMalloc(&result.flux, n_pixels * sizeof(float));
-    gpuMalloc(&result.boost, n_pixels * sizeof(float));
-    gpuMalloc(&result.boost_found, n_pixels * sizeof(bool));
+  noise_at_peak.resize(n_pixels);
+  rms_at_peak.resize(n_pixels);
+  selfnoise_at_peak.resize(n_pixels);
 
-    gpuMalloc(&result.noise_at_peak, n_pixels * sizeof(float));
-    gpuMalloc(&result.rms_at_peak, n_pixels * sizeof(float));
-    gpuMalloc(&result.selfnoise_at_peak, n_pixels * sizeof(float));
+  histogram0.resize(histogram_bins);
+  histogram1.resize(histogram_bins);
+  histogram2.resize(histogram_bins);
 
-    gpuMalloc(&result.histogram0, histogram_bins * sizeof(unsigned long long));
-    gpuMalloc(&result.histogram1, histogram_bins * sizeof(unsigned long long));
-    gpuMalloc(&result.histogram2, histogram_bins * sizeof(unsigned long long));
-
-    gpuMalloc(&result.min_sigma, sizeof(float));
-    gpuMalloc(&result.max_sigma, sizeof(float));
-    gpuMalloc(&result.median_noise, sizeof(float));
-    gpuMalloc(&result.rms_floor, sizeof(float));
-    gpuMalloc(&result.global_mad, sizeof(float));
-  }
-  catch (...)
-  {
-    destroy_band_result(result, stream);
-    throw;
-  }
-
-  return result;
+  min_sigma.resize(1);
+  max_sigma.resize(1);
+  median_noise.resize(1);
+  rms_floor.resize(1);
+  global_mad.resize(1);
 }
 
-void destroy_band_result(GpuBandResult &result, GpuStream stream) noexcept
-{
-  free_buffer(result.peak_value, stream);
-  free_buffer(result.peak_local_noise, stream);
-  free_buffer(result.peak_y, stream);
-  free_buffer(result.peak_x, stream);
-  free_buffer(result.island_size, stream);
-
-  free_buffer(result.stamp_extreme, stream);
-  free_buffer(result.donut_std, stream);
-  free_buffer(result.donut_lmad, stream);
-  free_buffer(result.beam_chi2, stream);
-  free_buffer(result.flux, stream);
-  free_buffer(result.boost, stream);
-  free_buffer(result.boost_found, stream);
-
-  free_buffer(result.noise_at_peak, stream);
-  free_buffer(result.rms_at_peak, stream);
-  free_buffer(result.selfnoise_at_peak, stream);
-
-  free_buffer(result.histogram0, stream);
-  free_buffer(result.histogram1, stream);
-  free_buffer(result.histogram2, stream);
-
-  free_buffer(result.min_sigma, stream);
-  free_buffer(result.max_sigma, stream);
-  free_buffer(result.median_noise, stream);
-  free_buffer(result.rms_floor, stream);
-  free_buffer(result.global_mad, stream);
-
-  result = GpuBandResult{};
-}
+GpuBandResult::GpuBandResult(GpuBandResult &&) noexcept = default;
+GpuBandResult &GpuBandResult::operator=(GpuBandResult &&) noexcept = default;
+GpuBandResult::~GpuBandResult() = default;
 } // namespace breifast::gpu

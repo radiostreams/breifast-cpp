@@ -12,7 +12,6 @@
 
 using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_compact_mask;
-using breifast::gpu::PinnedVector;
 using Catch::Matchers::Equals;
 
 namespace
@@ -21,7 +20,7 @@ std::vector<size_t> run_compact(const std::vector<unsigned char> &mask)
 {
   const size_t n = mask.size();
 
-  PinnedVector<unsigned char> host_mask(mask.begin(), mask.end());
+  std::vector<unsigned char> host_mask(mask.begin(), mask.end());
   DeviceVector<unsigned char> device_mask(n);
   DeviceVector<size_t> device_indices(n);
   DeviceVector<size_t> device_count(1);
@@ -37,7 +36,7 @@ std::vector<size_t> run_compact(const std::vector<unsigned char> &mask)
                    thrust::raw_pointer_cast(device_scratch.data()), stream);
 
   size_t count = 0;
-  PinnedVector<size_t> host_indices(n);
+  std::vector<size_t> host_indices(n);
   gpuMemcpyDeviceToHostAsync(&count, thrust::raw_pointer_cast(device_count.data()), sizeof(size_t), stream);
   gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_indices.data()),
                              thrust::raw_pointer_cast(device_indices.data()), n * sizeof(size_t), stream);

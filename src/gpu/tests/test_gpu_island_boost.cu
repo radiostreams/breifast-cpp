@@ -16,7 +16,6 @@
 
 using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_island_boost;
-using breifast::gpu::PinnedVector;
 
 namespace
 {
@@ -29,10 +28,10 @@ float run_boost(const std::vector<unsigned int> &labels, const std::vector<float
   const unsigned int active_count = labels.empty() ? 0U : *std::max_element(labels.begin(), labels.end());
   const unsigned int capacity = std::max(active_count, label);
 
-  PinnedVector<unsigned int> host_labels(labels.begin(), labels.end());
-  PinnedVector<float> host_baseline(baseline_flux.begin(), baseline_flux.end());
-  PinnedVector<unsigned int> host_count(1, active_count);
-  PinnedVector<float> host_flux(capacity, 0.F);
+  std::vector<unsigned int> host_labels(labels.begin(), labels.end());
+  std::vector<float> host_baseline(baseline_flux.begin(), baseline_flux.end());
+  std::vector<unsigned int> host_count(1, active_count);
+  std::vector<float> host_flux(capacity, 0.F);
   host_flux[label - 1U] = flux;
   DeviceVector<unsigned int> device_labels(labels.size());
   DeviceVector<float> device_baseline(baseline_flux.size());
