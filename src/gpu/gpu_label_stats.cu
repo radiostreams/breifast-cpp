@@ -5,7 +5,7 @@
 #include <string>
 
 #include <thrust/device_vector.h>
-#include <thrust/raw_pointer_cast.h>
+#include <thrust/device_ptr.h>
 
 #include "gpu_runtime.hpp"
 #include "gpu_minmax.cuh"

@@ -1,7 +1,7 @@
 #include <cooperative_groups.h>
 #include <thrust/device_vector.h>
 #include <thrust/execution_policy.h>
-#include <thrust/raw_pointer_cast.h>
+#include <thrust/device_ptr.h>
 #include <thrust/scan.h>
 
 #include "gpu_pipeline.hpp"
