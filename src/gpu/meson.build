@@ -2,8 +2,6 @@
 # nvcc takes C++20 at most, so nothing in here includes xtensor or needs C++23.
 
 gpu_include = include_directories('.', '..')
-cudart_dep = dependency('cudart', method : 'pkg-config')
-cudart_libdir = cudart_dep.get_variable(pkgconfig : 'libdir')
 
 gpu_lib = static_library('breifast_gpu',
   [
@@ -21,6 +19,7 @@ gpu_lib = static_library('breifast_gpu',
     'gpu_island_stamps.cu',
     'gpu_scalar_reductions.cu',
     'gpu_plane_upload.cu',
+    'gpu_device_probe.cu',
   ],
   include_directories : gpu_include,
 )

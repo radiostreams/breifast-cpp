@@ -13,6 +13,8 @@ add_project_arguments('-march=' + get_option('march'), '-fno-math-errno', langua
 have_gpu = add_languages('cuda', required : get_option('gpu'), native : false)
 if have_gpu
   add_project_arguments('-arch=' + get_option('gpu_arch'), '-lineinfo', language : 'cuda')
+  cudart_dep = dependency('cudart', method : 'pkg-config')
+  cudart_libdir = cudart_dep.get_variable(pkgconfig : 'libdir')
 endif
 
 py = import('python').find_installation()
@@ -150,13 +152,32 @@ cpu_sources = [
 ]
 cpu_source_files = files(cpu_sources)
 
+if have_gpu
+  subdir('src/gpu')
+endif
+
+ext_sources = ['src/plane_lot_bindings.cpp'] + cpu_sources
+ext_cpp_args = []
+ext_link_args = ['-static-libstdc++', '-static-libgcc', '-Wl,-z,noexecstack']
+ext_link_with = []
+ext_deps = [py.dependency(), pybind11_dep, xtl_dep, xtensor_dep, xsimd_dep, xtensor_python_dep, numpy_dep,
+            tbb_dep, itt_dep, tracy_headers_dep]
+if have_gpu
+  ext_sources += ['src/gpu/gpu_lot_integration.cpp']
+  ext_cpp_args += ['-DBREIFAST_HAVE_GPU']
+  ext_link_with += [gpu_lib, gpu_host_lib]
+  ext_link_args += ['-L' + cudart_libdir, '-lcudart_static', '-lrt', '-lpthread', '-ldl']
+endif
+
 ext_module = py.extension_module(
   'breifast_helpers',
-  ['src/plane_lot_bindings.cpp'] + cpu_sources + [tbb_build],
-  include_directories : include_directories('src'),
-  dependencies : [py.dependency(), pybind11_dep, xtl_dep, xtensor_dep, xsimd_dep, xtensor_python_dep, numpy_dep,
-                  tbb_dep, itt_dep, tracy_headers_dep],
-  link_args : ['-static-libstdc++', '-static-libgcc', '-Wl,-z,noexecstack'],
+  ext_sources + [tbb_build],
+  include_directories : include_directories('src', 'src/gpu'),
+  dependencies : ext_deps,
+  cpp_args : ext_cpp_args,
+  link_args : ext_link_args,
+  link_with : ext_link_with,
+  link_language : 'cpp',
   install : true,
 )
 
@@ -216,10 +237,6 @@ test_breifast_core = executable(
   link_args : ['-static-libstdc++', '-static-libgcc'],
 )
 test('breifast_core', test_breifast_core)
-
-if have_gpu
-  subdir('src/gpu')
-endif
 
 uv = find_program('uv', required : true)
 devshell_python = find_program('python3', required : true)

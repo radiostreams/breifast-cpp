@@ -1,7 +1,15 @@
 #include "plane_lot_bindings.hpp"
 #include "plane_lot_dispatch.hpp"
 
+#include <stdexcept>
+#include <string>
+
 #include <pybind11/stl.h>
+
+#ifdef BREIFAST_HAVE_GPU
+#include "gpu/gpu_device_probe.hpp"
+#include "gpu/gpu_lot_integration.hpp"
+#endif
 
 #define XTENSOR_USE_TBB
 #define FORCE_IMPORT_ARRAY
@@ -131,7 +139,7 @@ pybind11::list process_lot(pybind11::list planes, pybind11::list stokes_groups, 
                            int boxsize, int inner_boxsize, float ddenoise_scaling_factor, float full_bandwidth,
                            float reject_noise_threshold, int histogram_detail, int max_sigma_bin, float threshold,
                            bool save_stat_cubes, bool beam_size_enabled, pybind11::object fixed_beam_kernel_obj,
-                           int fixed_beam_halfsize, int num_threads)
+                           int fixed_beam_halfsize, int num_threads, bool use_gpu)
 {
   LotBatch lot;
   for (auto plane_handle : planes)
@@ -164,10 +172,28 @@ pybind11::list process_lot(pybind11::list planes, pybind11::list stokes_groups, 
     config.band_slices.push_back(to_band_slice(band_slice_handle.cast<pybind11::dict>()));
   }
 
+#ifndef BREIFAST_HAVE_GPU
+  if (use_gpu)
+  {
+    throw std::runtime_error("breifast_helpers built without GPU support");
+  }
+#endif
+
   std::vector<ProcessPlaneResult> results;
   {
     pybind11::gil_scoped_release release;
+#ifdef BREIFAST_HAVE_GPU
+    if (use_gpu)
+    {
+      results = gpu::run_batch_core_gpu(lot.planes, lot.groups, config);
+    }
+    else
+    {
+      results = run_lot_core(lot, config, num_threads);
+    }
+#else
     results = run_lot_core(lot, config, num_threads);
+#endif
   }
 
   pybind11::list out;
@@ -188,11 +214,16 @@ void init_plane_lot_bindings(pybind11::module_ &m)
         pybind11::arg("reject_noise_threshold") = 0.0f, pybind11::arg("histogram_detail") = 0,
         pybind11::arg("max_sigma_bin") = 200, pybind11::arg("threshold"), pybind11::arg("save_stat_cubes") = false,
         pybind11::arg("beam_size_enabled") = false, pybind11::arg("fixed_beam_kernel") = pybind11::none(),
-        pybind11::arg("fixed_beam_halfsize") = 0, pybind11::arg("num_threads") = 0);
+        pybind11::arg("fixed_beam_halfsize") = 0, pybind11::arg("num_threads") = 0,
+        pybind11::arg("use_gpu") = false);
 }
 
 PYBIND11_MODULE(breifast_helpers, m)
 {
+#ifdef BREIFAST_HAVE_GPU
+  breifast::gpu::require_cuda_device();
+#endif
+
   xt::import_numpy();
   init_plane_lot_bindings(m);
 }
