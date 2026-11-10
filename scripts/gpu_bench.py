@@ -73,12 +73,17 @@ class GpuMemorySampler:
         self.peak_mb = 0
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
+        visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+        self._device = visible.split(",")[0] if visible else None
 
     def _run(self):
+        query = ["nvidia-smi"]
+        if self._device:
+            query += ["-i", self._device]
+        query += ["--query-gpu=memory.used", "--format=csv,noheader,nounits"]
         while not self._stop.is_set():
             try:
-                output = subprocess.check_output(
-                    ["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"], text=True)
+                output = subprocess.check_output(query, text=True)
                 self.peak_mb = max(self.peak_mb, int(output.splitlines()[0]))
             except (OSError, subprocess.CalledProcessError, ValueError, IndexError):
                 return
@@ -110,6 +115,7 @@ def main():
     parser.add_argument("--repeat", type=int, default=3)
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--json")
+    parser.add_argument("--expect-detections", type=int)
     args = parser.parse_args()
 
     use_gpu = args.mode == "gpu"
@@ -153,7 +159,11 @@ def main():
             record["peak_gpu_mb"] = sampler.peak_mb
 
     record["median"] = float(np.median(record["times"])) if record["times"] else None
-    record["success"] = all(count == record["detections"][0] for count in record["detections"])
+    record["expected_detections"] = args.expect_detections
+    if args.expect_detections is None:
+        record["success"] = all(count == record["detections"][0] for count in record["detections"])
+    else:
+        record["success"] = all(count == args.expect_detections for count in record["detections"])
     print(json.dumps(record), flush=True)
     if args.json:
         with open(args.json, "w") as out:
