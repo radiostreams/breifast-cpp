@@ -8,7 +8,7 @@
 #include <limits>
 #include <vector>
 
-#include "gpu_buffers.hpp"
+#include "device_vector.hpp"
 #include "gpu_pipeline.hpp"
 #include "gpu_runtime.hpp"
 

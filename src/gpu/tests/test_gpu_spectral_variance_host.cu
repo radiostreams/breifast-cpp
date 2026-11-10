@@ -7,7 +7,7 @@
 #include <stdexcept>
 #include <vector>
 
-#include "gpu_buffers.hpp"
+#include "device_vector.hpp"
 #include "gpu_pipeline.hpp"
 
 using breifast::gpu::DeviceVector;

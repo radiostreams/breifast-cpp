@@ -7,7 +7,7 @@
 #include <cstring>
 #include <utility>
 
-#include "gpu_buffers.hpp"
+#include "device_vector.hpp"
 #include "gpu_runtime.hpp"
 
 using breifast::gpu::DeviceVector;

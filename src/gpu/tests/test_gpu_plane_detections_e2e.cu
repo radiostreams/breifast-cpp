@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "gpu_band_result.cuh"
-#include "gpu_buffers.hpp"
+#include "device_vector.hpp"
 #include "gpu_plane_detections.hpp"
 #include "gpu_process_band.cuh"
 
