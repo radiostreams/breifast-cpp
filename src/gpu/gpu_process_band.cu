@@ -219,6 +219,7 @@ GpuBandStatus gpu_process_band(const GpuBandInput &input, GpuBandWorkspace &work
     throw std::runtime_error("gpu_process_band: island count " + std::to_string(label_count) +
                              " exceeds island capacity " + std::to_string(island_capacity));
   }
+  result.label_count = label_count;
 
   gpu_label_stats(workspace.labels, workspace.snr, workspace.noise_map, input.n_pixels, input.n_x,
                   workspace.label_count, island_capacity, result.peak_value, result.peak_local_noise,

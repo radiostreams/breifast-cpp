@@ -2,6 +2,8 @@
 # nvcc takes C++20 at most, so nothing in here includes xtensor or needs C++23.
 
 gpu_include = include_directories('.', '..')
+cudart_dep = dependency('cudart', method : 'pkg-config')
+cudart_libdir = cudart_dep.get_variable(pkgconfig : 'libdir')
 
 gpu_lib = static_library('breifast_gpu',
   [
@@ -14,11 +16,24 @@ gpu_lib = static_library('breifast_gpu',
     'gpu_islands.cu',
     'gpu_band_workspace.cu',
     'gpu_process_band.cu',
+    'gpu_band_result.cu',
     'gpu_label_stats.cu',
     'gpu_island_stamps.cu',
     'gpu_scalar_reductions.cu',
+    'gpu_plane_upload.cu',
   ],
   include_directories : gpu_include,
+)
+
+gpu_host_lib = static_library('breifast_gpu_host',
+  [
+    'gpu_plane_detections.cpp',
+    'gpu_plane_integration.cpp',
+    'gpu_plane_jobs.cpp',
+    'gpu_spectral_variance.cpp',
+  ],
+  include_directories : gpu_include,
+  dependencies : [xtl_dep, xtensor_dep, xsimd_dep],
 )
 
 test_gpu = executable('test_gpu',
@@ -28,9 +43,24 @@ test_gpu = executable('test_gpu',
    'tests/test_gpu_scalar_reductions.cu', 'tests/test_gpu_compact_mask.cu', 'tests/test_gpu_islands.cu',
    'tests/test_gpu_island_boost.cu', 'tests/test_gpu_label_stats.cu',
    'tests/test_gpu_band_workspace.cu', 'tests/test_gpu_process_band.cu',
-   'tests/test_gpu_band_scheduler.cu', catch2_build],
+   'tests/test_gpu_band_scheduler.cu', 'tests/test_gpu_band_result.cu',
+   'tests/test_gpu_plane_detections.cpp', 'tests/test_gpu_plane_detections_e2e.cu',
+   'tests/test_gpu_plane_jobs.cu', 'tests/test_gpu_plane_integration.cpp',
+   'tests/test_gpu_spectral_variance_host.cu',
+   'tests/test_gpu_spectral_variance.cpp', catch2_build],
   include_directories : gpu_include,
-  dependencies : [catch2_dep],
-  link_with : [gpu_lib],
+  dependencies : [catch2_dep, xtl_dep, xtensor_dep, xsimd_dep],
+  link_with : [gpu_lib, gpu_host_lib],
 )
 test('gpu', test_gpu)
+
+test_gpu_parity = executable('test_gpu_parity',
+  ['tests/test_gpu_parity.cpp', 'gpu_lot_integration.cpp', cpu_source_files, tbb_build, catch2_build],
+  include_directories : gpu_include,
+  dependencies : [catch2_dep, xtl_dep, xtensor_dep, xsimd_dep, tbb_dep, itt_dep, tracy_headers_dep],
+  link_with : [gpu_lib, gpu_host_lib],
+  link_language : 'cpp',
+  link_args : ['-L' + cudart_libdir, '-lcudart_static', '-lrt', '-lpthread', '-ldl',
+                '-Wl,-rpath,' + tbb_install_dir / 'lib64', '-Wl,-rpath,' + tbb_install_dir / 'lib'],
+)
+test('gpu_parity', test_gpu_parity)

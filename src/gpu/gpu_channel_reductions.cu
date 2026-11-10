@@ -1,3 +1,4 @@
+#include <limits>
 #include <stdexcept>
 
 #include "gpu_pipeline.hpp"
@@ -137,5 +138,71 @@ void gpu_spectral_variance_moments(const float *cube, const bool *nonzero_channe
   spectral_variance_moments_kernel<<<grid_size, block_size, 0, stream>>>(cube, nonzero_channels, out_sum2, out_sum3,
                                                                          out_sum4, n_pixels, n_channels);
   CHECK_LAST_GPU_ERROR();
+}
+
+void gpu_spectral_variance_stats_host(const float *cube, const bool *nonzero_channels, size_t n_y, size_t n_x,
+                                      size_t n_channels, GpuSpectralVarianceHostResult &result, GpuStream stream)
+{
+  if (n_y == 0 || n_x == 0 || n_channels == 0)
+  {
+    throw std::runtime_error("gpu_spectral_variance_stats_host: zero dimension");
+  }
+  if (cube == nullptr || nonzero_channels == nullptr)
+  {
+    throw std::runtime_error("gpu_spectral_variance_stats_host: null input");
+  }
+  if (n_y > std::numeric_limits<size_t>::max() / n_x)
+  {
+    throw std::runtime_error("gpu_spectral_variance_stats_host: pixel count overflow");
+  }
+  if (n_channels > static_cast<size_t>(std::numeric_limits<int>::max()))
+  {
+    throw std::runtime_error("gpu_spectral_variance_stats_host: channel count exceeds int");
+  }
+
+  const size_t n_pixels = n_y * n_x;
+  float *sum_pow2 = nullptr;
+  float *sum_pow3 = nullptr;
+  float *sum_pow4 = nullptr;
+
+  try
+  {
+    gpuMallocAsync(&sum_pow2, n_pixels * sizeof(float), stream);
+    gpuMallocAsync(&sum_pow3, n_pixels * sizeof(float), stream);
+    gpuMallocAsync(&sum_pow4, n_pixels * sizeof(float), stream);
+    gpu_spectral_variance_moments(cube, nonzero_channels, sum_pow2, sum_pow3, sum_pow4, n_pixels,
+                                  static_cast<int>(n_channels), stream);
+
+    result.sum_pow2.resize(n_pixels);
+    result.sum_pow3.resize(n_pixels);
+    result.sum_pow4.resize(n_pixels);
+    result.nonzero_channels_mask.resize(n_channels);
+
+    gpuMemcpyDeviceToHostAsync(result.sum_pow2.data(), sum_pow2, n_pixels * sizeof(float), stream);
+    gpuMemcpyDeviceToHostAsync(result.sum_pow3.data(), sum_pow3, n_pixels * sizeof(float), stream);
+    gpuMemcpyDeviceToHostAsync(result.sum_pow4.data(), sum_pow4, n_pixels * sizeof(float), stream);
+    gpuMemcpyDeviceToHostAsync(result.nonzero_channels_mask.data(), nonzero_channels, n_channels * sizeof(bool), stream);
+    gpuStreamSynchronize(stream);
+  }
+  catch (...)
+  {
+    if (sum_pow2 != nullptr)
+    {
+      gpuFreeAsync(sum_pow2, stream);
+    }
+    if (sum_pow3 != nullptr)
+    {
+      gpuFreeAsync(sum_pow3, stream);
+    }
+    if (sum_pow4 != nullptr)
+    {
+      gpuFreeAsync(sum_pow4, stream);
+    }
+    throw;
+  }
+
+  gpuFreeAsync(sum_pow2, stream);
+  gpuFreeAsync(sum_pow3, stream);
+  gpuFreeAsync(sum_pow4, stream);
 }
 } // namespace breifast::gpu

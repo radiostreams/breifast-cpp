@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <sstream>
 #include <string>
+#include <vector>
 
 #include "common/snr_filter_params.hpp"
 
@@ -93,6 +94,18 @@ void gpu_weighted_band_image(const float *cube, const float *weights, const floa
  */
 void gpu_spectral_variance_moments(const float *cube, const bool *nonzero_channels, float *out_sum2, float *out_sum3,
                                    float *out_sum4, size_t n_pixels, int n_channels, GpuStream stream = nullptr);
+
+struct GpuSpectralVarianceHostResult
+{
+  std::vector<float> sum_pow2;
+  std::vector<float> sum_pow3;
+  std::vector<float> sum_pow4;
+  std::vector<unsigned char> nonzero_channels_mask;
+};
+
+void gpu_spectral_variance_stats_host(const float *cube, const bool *nonzero_channels, size_t n_y, size_t n_x,
+                                      size_t n_channels, GpuSpectralVarianceHostResult &result,
+                                      GpuStream stream = nullptr);
 
 void gpu_combine_noise_map_rms(const float *rms, const float *rms_floor, const float *selfnoise_offset,
                                const float *dde_noise, float selfnoise_scale, float dde_scale, float *out_noise_map,

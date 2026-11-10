@@ -2,6 +2,13 @@
 #include <span>
 #include <type_traits>
 
+#include <oneapi/tbb/concurrent_unordered_map.h>
+#include <oneapi/tbb/enumerable_thread_specific.h>
+#include <oneapi/tbb/mutex.h>
+#include <oneapi/tbb/parallel_for.h>
+#include <oneapi/tbb/task_arena.h>
+#include <oneapi/tbb/task_group.h>
+
 #include <ittnotify.h>
 
 #include <tracy/Tracy.hpp>
@@ -24,59 +31,6 @@
 
 namespace breifast
 {
-float PlaneConfig::max_to_std_ratio(const size_t n)
-{
-  const auto compute = [](const size_t n)
-  {
-    constexpr size_t n_samples = 1'000;
-    constexpr float x_ampl = 10.F;
-    float x_prev = -10.F;
-    float f_prev = 0.5F * (1.F + std::erf(x_prev / std::sqrt(2.F)));
-    float F_prev = 1.F - std::pow(1.f - f_prev, n);
-    for (size_t i = 1; i < n_samples; ++i)
-    {
-      const auto x_val = -x_ampl + static_cast<float>(i) * 2.F * x_ampl / static_cast<float>(n_samples - 1);
-      const auto f_val = 0.5F * (1.F + std::erf(x_val / std::sqrt(2.F)));
-      const auto F_val = 1.F - std::pow(1.f - f_val, static_cast<float>(n));
-      if (F_val >= 0.5F)
-      {
-        return std::abs(x_prev + (x_val - x_prev) * (0.5f - F_prev) / (F_val - F_prev));
-      }
-      x_prev = x_val;
-      f_prev = f_val;
-      F_prev = F_val;
-    }
-    return std::abs(x_prev);
-  };
-
-  static tbb::concurrent_unordered_map<size_t, float> cache;
-  static tbb::mutex compute_mutex;
-  const auto it = cache.find(n);
-  if (it != cache.cend())
-  {
-    return it->second;
-  }
-  else
-  {
-    tbb::mutex::scoped_lock lock{compute_mutex};
-    const auto value = compute(n);
-    cache.emplace(n, value);
-    return value;
-  }
-}
-
-float PlaneConfig::max_to_std_ratio_value() const
-{
-  if (max_to_std_ratio_value_.has_value())
-  {
-    return *max_to_std_ratio_value_;
-  }
-  const auto radius = boxsize / 2;
-  const auto n = (2 * radius + 1) * (2 * radius + 1);
-  max_to_std_ratio_value_ = max_to_std_ratio(n);
-  return *max_to_std_ratio_value_;
-}
-
 const xt::xtensor<float, 2> &compute_rms_noise_map(ProcessBandScratch &scratch, const xt::xtensor<float, 2> &plane,
                                                    long boxsize)
 {
@@ -126,33 +80,6 @@ void compute_snr_and_apply_filters(ProcessBandScratch &scratch, const xt::xtenso
     result.min_sigma = result.min_sigma ? std::min(*result.min_sigma, summary.min_sigma) : summary.min_sigma;
     result.max_sigma = result.max_sigma ? std::max(*result.max_sigma, summary.max_sigma) : summary.max_sigma;
   }
-}
-
-xt::xtensor<float, 2> build_gaussian_beam_kernel(long halfsize, float sigma_major, float sigma_minor, float rotate)
-{
-  const auto size = 2 * halfsize + 1;
-  xt::xtensor<float, 2> kernel;
-  kernel.resize({static_cast<size_t>(size), static_cast<size_t>(size)});
-
-  const float cos_r = std::cos(rotate);
-  const float sin_r = std::sin(rotate);
-  float sum = 0.F;
-  for (long i = 0; i < size; ++i)
-  {
-    const float dy = static_cast<float>(i - halfsize);
-    for (long j = 0; j < size; ++j)
-    {
-      const float dx = static_cast<float>(j - halfsize);
-      const float rot_dy = cos_r * dy - sin_r * dx;
-      const float rot_dx = sin_r * dy + cos_r * dx;
-      const float value = std::exp(
-          -(rot_dy * rot_dy / (2.F * sigma_major * sigma_major) + rot_dx * rot_dx / (2.F * sigma_minor * sigma_minor)));
-      kernel(i, j) = value;
-      sum += value;
-    }
-  }
-  kernel /= sum;
-  return kernel;
 }
 
 namespace

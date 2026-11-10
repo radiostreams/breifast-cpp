@@ -106,7 +106,7 @@ TEST_CASE("gpu_mask_or ignores channels outside the band and zeroes a stale out_
 
   const Result result = run_gpu_mask_or(channels, 1, 3);
 
-  CHECK_FALSE(result.any);
+  CHECK(result.any == false);
   CHECK_THAT(result.mask, Equals("0000000000000000000"));
 }
 

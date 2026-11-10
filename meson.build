@@ -148,6 +148,7 @@ cpu_sources = [
   'src/cpu/snr_filters.cpp',
   'src/cpu/windows.cpp',
 ]
+cpu_source_files = files(cpu_sources)
 
 ext_module = py.extension_module(
   'breifast_helpers',

@@ -124,6 +124,7 @@ struct GpuBandResult
 {
   std::size_t n_pixels = 0;
   std::size_t histogram_bins = 0;
+  unsigned int label_count = 0;
 
   float *peak_value = nullptr;
   float *peak_local_noise = nullptr;

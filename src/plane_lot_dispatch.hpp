@@ -14,17 +14,12 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <mutex>
 #include <optional>
 #include <ranges>
 #include <string>
+#include <unordered_map>
 #include <vector>
-
-#include <oneapi/tbb/concurrent_unordered_map.h>
-#include <oneapi/tbb/enumerable_thread_specific.h>
-#include <oneapi/tbb/mutex.h>
-#include <oneapi/tbb/parallel_for.h>
-#include <oneapi/tbb/task_arena.h>
-#include <oneapi/tbb/task_group.h>
 
 #include <xtensor/containers/xarray.hpp>
 #include <xtensor/core/xmath.hpp>
@@ -35,7 +30,10 @@
 #include <xtensor/views/xslice.hpp>
 #include <xtensor/views/xview.hpp>
 
+#include "cpu/beam_kernel.hpp"
 #include "cpu/islands.hpp"
+#include "detection_arrays.hpp"
+#include "process_plane_result.hpp"
 
 namespace breifast
 {
@@ -102,7 +100,43 @@ private:
    * @param n Sample count (typically a postage-stamp box's pixel count).
    * @return The ratio, always non-negative.
    */
-  static float max_to_std_ratio(const size_t n);
+  static float max_to_std_ratio(const size_t n)
+  {
+    const auto compute = [](const size_t n)
+    {
+      constexpr size_t n_samples = 1'000;
+      constexpr float x_ampl = 10.F;
+      float x_prev = -10.F;
+      float f_prev = 0.5F * (1.F + std::erf(x_prev / std::sqrt(2.F)));
+      float F_prev = 1.F - std::pow(1.f - f_prev, n);
+      for (size_t i = 1; i < n_samples; ++i)
+      {
+        const auto x_val = -x_ampl + static_cast<float>(i) * 2.F * x_ampl / static_cast<float>(n_samples - 1);
+        const auto f_val = 0.5F * (1.F + std::erf(x_val / std::sqrt(2.F)));
+        const auto F_val = 1.F - std::pow(1.f - f_val, static_cast<float>(n));
+        if (F_val >= 0.5F)
+        {
+          return std::abs(x_prev + (x_val - x_prev) * (0.5f - F_prev) / (F_val - F_prev));
+        }
+        x_prev = x_val;
+        f_prev = f_val;
+        F_prev = F_val;
+      }
+      return std::abs(x_prev);
+    };
+
+    static std::unordered_map<size_t, float> cache;
+    static std::mutex cache_mutex;
+    std::lock_guard<std::mutex> lock{cache_mutex};
+    const auto it = cache.find(n);
+    if (it != cache.cend())
+    {
+      return it->second;
+    }
+    const auto value = compute(n);
+    cache.emplace(n, value);
+    return value;
+  }
 
   mutable std::optional<float> max_to_std_ratio_value_;
 
@@ -129,7 +163,17 @@ public:
    *        after the first call.
    * @return The cached ratio.
    */
-  float max_to_std_ratio_value() const;
+  float max_to_std_ratio_value() const
+  {
+    if (max_to_std_ratio_value_.has_value())
+    {
+      return *max_to_std_ratio_value_;
+    }
+    const auto radius = boxsize / 2;
+    const auto n = (2 * radius + 1) * (2 * radius + 1);
+    max_to_std_ratio_value_ = max_to_std_ratio(n);
+    return *max_to_std_ratio_value_;
+  }
 };
 
 /**
@@ -171,187 +215,6 @@ struct LotBatch
 {
   std::vector<PlaneBatchItem> planes;
   std::vector<PlaneBatchGroup> groups; // indexed by PlaneBatchItem::group_index
-};
-
-/**
- * @brief Detection table columns, one entry per island found across every band of a plane — the C++ analog of
- *        breifast.py's `DetectionTable`.
- */
-struct DetectionArrays
-{
-private:
-  std::vector<long> peak_y_;
-  std::vector<long> peak_x_;
-  std::vector<long> island_size_;
-
-  std::vector<std::string> stokes_label_;
-  std::vector<std::string> band_label_;
-
-  std::vector<float> flux_;
-
-  std::vector<float> local_noise_;
-  std::vector<float> local_noise_median_ratio_;
-
-  std::vector<float> signal_to_noise_;
-  std::vector<float> signal_to_noise_rms_;
-  std::vector<float> signal_to_noise_extended_box_;
-  std::vector<float> signal_to_noise_local_mad_;
-  std::vector<float> signal_to_noise_global_mad_;
-
-  std::vector<float> self_noise_;
-  std::vector<float> excess_noise_factor_;
-  std::vector<float> beam_chi2_;
-  std::vector<float> boost_;
-
-public:
-  const std::vector<long> &peak_y() const
-  {
-    return peak_y_;
-  }
-  const std::vector<long> &peak_x() const
-  {
-    return peak_x_;
-  }
-  const std::vector<long> &island_size() const
-  {
-    return island_size_;
-  }
-  const std::vector<std::string> &stokes_label() const
-  {
-    return stokes_label_;
-  }
-  const std::vector<std::string> &band_label() const
-  {
-    return band_label_;
-  }
-  const std::vector<float> &flux() const
-  {
-    return flux_;
-  }
-  const std::vector<float> &local_noise() const
-  {
-    return local_noise_;
-  }
-  const std::vector<float> &local_noise_median_ratio() const
-  {
-    return local_noise_median_ratio_;
-  }
-  const std::vector<float> &signal_to_noise() const
-  {
-    return signal_to_noise_;
-  }
-  const std::vector<float> &signal_to_noise_rms() const
-  {
-    return signal_to_noise_rms_;
-  }
-  const std::vector<float> &signal_to_noise_extended_box() const
-  {
-    return signal_to_noise_extended_box_;
-  }
-  const std::vector<float> &signal_to_noise_local_mad() const
-  {
-    return signal_to_noise_local_mad_;
-  }
-  const std::vector<float> &signal_to_noise_global_mad() const
-  {
-    return signal_to_noise_global_mad_;
-  }
-  const std::vector<float> &self_noise() const
-  {
-    return self_noise_;
-  }
-  const std::vector<float> &excess_noise_factor() const
-  {
-    return excess_noise_factor_;
-  }
-  const std::vector<float> &beam_chi2() const
-  {
-    return beam_chi2_;
-  }
-  const std::vector<float> &boost() const
-  {
-    return boost_;
-  }
-
-  void reserve(const size_t size)
-  {
-    peak_y_.reserve(size);
-    peak_x_.reserve(size);
-    island_size_.reserve(size);
-    stokes_label_.reserve(size);
-    band_label_.reserve(size);
-    flux_.reserve(size);
-    local_noise_.reserve(size);
-    local_noise_median_ratio_.reserve(size);
-    signal_to_noise_.reserve(size);
-    signal_to_noise_rms_.reserve(size);
-    signal_to_noise_extended_box_.reserve(size);
-    signal_to_noise_local_mad_.reserve(size);
-    signal_to_noise_global_mad_.reserve(size);
-    self_noise_.reserve(size);
-    excess_noise_factor_.reserve(size);
-    beam_chi2_.reserve(size);
-    boost_.reserve(size);
-  }
-
-  size_t size() const
-  {
-    return peak_x_.size();
-  }
-
-  void add(const long peak_y, const long peak_x, const long island_size, const std::string &stokes_label,
-           const std::string &band_label, const float flux, const float local_noise,
-           const float local_noise_median_ratio, const float signal_to_noise, const float signal_to_noise_rms,
-           const float signal_to_noise_extended_box, const float signal_to_noise_local_mad,
-           const float signal_to_noise_global_mad, const float self_noise, const float excess_noise_factor,
-           const float beam_chi2, const float boost)
-  {
-    peak_x_.push_back(peak_x);
-    peak_y_.push_back(peak_y);
-    island_size_.push_back(island_size);
-    stokes_label_.push_back(stokes_label);
-    band_label_.push_back(band_label);
-    flux_.push_back(flux);
-    local_noise_.push_back(local_noise);
-    local_noise_median_ratio_.push_back(local_noise_median_ratio);
-    signal_to_noise_.push_back(signal_to_noise);
-    signal_to_noise_rms_.push_back(signal_to_noise_rms);
-    signal_to_noise_extended_box_.push_back(signal_to_noise_extended_box);
-    signal_to_noise_local_mad_.push_back(signal_to_noise_local_mad);
-    signal_to_noise_global_mad_.push_back(signal_to_noise_global_mad);
-    self_noise_.push_back(self_noise);
-    excess_noise_factor_.push_back(excess_noise_factor);
-    beam_chi2_.push_back(beam_chi2);
-    boost_.push_back(boost);
-  }
-};
-
-/**
- * @brief Per-pixel spectral-variance QA diagnostics accumulated across a plane's frequency channels (not used for
- *        detection, only diagnostic aggregation further downstream in breifast.py).
- */
-struct SpectralVarianceStats
-{
-  xt::xtensor<float, 2> sum_pow2;
-  xt::xtensor<float, 2> sum_pow3;
-  xt::xtensor<float, 2> sum_pow4;
-  xt::xtensor<bool, 1> nonzero_channels_mask;
-  std::optional<xt::xtensor<float, 2>> per_channels_squared;
-};
-
-/**
- * @brief Everything process_plane() produces for one plane: detections, sigma range, per-band histograms, and (if
- *        multi-channel) variance QA stats.
- */
-struct ProcessPlaneResult
-{
-  bool any_data = false;
-  DetectionArrays detections;
-  std::optional<float> min_sigma;
-  std::optional<float> max_sigma;
-  std::array<std::vector<long>, 3> histograms;
-  std::vector<double> median_noises;
-  std::optional<SpectralVarianceStats> variance_stats;
 };
 
 struct ProcessBandScratch
@@ -410,20 +273,6 @@ void compute_snr_and_apply_filters(ProcessBandScratch &scratch, const xt::xtenso
                                    const xt::xtensor<float, 2> &noise_map, float median_noise, float inv_band_size,
                                    xt::xtensor<bool, 2> &image_mask, const PlaneBatchGroup &group,
                                    const BandSlice &band, const PlaneConfig &config, ProcessPlaneResult &result);
-
-/**
- * @brief Build a centred, rotated, unit-sum-normalized 2D anisotropic Gaussian kernel.
- *
- * Specializes `cubes.py`'s `create_multidimensional_gaussian_kernel` for the `centred=True`, odd-square-size case
- * used for beam fitting: axis offsets run `-halfsize..halfsize`, are rotated CCW by `rotate` before evaluating the
- * Gaussian, and the result is normalized to sum to 1.
- * @param halfsize Kernel half-width; full size is `2*halfsize+1` on each axis.
- * @param sigma_major Gaussian sigma along the pre-rotation first axis.
- * @param sigma_minor Gaussian sigma along the pre-rotation second axis.
- * @param rotate Counter-clockwise rotation, in radians.
- * @return `(2*halfsize+1) x (2*halfsize+1)` kernel, normalized so its elements sum to 1.
- */
-xt::xtensor<float, 2> build_gaussian_beam_kernel(long halfsize, float sigma_major, float sigma_minor, float rotate);
 
 /**
  * @brief Process one band slice of one plane: mask, weight, denoise, convert to SNR, label islands, and compute

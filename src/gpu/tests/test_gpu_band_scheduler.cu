@@ -1,10 +1,14 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <cuda_runtime.h>
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
+#include <stdexcept>
 #include <vector>
 
+#include "gpu_band_result.cuh"
 #include "gpu_buffers.hpp"
 #include "gpu_process_band.cuh"
 #include "gpu_runtime.hpp"
@@ -12,10 +16,15 @@
 using breifast::gpu::create_band_result;
 using breifast::gpu::create_band_workspace;
 using breifast::gpu::destroy_band_job;
+using breifast::gpu::copy_band_jobs;
 using breifast::gpu::DeviceVector;
 using breifast::gpu::GpuBandJob;
+using breifast::gpu::GpuBandHostResult;
 using breifast::gpu::GpuBandStatus;
 using breifast::gpu::gpu_process_bands;
+using breifast::gpu::gpu_process_plane;
+using breifast::gpu::GpuPlaneHostResult;
+using Catch::Matchers::WithinRel;
 
 namespace
 {
@@ -135,6 +144,92 @@ TEST_CASE("gpu_process_bands records per-job failures", "[gpu][band_scheduler]")
   CHECK(jobs[0].error == nullptr);
   CHECK(jobs[0].status == GpuBandStatus::no_detections);
   CHECK(jobs[1].error != nullptr);
+
+  for (auto &job : jobs)
+  {
+    destroy_band_job(job);
+  }
+}
+
+TEST_CASE("copy_band_jobs copies completed band results", "[gpu][band_scheduler]")
+{
+  JobFixture first;
+  JobFixture second;
+
+  std::vector<GpuBandJob> jobs;
+  jobs.push_back(first.job);
+  jobs.push_back(second.job);
+
+  gpu_process_bands(jobs);
+
+  std::vector<GpuBandHostResult> results;
+  copy_band_jobs(jobs, results);
+
+  REQUIRE(results.size() == jobs.size());
+  for (const auto &result : results)
+  {
+    CHECK(result.label_count == 0U);
+    CHECK_THAT(result.median_noise, WithinRel(1.F, 1e-6));
+    CHECK_THAT(result.global_mad, WithinRel(1.4826F, 1e-6));
+    CHECK(result.histogram0.size() == JobFixture::histogram_bins);
+    CHECK(result.histogram1.size() == JobFixture::histogram_bins);
+    CHECK(result.histogram2.size() == JobFixture::histogram_bins);
+  }
+
+  for (auto &job : jobs)
+  {
+    destroy_band_job(job);
+  }
+}
+
+TEST_CASE("gpu_process_plane assembles completed band jobs", "[gpu][plane]")
+{
+  JobFixture first;
+  JobFixture second;
+
+  std::vector<GpuBandJob> jobs;
+  jobs.push_back(first.job);
+  jobs.push_back(second.job);
+
+  GpuPlaneHostResult result;
+  gpu_process_plane(jobs, result);
+
+  REQUIRE(result.statuses.size() == jobs.size());
+  CHECK(result.statuses[0] == GpuBandStatus::no_detections);
+  CHECK(result.statuses[1] == GpuBandStatus::no_detections);
+  REQUIRE(result.bands.size() == jobs.size());
+  CHECK(result.bands[0].label_count == 0U);
+  CHECK(result.histograms[0].size() == JobFixture::histogram_bins);
+  CHECK(result.histograms[1].size() == JobFixture::histogram_bins);
+  CHECK(result.histograms[2].size() == JobFixture::histogram_bins);
+  CHECK(result.median_noises.size() == jobs.size());
+  for (const double median_noise : result.median_noises)
+  {
+    CHECK_THAT(median_noise, WithinRel(1.0, 1e-6));
+  }
+  REQUIRE(result.min_sigma.has_value() == true);
+  REQUIRE(result.max_sigma.has_value() == true);
+  CHECK_THAT(*result.min_sigma, WithinRel(1.F, 1e-6));
+  CHECK_THAT(*result.max_sigma, WithinRel(1.F, 1e-6));
+
+  for (auto &job : jobs)
+  {
+    destroy_band_job(job);
+  }
+}
+
+TEST_CASE("gpu_process_plane rethrows band failures", "[gpu][plane]")
+{
+  JobFixture good;
+  JobFixture bad;
+  bad.job.input.sizes.cube = 0;
+
+  std::vector<GpuBandJob> jobs;
+  jobs.push_back(good.job);
+  jobs.push_back(bad.job);
+
+  GpuPlaneHostResult result;
+  CHECK_THROWS_AS(gpu_process_plane(jobs, result), std::runtime_error);
 
   for (auto &job : jobs)
   {
