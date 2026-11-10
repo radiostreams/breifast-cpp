@@ -75,7 +75,12 @@ __global__ void converge_labels_kernel(const bool *const mask, const size_t n_y,
     }
     grid.sync();
 
-    if (*changed == 0U)
+    // Every block must read `changed` before the next iteration resets it: a block that
+    // read the reset value would leave the loop while the others call grid.sync() again.
+    const unsigned int changed_now = *changed;
+    grid.sync();
+
+    if (changed_now == 0U)
     {
       break;
     }

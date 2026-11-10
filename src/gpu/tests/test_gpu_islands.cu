@@ -147,6 +147,28 @@ TEST_CASE("gpu_label_islands propagates along a long thin island", "[gpu][island
   CHECK(count == 1U);
 }
 
+TEST_CASE("gpu_label_islands converges on a large multi-block mask", "[gpu][islands]")
+{
+  const size_t n_y = 256;
+  const size_t n_x = 256;
+  std::vector<unsigned char> mask(n_y * n_x, 0);
+  for (size_t x = 0; x < n_x; ++x)
+  {
+    mask[x] = 1;
+  }
+  for (size_t y = 1; y < n_y; ++y)
+  {
+    for (size_t x = 0; x < n_x; x += 16)
+    {
+      mask[y * n_x + x] = 1;
+    }
+  }
+
+  unsigned int count = 0;
+  CHECK_THAT(run_label(mask, n_y, n_x, &count), Equals(host_reference(mask, n_y, n_x)));
+  CHECK(count == 1U);
+}
+
 TEST_CASE("gpu_label_islands handles all-false and all-true masks", "[gpu][islands]")
 {
   unsigned int count = 0;
