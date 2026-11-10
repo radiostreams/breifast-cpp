@@ -5,6 +5,7 @@
 
 #include "gpu_pipeline.hpp"
 
+#include "gpu_block_reduce.cuh"
 #include "gpu_runtime.hpp"
 #include "radix_keys.cuh"
 
@@ -166,31 +167,20 @@ __global__ void stamp_abs_extreme_kernel(const unsigned int *active_count, const
     max_value = fmaxf(max_value, value);
   }
 
-  __shared__ float shared_min[stamp_block_threads];
-  __shared__ float shared_max[stamp_block_threads];
-  shared_min[threadIdx.x] = min_value;
-  shared_max[threadIdx.x] = max_value;
-  __syncthreads();
-
-  for (size_t stride = blockDim.x / 2; stride > 0; stride >>= 1)
-  {
-    if (threadIdx.x < stride)
-    {
-      shared_min[threadIdx.x] = fminf(shared_min[threadIdx.x], shared_min[threadIdx.x + stride]);
-      shared_max[threadIdx.x] = fmaxf(shared_max[threadIdx.x], shared_max[threadIdx.x + stride]);
-    }
-    __syncthreads();
-  }
+  __shared__ float shared[stamp_block_threads];
+  min_value = block_min(min_value, shared);
+  max_value = block_max(max_value, shared);
 
   if (threadIdx.x == 0)
   {
-    out_extreme[i_stamp] = fmaxf(fabsf(shared_min[0]), fabsf(shared_max[0]));
+    out_extreme[i_stamp] = fmaxf(fabsf(min_value), fabsf(max_value));
   }
 }
 
-__global__ void stamp_extract_kernel(const unsigned int *active_count, const float *plane, size_t n_y, size_t n_x,
-                                     const long *centre_y, const long *centre_x, long radius, long inner_boxsize,
-                                     size_t stamp_pixels, float *stamps)
+template <bool skip_inner> __global__ void stamp_extract_kernel(const unsigned int *active_count, const float *plane,
+                                                                   size_t n_y, size_t n_x, const long *centre_y,
+                                                                   const long *centre_x, long radius, long inner_boxsize,
+                                                                   size_t stamp_pixels, float *stamps)
 {
   if (blockIdx.x >= *active_count)
   {
@@ -198,7 +188,7 @@ __global__ void stamp_extract_kernel(const unsigned int *active_count, const flo
   }
   const size_t stamp_id = blockIdx.x;
   const long side = 2 * radius + 1;
-  const long half = inner_boxsize < radius ? inner_boxsize : radius;
+  const long half = skip_inner ? (inner_boxsize < radius ? inner_boxsize : radius) : -1;
   const long first_y = centre_y[stamp_id] - radius;
   const long first_x = centre_x[stamp_id] - radius;
   float *const out = stamps + stamp_id * stamp_pixels;
@@ -213,34 +203,8 @@ __global__ void stamp_extract_kernel(const unsigned int *active_count, const flo
         plane_y >= 0 && plane_y < static_cast<long>(n_y) && plane_x >= 0 && plane_x < static_cast<long>(n_x);
     const long dr = row - radius;
     const long dc = col - radius;
-    const bool inner = dr >= -half && dr <= half && dc >= -half && dc <= half;
+    const bool inner = skip_inner && dr >= -half && dr <= half && dc >= -half && dc <= half;
     out[i] = inside && !inner ? plane[static_cast<size_t>(plane_y) * n_x + static_cast<size_t>(plane_x)] : 0.F;
-  }
-}
-
-__global__ void stamp_extract_no_zero_kernel(const unsigned int *active_count, const float *plane, size_t n_y,
-                                             size_t n_x, const long *centre_y, const long *centre_x, long radius,
-                                             size_t stamp_pixels, float *stamps)
-{
-  if (blockIdx.x >= *active_count)
-  {
-    return;
-  }
-  const size_t stamp_id = blockIdx.x;
-  const long side = 2 * radius + 1;
-  const long first_y = centre_y[stamp_id] - radius;
-  const long first_x = centre_x[stamp_id] - radius;
-  float *const out = stamps + stamp_id * stamp_pixels;
-
-  for (size_t i = threadIdx.x; i < stamp_pixels; i += blockDim.x)
-  {
-    const long row = static_cast<long>(i / static_cast<size_t>(side));
-    const long col = static_cast<long>(i % static_cast<size_t>(side));
-    const long plane_y = first_y + row;
-    const long plane_x = first_x + col;
-    const bool inside =
-        plane_y >= 0 && plane_y < static_cast<long>(n_y) && plane_x >= 0 && plane_x < static_cast<long>(n_x);
-    out[i] = inside ? plane[static_cast<size_t>(plane_y) * n_x + static_cast<size_t>(plane_x)] : 0.F;
   }
 }
 
@@ -253,47 +217,38 @@ __global__ void donut_std_kernel(const unsigned int *active_count, const float *
   {
     return;
   }
-  __shared__ double sum[BlockDim];
-  __shared__ double sumsq[BlockDim];
-  __shared__ uint32_t counts[BlockDim];
-  sum[threadIdx.x] = 0.F;
-  sumsq[threadIdx.x] = 0.F;
-  counts[threadIdx.x] = 0;
+  __shared__ double sum_shared[BlockDim];
+  __shared__ double sumsq_shared[BlockDim];
+  __shared__ uint32_t count_shared[BlockDim];
   const float *stamp = stamps + blockIdx.x * stamps_pixels;
 
-  __syncthreads();
+  double sum = 0.0;
+  double sumsq = 0.0;
+  uint32_t count = 0;
   for (size_t i_pixel = threadIdx.x; i_pixel < stamps_pixels; i_pixel += blockDim.x)
   {
     const auto value = stamp[i_pixel];
     if (value != 0.F)
     {
-      sum[threadIdx.x] += value;
-      sumsq[threadIdx.x] += value * value;
-      ++counts[threadIdx.x];
+      sum += value;
+      sumsq += value * value;
+      ++count;
     }
   }
-  __syncthreads();
 
-  for (size_t factor = 1; factor < blockDim.x; factor *= 2)
-  {
-    if (threadIdx.x % (2 * factor) == 0)
-    {
-      sum[threadIdx.x] += sum[threadIdx.x + factor];
-      sumsq[threadIdx.x] += sumsq[threadIdx.x + factor];
-      counts[threadIdx.x] += counts[threadIdx.x + factor];
-    }
-    __syncthreads();
-  }
+  sum = block_sum(sum, sum_shared);
+  sumsq = block_sum(sumsq, sumsq_shared);
+  count = block_sum(count, count_shared);
 
   if (threadIdx.x == 0)
   {
-    if (counts[0] == 0)
+    if (count == 0)
     {
       out_std[blockIdx.x] = 0.F;
       return;
     }
-    const auto mean = sum[0] / static_cast<float>(counts[0]);
-    const auto meansq = sumsq[0] / static_cast<float>(counts[0]);
+    const auto mean = sum / static_cast<float>(count);
+    const auto meansq = sumsq / static_cast<float>(count);
     const auto var = meansq - mean * mean;
     out_std[blockIdx.x] = sqrtf(static_cast<float>(var));
   }
@@ -301,26 +256,16 @@ __global__ void donut_std_kernel(const unsigned int *active_count, const float *
 
 __global__ void kernel_sum_kernel(const float *kernel, size_t n, float *out_sum)
 {
-  __shared__ float tmp[BlockDim];
-  tmp[threadIdx.x] = 0.F;
-  __syncthreads();
-
+  __shared__ float shared[BlockDim];
+  float sum = 0.F;
   for (size_t i = threadIdx.x; i < n; i += blockDim.x)
   {
-    tmp[threadIdx.x] += kernel[i];
+    sum += kernel[i];
   }
-  __syncthreads();
-  for (size_t factor = 1; factor < blockDim.x; factor *= 2)
-  {
-    if (threadIdx.x % (2 * factor) == 0)
-    {
-      tmp[threadIdx.x] += tmp[threadIdx.x + factor];
-    }
-    __syncthreads();
-  }
+  sum = block_sum(sum, shared);
   if (threadIdx.x == 0)
   {
-    *out_sum = tmp[0];
+    *out_sum = sum;
   }
 }
 
@@ -337,55 +282,32 @@ __global__ void stamp_beam_chi2_kernel(const unsigned int *active_count, const f
 
   const float *stamp = stamps + i_stamp * stamp_pixels;
 
-  __shared__ float tmp[BlockDim];
-  tmp[threadIdx.x] = 0.F;
-  __syncthreads();
-
+  __shared__ float shared[BlockDim];
+  __shared__ uint32_t shared_counts[BlockDim];
+  float stamp_sum = 0.F;
   for (size_t i = threadIdx.x; i < stamp_pixels; i += blockDim.x)
   {
-    tmp[threadIdx.x] += stamp[i];
+    stamp_sum += stamp[i];
   }
-  __syncthreads();
-  for (size_t factor = 1; factor < blockDim.x; factor *= 2)
-  {
-    if (threadIdx.x % (2 * factor) == 0)
-    {
-      tmp[threadIdx.x] += tmp[threadIdx.x + factor];
-    }
-    __syncthreads();
-  }
-  const auto scale = tmp[0] / *kernel_sum;
+  stamp_sum = block_sum(stamp_sum, shared);
+  const auto scale = stamp_sum / *kernel_sum;
 
-  __shared__ uint32_t counts[BlockDim];
-  counts[threadIdx.x] = 0U;
-  tmp[threadIdx.x] = 0.F;
-  __syncthreads();
-
+  float resid2 = 0.F;
+  uint32_t count = 0U;
   for (size_t i = threadIdx.x; i < stamp_pixels; i += blockDim.x)
   {
     const auto value = stamp[i];
     if (value != 0.F)
     {
       const auto delta = value - scale * kernel[i];
-      tmp[threadIdx.x] += delta * delta;
-      ++counts[threadIdx.x];
+      resid2 += delta * delta;
+      ++count;
     }
   }
-  __syncthreads();
-
-  for (size_t factor = 1; factor < blockDim.x; factor *= 2)
-  {
-    if (threadIdx.x % (2 * factor) == 0)
-    {
-      tmp[threadIdx.x] += tmp[threadIdx.x + factor];
-      counts[threadIdx.x] += counts[threadIdx.x + factor];
-    }
-    __syncthreads();
-  }
+  resid2 = block_sum(resid2, shared);
+  count = block_sum(count, shared_counts);
   if (threadIdx.x == 0)
   {
-    const auto count = counts[0];
-    const auto resid2 = tmp[0];
     out_chi2[i_stamp] = (count > 0 && adjacent_noise != 0)
                             ? resid2 / (adjacent_noise * adjacent_noise * count)
                             : 0.F;
@@ -501,8 +423,8 @@ void gpu_stamp_extract(const float *plane, size_t n_y, size_t n_x, const long *c
   const size_t stamp_pixels = side * side;
   const dim3 block_size = {stamp_block_threads};
   const dim3 grid_size = {capacity};
-  stamp_extract_kernel<<<grid_size, block_size, 0, stream>>>(active_count, plane, n_y, n_x, centre_y, centre_x, radius,
-                                                             inner_boxsize, stamp_pixels, stamps);
+  stamp_extract_kernel<true><<<grid_size, block_size, 0, stream>>>(active_count, plane, n_y, n_x, centre_y, centre_x,
+                                                                  radius, inner_boxsize, stamp_pixels, stamps);
   CHECK_LAST_GPU_ERROR();
 }
 
@@ -531,8 +453,8 @@ void gpu_stamp_extract_no_zero(const float *plane, size_t n_y, size_t n_x, const
   const size_t stamp_pixels = side * side;
   const dim3 block_size = {stamp_block_threads};
   const dim3 grid_size = {capacity};
-  stamp_extract_no_zero_kernel<<<grid_size, block_size, 0, stream>>>(active_count, plane, n_y, n_x, centre_y, centre_x,
-                                                                    radius, stamp_pixels, stamps);
+  stamp_extract_kernel<false><<<grid_size, block_size, 0, stream>>>(active_count, plane, n_y, n_x, centre_y,
+                                                                   centre_x, radius, 0, stamp_pixels, stamps);
   CHECK_LAST_GPU_ERROR();
 }
 
