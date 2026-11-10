@@ -1,5 +1,8 @@
 #include <cfloat>
 
+#include <thrust/device_vector.h>
+#include <thrust/raw_pointer_cast.h>
+
 #include "gpu_pipeline.hpp"
 
 #include "gpu_runtime.hpp"
@@ -550,17 +553,15 @@ void gpu_stamp_beam_chi2(const float *stamps, const float *kernel, const unsigne
     throw std::runtime_error{"gpu_stamp_beam_chi2: empty stamps"};
   }
 
-  float *kernel_sum = nullptr;
-  gpuMallocAsync(&kernel_sum, sizeof(float), stream);
-  kernel_sum_kernel<<<1, BlockDim, 0, stream>>>(kernel, stamp_pixels, kernel_sum);
+  thrust::device_vector<float> kernel_sum(1);
+  kernel_sum_kernel<<<1, BlockDim, 0, stream>>>(kernel, stamp_pixels, thrust::raw_pointer_cast(kernel_sum.data()));
   CHECK_LAST_GPU_ERROR();
 
   const dim3 block_size = {BlockDim};
   const dim3 grid_size = {capacity};
-  stamp_beam_chi2_kernel<<<grid_size, block_size, 0, stream>>>(active_count, stamps, kernel, kernel_sum, stamp_extreme,
-                                                               inv_max_to_std_ratio, stamp_pixels, out_chi2);
+  stamp_beam_chi2_kernel<<<grid_size, block_size, 0, stream>>>(
+      active_count, stamps, kernel, thrust::raw_pointer_cast(kernel_sum.data()), stamp_extreme, inv_max_to_std_ratio,
+      stamp_pixels, out_chi2);
   CHECK_LAST_GPU_ERROR();
-
-  gpuFreeAsync(kernel_sum, stream);
 }
 } // namespace breifast::gpu

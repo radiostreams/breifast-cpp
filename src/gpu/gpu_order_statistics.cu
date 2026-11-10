@@ -1,5 +1,8 @@
 #include <cstdint>
 
+#include <thrust/device_vector.h>
+#include <thrust/raw_pointer_cast.h>
+
 #include "gpu_pipeline.hpp"
 #include "gpu_runtime.hpp"
 #include "radix_keys.cuh"
@@ -103,13 +106,12 @@ void gpu_median_impl(const float *values, size_t n, float *out_median, bool abs_
   const dim3 grid_size = {static_cast<unsigned int>((n + threads - 1) / threads)};
 
   constexpr size_t scratch_words = histogram_bins + 4; // 256 bins, then state[3] and lower_max[1]
-  uint32_t *scratch = nullptr;
-  gpuMallocAsync(&scratch, scratch_words * sizeof(uint32_t), stream);
-  gpuMemsetAsync(scratch, 0, scratch_words * sizeof(uint32_t), stream);
+  thrust::device_vector<uint32_t> scratch(scratch_words, 0);
+  uint32_t *scratch_ptr = thrust::raw_pointer_cast(scratch.data());
 
-  uint32_t *histogram = scratch;
-  uint32_t *state = scratch + histogram_bins;      // below, prefix, coverage
-  uint32_t *lower_max = scratch + histogram_bins + 3;
+  uint32_t *histogram = scratch_ptr;
+  uint32_t *state = scratch_ptr + histogram_bins;      // below, prefix, coverage
+  uint32_t *lower_max = scratch_ptr + histogram_bins + 3;
 
   const int shifts[n_digits] = {24, 16, 8, 0};
   for (int shift : shifts)
@@ -129,8 +131,6 @@ void gpu_median_impl(const float *values, size_t n, float *out_median, bool abs_
 
   radix_finalize_kernel<<<1, 1, 0, stream>>>(state, lower_max, abs_mode, n, scale, out_median);
   CHECK_LAST_GPU_ERROR();
-
-  gpuFreeAsync(scratch, stream);
 }
 } // namespace
 

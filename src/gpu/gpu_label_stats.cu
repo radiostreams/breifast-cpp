@@ -4,6 +4,9 @@
 #include <stdexcept>
 #include <string>
 
+#include <thrust/device_vector.h>
+#include <thrust/raw_pointer_cast.h>
+
 #include "gpu_runtime.hpp"
 #include "gpu_minmax.cuh"
 
@@ -122,16 +125,17 @@ void gpu_label_stats(const unsigned int *const labels, const float *const image,
     return;
   }
 
-  unsigned long long *value_keys = nullptr;
-  float *local_noise_max = nullptr;
-  unsigned int *sizes = nullptr;
-  gpuMallocAsync(&value_keys, capacity * sizeof(unsigned long long), stream);
-  gpuMallocAsync(&local_noise_max, capacity * sizeof(float), stream);
-  gpuMallocAsync(&sizes, capacity * sizeof(unsigned int), stream);
+  thrust::device_vector<unsigned long long> value_keys(capacity);
+  thrust::device_vector<float> local_noise_max(capacity);
+  thrust::device_vector<unsigned int> sizes(capacity);
+  unsigned long long *value_keys_ptr = thrust::raw_pointer_cast(value_keys.data());
+  float *local_noise_max_ptr = thrust::raw_pointer_cast(local_noise_max.data());
+  unsigned int *sizes_ptr = thrust::raw_pointer_cast(sizes.data());
 
   const dim3 block_size = {label_stats_block_size};
   const dim3 label_grid = {static_cast<unsigned int>((capacity + label_stats_block_size - 1) / label_stats_block_size)};
-  label_stats_init_kernel<<<label_grid, block_size, 0, stream>>>(capacity, value_keys, local_noise_max, sizes);
+  label_stats_init_kernel<<<label_grid, block_size, 0, stream>>>(capacity, value_keys_ptr, local_noise_max_ptr,
+                                                                 sizes_ptr);
   CHECK_LAST_GPU_ERROR();
 
   constexpr size_t max_blocks = 4096;
@@ -142,16 +146,12 @@ void gpu_label_stats(const unsigned int *const labels, const float *const image,
   }
   const dim3 scan_grid = {static_cast<unsigned int>(n_blocks)};
   label_stats_scan_kernel<<<scan_grid, block_size, 0, stream>>>(labels, image, local_noise, n_pixels, capacity,
-                                                                value_keys, local_noise_max, sizes);
+                                                                value_keys_ptr, local_noise_max_ptr, sizes_ptr);
   CHECK_LAST_GPU_ERROR();
 
   label_stats_finalize_kernel<<<label_grid, block_size, 0, stream>>>(
-      active_count, capacity, n_x, value_keys, local_noise_max, sizes, value, out_local_noise, peak_y, peak_x,
-      island_size);
+      active_count, capacity, n_x, value_keys_ptr, local_noise_max_ptr, sizes_ptr, value, out_local_noise, peak_y,
+      peak_x, island_size);
   CHECK_LAST_GPU_ERROR();
-
-  gpuFreeAsync(value_keys, stream);
-  gpuFreeAsync(local_noise_max, stream);
-  gpuFreeAsync(sizes, stream);
 }
 } // namespace breifast::gpu

@@ -1,5 +1,7 @@
 #include <cooperative_groups.h>
+#include <thrust/device_vector.h>
 #include <thrust/execution_policy.h>
+#include <thrust/raw_pointer_cast.h>
 #include <thrust/scan.h>
 
 #include "gpu_pipeline.hpp"
@@ -217,19 +219,16 @@ void gpu_label_islands(const bool *const mask, const size_t n_y, const size_t n_
   }
   const dim3 cooperative_grid = {static_cast<unsigned int>(cooperative_blocks)};
 
-  unsigned int *changed = nullptr;
-  gpuMallocAsync(&changed, sizeof(unsigned int), stream);
+  thrust::device_vector<unsigned int> changed(1);
 
   const bool *mask_arg = mask;
   size_t n_y_arg = n_y;
   size_t n_x_arg = n_x;
   unsigned int *labels_arg = labels;
-  unsigned int *changed_arg = changed;
+  unsigned int *changed_arg = thrust::raw_pointer_cast(changed.data());
   void *converge_args[] = {&mask_arg, &n_y_arg, &n_x_arg, &labels_arg, &changed_arg};
   CHECK_GPU_ERROR(cudaLaunchCooperativeKernel(reinterpret_cast<void *>(converge_labels_kernel), cooperative_grid,
                                               block_size, converge_args, 0, stream));
-
-  gpuFreeAsync(changed, stream);
 
   mark_roots_kernel<<<grid_size, block_size, 0, stream>>>(n, labels, scratch);
   CHECK_LAST_GPU_ERROR();
@@ -256,9 +255,8 @@ void gpu_island_boost(const unsigned int *const labels_per_pixel, const float *c
     throw std::runtime_error("gpu_island_boost: capacity must be greater than 0");
   }
 
-  unsigned long long *keys = nullptr;
-  gpuMallocAsync(&keys, (capacity + 1U) * sizeof(unsigned long long), stream);
-  gpuMemsetAsync(keys, 0, (capacity + 1U) * sizeof(unsigned long long), stream);
+  thrust::device_vector<unsigned long long> keys(capacity + 1U, 0ULL);
+  unsigned long long *keys_ptr = thrust::raw_pointer_cast(keys.data());
 
   size_t n_blocks = (n_pixels + boost_block_size - 1) / boost_block_size;
   if (n_blocks > max_boost_blocks)
@@ -268,15 +266,13 @@ void gpu_island_boost(const unsigned int *const labels_per_pixel, const float *c
   const dim3 block_size = {boost_block_size};
   const dim3 atomic_grid = {static_cast<unsigned int>(n_blocks)};
   island_boost_atomic_kernel<<<atomic_grid, block_size, 0, stream>>>(labels_per_pixel, n_pixels, baseline_flux,
-                                                                    active_count, capacity, flux_per_label, keys);
+                                                                    active_count, capacity, flux_per_label, keys_ptr);
   CHECK_LAST_GPU_ERROR();
 
   const dim3 finalize_grid = {static_cast<unsigned int>((capacity + boost_block_size - 1) / boost_block_size)};
-  island_boost_finalize_kernel<<<finalize_grid, block_size, 0, stream>>>(keys, baseline_flux, active_count, capacity,
-                                                                        flux_per_label, boost, found);
+  island_boost_finalize_kernel<<<finalize_grid, block_size, 0, stream>>>(keys_ptr, baseline_flux, active_count,
+                                                                        capacity, flux_per_label, boost, found);
   CHECK_LAST_GPU_ERROR();
-
-  gpuFreeAsync(keys, stream);
 }
 
 } // namespace breifast::gpu
