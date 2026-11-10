@@ -221,7 +221,10 @@ void init_plane_lot_bindings(pybind11::module_ &m)
 PYBIND11_MODULE(breifast_helpers, m)
 {
 #ifdef BREIFAST_HAVE_GPU
+  m.attr("has_gpu") = true;
   breifast::gpu::require_cuda_device();
+#else
+  m.attr("has_gpu") = false;
 #endif
 
   xt::import_numpy();

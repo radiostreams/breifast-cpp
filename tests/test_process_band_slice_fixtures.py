@@ -182,14 +182,7 @@ def _actual_detections(detections):
     return sorted(rows, key=lambda d: (d["peak_y"], d["peak_x"]))
 
 
-@pytest.mark.skipif(not _FIXTURE_PATHS, reason=f"no fixtures found under {_FIXTURE_DIR}")
-@pytest.mark.parametrize("path", _FIXTURE_PATHS, ids=[os.path.basename(p) for p in _FIXTURE_PATHS])
-def test_process_lot_matches_real_pipeline_data(path):
-    data = np.load(path)
-
-    if not data["ref_image_mask"].any():
-        pytest.skip("fixture has no real detections to validate against")
-
+def _process_lot_kwargs(data, path):
     match = _FIXTURE_NAME_RE.search(os.path.basename(path))
     stokes_label, band_label = match.group(1), match.group(2)
 
@@ -228,7 +221,7 @@ def test_process_lot_matches_real_pipeline_data(path):
     if snr_cutoff is not None:
         group["snr_cutoff"] = snr_cutoff
 
-    [result] = breifast_helpers.process_lot(
+    return dict(
         planes=[item],
         stokes_groups=[group],
         band_slices=[band],
@@ -243,8 +236,38 @@ def test_process_lot_matches_real_pipeline_data(path):
         max_sigma_bin=int(data["max_sigma_bin"]),
         threshold=float(data["threshold"]),
         beam_size_enabled=False,
-        num_threads=1,
     )
+
+
+def _assert_results_match(expected, actual, path):
+    if isinstance(expected, dict):
+        assert set(expected) == set(actual), f"{path}: keys differ {set(expected) ^ set(actual)}"
+        for key in expected:
+            _assert_results_match(expected[key], actual[key], f"{path}/{key}")
+    elif expected is None or actual is None:
+        assert expected is actual, f"{path}: one side is None"
+    else:
+        expected_array = np.asarray(expected)
+        actual_array = np.asarray(actual)
+        if expected_array.dtype.kind in "OUS" or actual_array.dtype.kind in "OUS":
+            np.testing.assert_array_equal(actual_array, expected_array, err_msg=path)
+        else:
+            np.testing.assert_allclose(actual_array, expected_array, rtol=1e-5, atol=1e-6, equal_nan=True,
+                                       err_msg=path)
+
+
+@pytest.mark.skipif(not _FIXTURE_PATHS, reason=f"no fixtures found under {_FIXTURE_DIR}")
+@pytest.mark.parametrize("path", _FIXTURE_PATHS, ids=[os.path.basename(p) for p in _FIXTURE_PATHS])
+def test_process_lot_matches_real_pipeline_data(path):
+    data = np.load(path)
+
+    if not data["ref_image_mask"].any():
+        pytest.skip("fixture has no real detections to validate against")
+
+    boxsize = int(data["boxsize"])
+    inner_boxsize = 10  # breifast.py's own default; not overridden by this dataset's config.
+
+    [result] = breifast_helpers.process_lot(num_threads=1, **_process_lot_kwargs(data, path))
 
     np.testing.assert_allclose(result["min_sigma"], data["ref_minsig"], rtol=1e-4, atol=1e-6, err_msg="min_sigma")
     np.testing.assert_allclose(result["max_sigma"], data["ref_maxsig"], rtol=1e-4, atol=1e-6, err_msg="max_sigma")
@@ -277,3 +300,17 @@ def test_process_lot_matches_real_pipeline_data(path):
             np.testing.assert_allclose(g[field], e[field], rtol=1e-4, atol=1e-6, err_msg=f"{os.path.basename(path)}: {field}")
         for field in loose_fields:
             np.testing.assert_allclose(g[field], e[field], rtol=1e-2, atol=1e-6, err_msg=f"{os.path.basename(path)}: {field}")
+
+
+@pytest.mark.skipif(not getattr(breifast_helpers, "has_gpu", False), reason="GPU build required")
+@pytest.mark.parametrize("path", _FIXTURE_PATHS, ids=[os.path.basename(p) for p in _FIXTURE_PATHS])
+def test_process_lot_gpu_matches_cpu(path):
+    data = np.load(path)
+
+    if not data["ref_image_mask"].any():
+        pytest.skip("fixture has no real detections to validate against")
+
+    kwargs = _process_lot_kwargs(data, path)
+    [cpu] = breifast_helpers.process_lot(num_threads=1, use_gpu=False, **kwargs)
+    [gpu] = breifast_helpers.process_lot(use_gpu=True, **kwargs)
+    _assert_results_match(cpu, gpu, os.path.basename(path))
