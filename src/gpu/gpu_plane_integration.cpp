@@ -65,9 +65,6 @@ ProcessPlaneResult gpu_process_plane_batch(const PlaneBatchItem &item, const Pla
   GpuPlaneJobs plane_jobs = build_plane_jobs(spec);
   try
   {
-    GpuPlaneHostResult host;
-    gpu_process_plane(plane_jobs.jobs, host);
-
     std::optional<SpectralVarianceStats> variance_stats;
     if (n_channels > 1)
     {

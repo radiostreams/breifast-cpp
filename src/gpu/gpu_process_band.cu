@@ -313,11 +313,10 @@ void destroy_band_job(GpuBandJob &job) noexcept
 {
   if (job.stream.handle_ != nullptr)
   {
+    // Synchronous cudaFree must not run while the stream still uses the buffers.
+    (void)cudaStreamSynchronize(job.stream);
     destroy_band_result(job.result, job.stream);
     destroy_band_workspace(job.workspace, job.stream);
-    // A failed plane can leave the stream in an error state; cleanup still has to
-    // destroy every buffer and the stream instead of stopping at the first error.
-    (void)cudaStreamSynchronize(job.stream);
     (void)cudaStreamDestroy(job.stream);
   }
   job = GpuBandJob{};

@@ -15,7 +15,7 @@ template <typename T> void free_buffer(T *&buffer, GpuStream stream) noexcept
   {
     // Cleanup must never throw: freeing runs after a plane may have failed, and a
     // sticky CUDA error would otherwise abort the remaining frees and leak them.
-    (void)cudaFreeAsync(buffer, stream);
+    (void)cudaFree(buffer);
     buffer = nullptr;
   }
 }
@@ -31,24 +31,24 @@ GpuBandWorkspace create_band_workspace(const GpuBandWorkspaceSizes &sizes, GpuSt
   try
   {
     const std::size_t n_pixels = sizes.n_pixels;
-    gpuMallocAsync(&workspace.plane, n_pixels * sizeof(float), stream);
-    gpuMallocAsync(&workspace.noise_map, n_pixels * sizeof(float), stream);
-    gpuMallocAsync(&workspace.snr, n_pixels * sizeof(float), stream);
-    gpuMallocAsync(&workspace.mask, n_pixels * sizeof(bool), stream);
-    gpuMallocAsync(&workspace.row_sums, n_pixels * sizeof(float), stream);
-    gpuMallocAsync(&workspace.rms_map, n_pixels * sizeof(float), stream);
+    gpuMalloc(&workspace.plane, n_pixels * sizeof(float));
+    gpuMalloc(&workspace.noise_map, n_pixels * sizeof(float));
+    gpuMalloc(&workspace.snr, n_pixels * sizeof(float));
+    gpuMalloc(&workspace.mask, n_pixels * sizeof(bool));
+    gpuMalloc(&workspace.row_sums, n_pixels * sizeof(float));
+    gpuMalloc(&workspace.rms_map, n_pixels * sizeof(float));
 
-    gpuMallocAsync(&workspace.labels, n_pixels * sizeof(unsigned int), stream);
-    gpuMallocAsync(&workspace.label_scratch, n_pixels * sizeof(unsigned int), stream);
+    gpuMalloc(&workspace.labels, n_pixels * sizeof(unsigned int));
+    gpuMalloc(&workspace.label_scratch, n_pixels * sizeof(unsigned int));
 
-    gpuMallocAsync(&workspace.donut_stamps, sizes.stamp_capacity * sizes.stamp_pixels * sizeof(float), stream);
+    gpuMalloc(&workspace.donut_stamps, sizes.stamp_capacity * sizes.stamp_pixels * sizeof(float));
     if (sizes.beam_stamp_pixels > 0)
     {
-      gpuMallocAsync(&workspace.beam_stamps, sizes.stamp_capacity * sizes.beam_stamp_pixels * sizeof(float), stream);
+      gpuMalloc(&workspace.beam_stamps, sizes.stamp_capacity * sizes.beam_stamp_pixels * sizeof(float));
     }
 
-    gpuMallocAsync(&workspace.any_flag, sizeof(int), stream);
-    gpuMallocAsync(&workspace.label_count, sizeof(unsigned int), stream);
+    gpuMalloc(&workspace.any_flag, sizeof(int));
+    gpuMalloc(&workspace.label_count, sizeof(unsigned int));
   }
   catch (...)
   {
@@ -93,33 +93,33 @@ GpuBandResult create_band_result(const std::size_t n_pixels, const std::size_t h
 
   try
   {
-    gpuMallocAsync(&result.peak_value, n_pixels * sizeof(float), stream);
-    gpuMallocAsync(&result.peak_local_noise, n_pixels * sizeof(float), stream);
-    gpuMallocAsync(&result.peak_y, n_pixels * sizeof(long), stream);
-    gpuMallocAsync(&result.peak_x, n_pixels * sizeof(long), stream);
-    gpuMallocAsync(&result.island_size, n_pixels * sizeof(unsigned int), stream);
+    gpuMalloc(&result.peak_value, n_pixels * sizeof(float));
+    gpuMalloc(&result.peak_local_noise, n_pixels * sizeof(float));
+    gpuMalloc(&result.peak_y, n_pixels * sizeof(long));
+    gpuMalloc(&result.peak_x, n_pixels * sizeof(long));
+    gpuMalloc(&result.island_size, n_pixels * sizeof(unsigned int));
 
-    gpuMallocAsync(&result.stamp_extreme, n_pixels * sizeof(float), stream);
-    gpuMallocAsync(&result.donut_std, n_pixels * sizeof(float), stream);
-    gpuMallocAsync(&result.donut_lmad, n_pixels * sizeof(float), stream);
-    gpuMallocAsync(&result.beam_chi2, n_pixels * sizeof(float), stream);
-    gpuMallocAsync(&result.flux, n_pixels * sizeof(float), stream);
-    gpuMallocAsync(&result.boost, n_pixels * sizeof(float), stream);
-    gpuMallocAsync(&result.boost_found, n_pixels * sizeof(bool), stream);
+    gpuMalloc(&result.stamp_extreme, n_pixels * sizeof(float));
+    gpuMalloc(&result.donut_std, n_pixels * sizeof(float));
+    gpuMalloc(&result.donut_lmad, n_pixels * sizeof(float));
+    gpuMalloc(&result.beam_chi2, n_pixels * sizeof(float));
+    gpuMalloc(&result.flux, n_pixels * sizeof(float));
+    gpuMalloc(&result.boost, n_pixels * sizeof(float));
+    gpuMalloc(&result.boost_found, n_pixels * sizeof(bool));
 
-    gpuMallocAsync(&result.noise_at_peak, n_pixels * sizeof(float), stream);
-    gpuMallocAsync(&result.rms_at_peak, n_pixels * sizeof(float), stream);
-    gpuMallocAsync(&result.selfnoise_at_peak, n_pixels * sizeof(float), stream);
+    gpuMalloc(&result.noise_at_peak, n_pixels * sizeof(float));
+    gpuMalloc(&result.rms_at_peak, n_pixels * sizeof(float));
+    gpuMalloc(&result.selfnoise_at_peak, n_pixels * sizeof(float));
 
-    gpuMallocAsync(&result.histogram0, histogram_bins * sizeof(unsigned long long), stream);
-    gpuMallocAsync(&result.histogram1, histogram_bins * sizeof(unsigned long long), stream);
-    gpuMallocAsync(&result.histogram2, histogram_bins * sizeof(unsigned long long), stream);
+    gpuMalloc(&result.histogram0, histogram_bins * sizeof(unsigned long long));
+    gpuMalloc(&result.histogram1, histogram_bins * sizeof(unsigned long long));
+    gpuMalloc(&result.histogram2, histogram_bins * sizeof(unsigned long long));
 
-    gpuMallocAsync(&result.min_sigma, sizeof(float), stream);
-    gpuMallocAsync(&result.max_sigma, sizeof(float), stream);
-    gpuMallocAsync(&result.median_noise, sizeof(float), stream);
-    gpuMallocAsync(&result.rms_floor, sizeof(float), stream);
-    gpuMallocAsync(&result.global_mad, sizeof(float), stream);
+    gpuMalloc(&result.min_sigma, sizeof(float));
+    gpuMalloc(&result.max_sigma, sizeof(float));
+    gpuMalloc(&result.median_noise, sizeof(float));
+    gpuMalloc(&result.rms_floor, sizeof(float));
+    gpuMalloc(&result.global_mad, sizeof(float));
   }
   catch (...)
   {
