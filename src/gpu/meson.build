@@ -24,9 +24,7 @@ gpu_lib = static_library('breifast_gpu',
 
 gpu_host_lib = static_library('breifast_gpu_host',
   [
-    'gpu_plane_detections.cpp',
-    'gpu_plane_integration.cpp',
-    'gpu_spectral_variance.cpp',
+    'gpu_plane_host.cpp',
   ],
   include_directories : gpu_include,
   dependencies : [xtl_dep, xtensor_dep, xsimd_dep, cuda_headers_dep],
