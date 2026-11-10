@@ -4,12 +4,19 @@
 #include <utility>
 #include <vector>
 
+#include "cpu/beam_kernel.hpp"
 #include "gpu_plane_jobs.hpp"
 #include "gpu_plane_result.hpp"
 #include "gpu_spectral_variance.hpp"
 
 namespace breifast::gpu
 {
+std::vector<float> build_gaussian_beam_kernel_vector(long halfsize, float sigma_major, float sigma_minor, float rotate)
+{
+  const auto kernel = breifast::build_gaussian_beam_kernel(halfsize, sigma_major, sigma_minor, rotate);
+  return std::vector<float>(kernel.begin(), kernel.end());
+}
+
 ProcessPlaneResult gpu_process_plane_batch(const PlaneBatchItem &item, const PlaneBatchGroup &group,
                                            const PlaneConfig &config)
 {

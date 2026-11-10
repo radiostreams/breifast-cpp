@@ -66,6 +66,9 @@ struct GpuPlaneSizes
   std::size_t channel_pixels = 0;
 };
 
+std::vector<float> build_gaussian_beam_kernel_vector(long halfsize, float sigma_major, float sigma_minor,
+                                                     float rotate);
+
 struct GpuPlaneJobs
 {
   explicit GpuPlaneJobs(const GpuPlaneJobSpec &spec);

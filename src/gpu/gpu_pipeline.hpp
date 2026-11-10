@@ -34,6 +34,7 @@ struct GpuDeviceSummary
 
 /// Properties of the GPU with index `device_id` among the devices visible to the process.
 GpuDeviceSummary gpu_device_summary(int device_id = 0);
+void require_cuda_device();
 
 /// The stream a GPU call runs on; `nullptr` is the default stream. Opaque here so the header needs no CUDA includes,
 /// and implicitly a `cudaStream_t` inside CUDA translation units.

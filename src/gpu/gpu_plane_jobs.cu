@@ -7,7 +7,6 @@
 #include <string>
 #include <utility>
 
-#include "gpu_beam_kernel.hpp"
 
 namespace breifast::gpu
 {
