@@ -228,6 +228,25 @@ therefore uses separate job steps: a build step without a GPU, then a step with 
 `meson test --no-rebuild`, interactive shell) or on the `normal` QOS (benchmark). Never compile outside the build
 step.
 
+## Baseline (Phase 0, 2026-11-11)
+
+`scripts/kuma.sh bench /work/ska/hchouh/src/breifast/small_test/lot_diff36_cpp --plane-count N` at commit `1de782b`
+(before any Phase 1 library change), `normal` QOS, one H100, 16 CPUs, `--threads 0`, median of 3 runs after 1 warm-up.
+The lot: 36 single-channel 3072 x 3072 planes, one band, boxsize 400.
+
+| Run | Median | Detections | Peak GPU memory |
+|---|---|---|---|
+| GPU, 36 planes | 2.95 s | 5 | 59.3 GB |
+| GPU, 144 planes | 11.62 s | 20 | 59.3 GB |
+| CPU, 36 planes | 0.57 s | 5 | |
+
+- The GPU is ~5x slower than the CPU, and 4x the planes takes 3.95x the time: no gain from concurrency.
+- Memory per plane in flight is ~3.7 GB: donut stamps 4096 x 401² floats = 2.6 GB, per-island results sized to
+  `n_pixels` ~0.6 GB, workspace ~0.3 GB, inputs ~0.2 GB; TBB runs up to 16 planes at once. Rerun the same three
+  commands with the same CPU count after the refactor.
+- A 401² stamp is 643 KB, beyond the ~227 KB of shared memory per block: the shared-memory stamp idea below does not
+  apply at this boxsize.
+
 ## Deferred
 
 - Stream-count heuristic (candidate: min(planes, slots fitting in ~80% of free memory, a small cap), failing up front
