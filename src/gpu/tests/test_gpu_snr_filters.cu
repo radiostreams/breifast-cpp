@@ -13,12 +13,15 @@
 #include <string>
 #include <vector>
 
-#include "device_vector.hpp"
 #include "gpu_kernels.hpp"
-#include "gpu_runtime.hpp"
+#include "gpu_test_utils.hpp"
 
 using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_snr_and_filters;
+using breifast::gpu::Stream;
+using breifast::gpu::test::download;
+using breifast::gpu::test::download_scalar;
+using breifast::gpu::test::upload;
 using breifast::common::SnrFilterParams;
 using Catch::Matchers::Equals;
 using Catch::Matchers::RangeEquals;
@@ -126,116 +129,43 @@ Outputs run_gpu_snr_and_filters(const std::vector<float> &plane_values, const st
   const size_t n = plane_values.size();
   const size_t n_bins = static_cast<size_t>(2 * params.max_sigma_bin);
 
-  std::vector<float> host_plane(plane_values.begin(), plane_values.end());
-  std::vector<float> host_noise(noise_values.begin(), noise_values.end());
-  std::vector<float> host_snr_cutoff(snr_cutoff_values.begin(), snr_cutoff_values.end());
-  std::vector<float> host_flux_cutoff(flux_cutoff_values.begin(), flux_cutoff_values.end());
-  std::vector<float> host_out(n, snr_prefill);
-  std::vector<float> host_median_noise(1, params.median_noise);
-  std::vector<uint8_t> host_mask(n);
+  std::vector<bool> host_mask(n);
   for (size_t i_pixel = 0; i_pixel < n; ++i_pixel)
   {
     host_mask[i_pixel] = accepted[i_pixel] == '1';
   }
-  std::vector<unsigned long long> host_histogram0(n_bins, histogram_prefill);
-  std::vector<unsigned long long> host_histogram1(n_bins, histogram_prefill);
-  std::vector<unsigned long long> host_histogram2(n_bins, histogram_prefill);
-  std::vector<float> host_min(1);
-  std::vector<float> host_max(1);
 
-  DeviceVector<float> device_plane(n);
-  DeviceVector<float> device_noise(n);
-  DeviceVector<float> device_snr_cutoff(snr_cutoff_values.size());
-  DeviceVector<float> device_flux_cutoff(flux_cutoff_values.size());
-  DeviceVector<float> device_out(n);
-  DeviceVector<float> device_median_noise(1);
-  DeviceVector<uint8_t> device_mask(n);
-  DeviceVector<unsigned long long> device_histogram0(n_bins);
-  DeviceVector<unsigned long long> device_histogram1(n_bins);
-  DeviceVector<unsigned long long> device_histogram2(n_bins);
+  const auto device_plane = upload(plane_values);
+  const auto device_noise = upload(noise_values);
+  const auto device_snr_cutoff = upload(snr_cutoff_values);
+  const auto device_flux_cutoff = upload(flux_cutoff_values);
+  const auto device_median_noise = upload(std::vector<float>{params.median_noise});
+  auto device_out = upload(std::vector<float>(n, snr_prefill));
+  auto device_mask = upload(host_mask);
+  auto device_histogram0 = upload(std::vector<unsigned long long>(n_bins, histogram_prefill));
+  auto device_histogram1 = upload(std::vector<unsigned long long>(n_bins, histogram_prefill));
+  auto device_histogram2 = upload(std::vector<unsigned long long>(n_bins, histogram_prefill));
   DeviceVector<float> device_min(1);
   DeviceVector<float> device_max(1);
 
-  const bool snr_cutoff_enabled = !snr_cutoff_values.empty();
-  const bool flux_cutoff_enabled = !flux_cutoff_values.empty();
-
-  cudaStream_t stream{};
-  gpuStreamCreate(&stream);
-
-  gpuMemcpyHostToDeviceAsync(device_plane.data(), host_plane.data(),
-                             n * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(device_noise.data(), host_noise.data(),
-                             n * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(device_out.data(), host_out.data(),
-                             n * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(device_median_noise.data(),
-                             host_median_noise.data(), sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(device_mask.data(), host_mask.data(), n,
-                             stream);
-  gpuMemcpyHostToDeviceAsync(device_histogram0.data(),
-                             host_histogram0.data(), n_bins * sizeof(unsigned long long),
-                             stream);
-  gpuMemcpyHostToDeviceAsync(device_histogram1.data(),
-                             host_histogram1.data(), n_bins * sizeof(unsigned long long),
-                             stream);
-  gpuMemcpyHostToDeviceAsync(device_histogram2.data(),
-                             host_histogram2.data(), n_bins * sizeof(unsigned long long),
-                             stream);
-  if (snr_cutoff_enabled)
-  {
-    gpuMemcpyHostToDeviceAsync(device_snr_cutoff.data(),
-                               host_snr_cutoff.data(),
-                               snr_cutoff_values.size() * sizeof(float), stream);
-  }
-  if (flux_cutoff_enabled)
-  {
-    gpuMemcpyHostToDeviceAsync(device_flux_cutoff.data(),
-                               host_flux_cutoff.data(),
-                               flux_cutoff_values.size() * sizeof(float), stream);
-  }
-
-  gpu_snr_and_filters(
-      device_plane.data(), device_noise.data(),
-      snr_cutoff_enabled ? device_snr_cutoff.data() : nullptr,
-      flux_cutoff_enabled ? device_flux_cutoff.data() : nullptr,
-      device_median_noise.data(), n, params,
-      device_out.data(), reinterpret_cast<bool *>(device_mask.data()),
-      device_histogram0.data(), device_histogram1.data(),
-      device_histogram2.data(), device_min.data(),
-      device_max.data(), stream);
-
-  gpuMemcpyDeviceToHostAsync(host_out.data(), device_out.data(),
-                             n * sizeof(float), stream);
-  gpuMemcpyDeviceToHostAsync(host_mask.data(), device_mask.data(), n,
-                             stream);
-  gpuMemcpyDeviceToHostAsync(host_histogram0.data(),
-                             device_histogram0.data(), n_bins * sizeof(unsigned long long),
-                             stream);
-  gpuMemcpyDeviceToHostAsync(host_histogram1.data(),
-                             device_histogram1.data(), n_bins * sizeof(unsigned long long),
-                             stream);
-  gpuMemcpyDeviceToHostAsync(host_histogram2.data(),
-                             device_histogram2.data(), n_bins * sizeof(unsigned long long),
-                             stream);
-  gpuMemcpyDeviceToHostAsync(host_min.data(), device_min.data(),
-                             sizeof(float), stream);
-  gpuMemcpyDeviceToHostAsync(host_max.data(), device_max.data(),
-                             sizeof(float), stream);
-
-  gpuStreamSynchronize(stream);
-  gpuStreamDestroy(stream);
+  const Stream stream;
+  gpu_snr_and_filters(device_plane, device_noise, snr_cutoff_values.empty() ? nullptr : device_snr_cutoff.data(),
+                      flux_cutoff_values.empty() ? nullptr : device_flux_cutoff.data(), device_median_noise, n,
+                      params, device_out, device_mask, device_histogram0, device_histogram1, device_histogram2,
+                      device_min, device_max, stream.get());
 
   std::string mask;
   mask.reserve(n);
-  for (size_t i_pixel = 0; i_pixel < n; ++i_pixel)
+  for (const bool value : download(device_mask, stream))
   {
-    mask += host_mask[i_pixel] ? '1' : '0';
+    mask += value ? '1' : '0';
   }
-  return {std::vector<float>(host_out.begin(), host_out.end()), mask,
-          {std::vector<unsigned long long>(host_histogram0.begin(), host_histogram0.end()),
-           std::vector<unsigned long long>(host_histogram1.begin(), host_histogram1.end()),
-           std::vector<unsigned long long>(host_histogram2.begin(), host_histogram2.end())},
-          host_min[0], host_max[0]};
+  return {download(device_out, stream),
+          mask,
+          {download(device_histogram0, stream), download(device_histogram1, stream),
+           download(device_histogram2, stream)},
+          download_scalar(device_min.data(), stream),
+          download_scalar(device_max.data(), stream)};
 }
 
 // A deterministic ramp for the coverage cases, where a hand-written expected array would be unwieldy.

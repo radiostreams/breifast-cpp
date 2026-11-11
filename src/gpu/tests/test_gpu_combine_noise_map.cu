@@ -11,12 +11,13 @@
 #include <algorithm>
 #include <cmath>
 
-#include "device_vector.hpp"
 #include "gpu_kernels.hpp"
-#include "gpu_runtime.hpp"
+#include "gpu_test_utils.hpp"
 
-using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_combine_noise_map;
+using breifast::gpu::Stream;
+using breifast::gpu::test::download;
+using breifast::gpu::test::upload;
 using Catch::Approx;
 using Catch::Matchers::Equals;
 
@@ -57,41 +58,16 @@ std::vector<float> run_gpu_combine_noise_map_rms(const std::vector<float> &rms_v
 {
   const size_t n_plane_pixels = rms_values.size();
 
-  std::vector<float> host_rms(rms_values.begin(), rms_values.end());
-  std::vector<float> host_selfnoise(selfnoise_values.begin(), selfnoise_values.end());
-  std::vector<float> host_dde(dde_values.begin(), dde_values.end());
-  std::vector<float> host_out(n_plane_pixels, prefill);
+  const auto device_rms = upload(rms_values);
+  const auto device_floor = upload(std::vector<float>{floor});
+  const auto device_selfnoise = upload(selfnoise_values);
+  const auto device_dde = upload(dde_values);
+  auto device_out = upload(std::vector<float>(n_plane_pixels, prefill));
 
-  DeviceVector<float> device_rms(n_plane_pixels);
-  DeviceVector<float> device_selfnoise(n_plane_pixels);
-  DeviceVector<float> device_dde(n_plane_pixels);
-  DeviceVector<float> device_out(n_plane_pixels);
-  DeviceVector<float> device_floor(1);
-
-  cudaStream_t stream{};
-  gpuStreamCreate(&stream);
-
-  gpuMemcpyHostToDeviceAsync(device_rms.data(), host_rms.data(),
-                             n_plane_pixels * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(device_selfnoise.data(),
-                             host_selfnoise.data(), n_plane_pixels * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(device_dde.data(), host_dde.data(),
-                             n_plane_pixels * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(device_out.data(), host_out.data(),
-                             n_plane_pixels * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(device_floor.data(), &floor, sizeof(float), stream);
-
-  gpu_combine_noise_map(device_rms.data(), device_floor.data(),
-                        device_selfnoise.data(), device_dde.data(),
-                        selfnoise_scale, dde_scale, device_out.data(), n_plane_pixels,
-                        stream);
-
-  gpuMemcpyDeviceToHostAsync(host_out.data(), device_out.data(),
-                             n_plane_pixels * sizeof(float), stream);
-  gpuStreamSynchronize(stream);
-  gpuStreamDestroy(stream);
-
-  return std::vector<float>(host_out.begin(), host_out.end());
+  const Stream stream;
+  gpu_combine_noise_map(device_rms, device_floor, device_selfnoise, device_dde, selfnoise_scale, dde_scale, device_out,
+                        n_plane_pixels, stream.get());
+  return download(device_out, stream);
 }
 
 // Runs gpu_combine_noise_map without an RMS map, so with the constant base noise.
@@ -100,37 +76,15 @@ std::vector<float> run_gpu_combine_noise_map_constant(const std::vector<float> &
 {
   const size_t n_plane_pixels = selfnoise_values.size();
 
-  std::vector<float> host_selfnoise(selfnoise_values.begin(), selfnoise_values.end());
-  std::vector<float> host_dde(dde_values.begin(), dde_values.end());
-  std::vector<float> host_out(n_plane_pixels, prefill);
+  const auto device_base_noise = upload(std::vector<float>{base_noise});
+  const auto device_selfnoise = upload(selfnoise_values);
+  const auto device_dde = upload(dde_values);
+  auto device_out = upload(std::vector<float>(n_plane_pixels, prefill));
 
-  DeviceVector<float> device_selfnoise(n_plane_pixels);
-  DeviceVector<float> device_dde(n_plane_pixels);
-  DeviceVector<float> device_out(n_plane_pixels);
-  DeviceVector<float> device_base_noise(1);
-
-  cudaStream_t stream{};
-  gpuStreamCreate(&stream);
-
-  gpuMemcpyHostToDeviceAsync(device_selfnoise.data(),
-                             host_selfnoise.data(), n_plane_pixels * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(device_dde.data(), host_dde.data(),
-                             n_plane_pixels * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(device_out.data(), host_out.data(),
-                             n_plane_pixels * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(device_base_noise.data(), &base_noise, sizeof(float), stream);
-
-  gpu_combine_noise_map(nullptr, device_base_noise.data(),
-                        device_selfnoise.data(), device_dde.data(),
-                        selfnoise_scale, dde_scale, device_out.data(), n_plane_pixels,
-                        stream);
-
-  gpuMemcpyDeviceToHostAsync(host_out.data(), device_out.data(),
-                             n_plane_pixels * sizeof(float), stream);
-  gpuStreamSynchronize(stream);
-  gpuStreamDestroy(stream);
-
-  return std::vector<float>(host_out.begin(), host_out.end());
+  const Stream stream;
+  gpu_combine_noise_map(nullptr, device_base_noise, device_selfnoise, device_dde, selfnoise_scale, dde_scale,
+                        device_out, n_plane_pixels, stream.get());
+  return download(device_out, stream);
 }
 
 // A deterministic ramp for the coverage cases, where a hand-written expected array would be unwieldy.

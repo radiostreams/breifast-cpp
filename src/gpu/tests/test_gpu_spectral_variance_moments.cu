@@ -10,12 +10,13 @@
 #include <limits>
 #include <vector>
 
-#include "device_vector.hpp"
 #include "gpu_kernels.hpp"
-#include "gpu_runtime.hpp"
+#include "gpu_test_utils.hpp"
 
-using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_spectral_variance_moments;
+using breifast::gpu::Stream;
+using breifast::gpu::test::download;
+using breifast::gpu::test::upload;
 using Catch::Matchers::Equals;
 using Catch::Approx;
 
@@ -66,49 +67,16 @@ struct Sums
 Sums run_gpu_spectral_variance_moments(const std::vector<float> &cube_values, const std::vector<uint8_t> &flags,
                                        size_t n_plane_pixels, size_t n_plane_channels, float prefill = 0.F)
 {
-  std::vector<float> host_cube(cube_values.begin(), cube_values.end());
-  std::vector<uint8_t> host_flags(flags.begin(), flags.end());
-  std::vector<float> host_sum2(n_plane_pixels, prefill);
-  std::vector<float> host_sum3(n_plane_pixels, prefill);
-  std::vector<float> host_sum4(n_plane_pixels, prefill);
+  const auto device_cube = upload(cube_values);
+  const auto device_flags = upload(std::vector<bool>(flags.begin(), flags.end()));
+  auto device_sum2 = upload(std::vector<float>(n_plane_pixels, prefill));
+  auto device_sum3 = upload(std::vector<float>(n_plane_pixels, prefill));
+  auto device_sum4 = upload(std::vector<float>(n_plane_pixels, prefill));
 
-  DeviceVector<float> device_cube(cube_values.size());
-  DeviceVector<uint8_t> device_flags(flags.size());
-  DeviceVector<float> device_sum2(n_plane_pixels);
-  DeviceVector<float> device_sum3(n_plane_pixels);
-  DeviceVector<float> device_sum4(n_plane_pixels);
-
-  cudaStream_t stream{};
-  gpuStreamCreate(&stream);
-
-  gpuMemcpyHostToDeviceAsync(device_cube.data(), host_cube.data(),
-                             cube_values.size() * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(device_flags.data(), host_flags.data(),
-                             flags.size(), stream);
-  gpuMemcpyHostToDeviceAsync(device_sum2.data(), host_sum2.data(),
-                             n_plane_pixels * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(device_sum3.data(), host_sum3.data(),
-                             n_plane_pixels * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(device_sum4.data(), host_sum4.data(),
-                             n_plane_pixels * sizeof(float), stream);
-
-  gpu_spectral_variance_moments(
-      device_cube.data(),
-      reinterpret_cast<const bool *>(device_flags.data()),
-      device_sum2.data(), device_sum3.data(),
-      device_sum4.data(), n_plane_pixels, static_cast<int>(n_plane_channels), stream);
-
-  gpuMemcpyDeviceToHostAsync(host_sum2.data(), device_sum2.data(),
-                             n_plane_pixels * sizeof(float), stream);
-  gpuMemcpyDeviceToHostAsync(host_sum3.data(), device_sum3.data(),
-                             n_plane_pixels * sizeof(float), stream);
-  gpuMemcpyDeviceToHostAsync(host_sum4.data(), device_sum4.data(),
-                             n_plane_pixels * sizeof(float), stream);
-  gpuStreamSynchronize(stream);
-  gpuStreamDestroy(stream);
-
-  return {std::vector<float>(host_sum2.begin(), host_sum2.end()), std::vector<float>(host_sum3.begin(), host_sum3.end()),
-          std::vector<float>(host_sum4.begin(), host_sum4.end())};
+  const Stream stream;
+  gpu_spectral_variance_moments(device_cube, device_flags, device_sum2, device_sum3, device_sum4, n_plane_pixels,
+                                static_cast<int>(n_plane_channels), stream.get());
+  return {download(device_sum2, stream), download(device_sum3, stream), download(device_sum4, stream)};
 }
 
 // A deterministic three-channel plane for the coverage cases, where a hand-written expected array would be unwieldy.

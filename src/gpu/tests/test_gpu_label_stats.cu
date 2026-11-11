@@ -9,12 +9,14 @@
 #include <stdexcept>
 #include <vector>
 
-#include "device_vector.hpp"
 #include "gpu_kernels.hpp"
-#include "gpu_runtime.hpp"
+#include "gpu_test_utils.hpp"
 
 using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_label_stats;
+using breifast::gpu::Stream;
+using breifast::gpu::test::download;
+using breifast::gpu::test::upload;
 using Catch::Matchers::Equals;
 
 namespace
@@ -34,63 +36,22 @@ LabelStats run_stats(const std::vector<unsigned int> &labels, const std::vector<
   REQUIRE(labels.size() == image.size());
   REQUIRE(labels.size() == local_noise.size());
 
-  std::vector<unsigned int> host_labels(labels.begin(), labels.end());
-  std::vector<float> host_image(image.begin(), image.end());
-  std::vector<float> host_local_noise(local_noise.begin(), local_noise.end());
-  DeviceVector<unsigned int> device_labels(labels.size());
-  DeviceVector<float> device_image(image.size());
-  DeviceVector<float> device_local_noise(local_noise.size());
+  const auto device_labels = upload(labels);
+  const auto device_image = upload(image);
+  const auto device_local_noise = upload(local_noise);
+  const auto device_count = upload(std::vector<unsigned int>{n_labels});
   DeviceVector<float> device_value(n_labels);
   DeviceVector<float> device_local_noise_max(n_labels);
   DeviceVector<long> device_peak_y(n_labels);
   DeviceVector<long> device_peak_x(n_labels);
   DeviceVector<unsigned int> device_island_size(n_labels);
-  DeviceVector<unsigned int> device_count(1);
 
-  cudaStream_t stream{};
-  gpuStreamCreate(&stream);
-
-  gpuMemcpyHostToDeviceAsync(device_labels.data(),
-                             host_labels.data(), labels.size() * sizeof(unsigned int), stream);
-  gpuMemcpyHostToDeviceAsync(device_image.data(), host_image.data(),
-                             image.size() * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(device_local_noise.data(),
-                             host_local_noise.data(), local_noise.size() * sizeof(float),
-                             stream);
-  gpuMemcpyHostToDeviceAsync(device_count.data(), &n_labels, sizeof(unsigned int), stream);
-
-  gpu_label_stats(device_labels.data(), device_image.data(),
-                  device_local_noise.data(), labels.size(), n_x,
-                  device_count.data(), n_labels,
-                  device_value.data(),
-                  device_local_noise_max.data(),
-                  device_peak_y.data(), device_peak_x.data(),
-                  device_island_size.data(), stream);
-
-  std::vector<float> host_value(n_labels);
-  std::vector<float> host_local_noise_max(n_labels);
-  std::vector<long> host_peak_y(n_labels);
-  std::vector<long> host_peak_x(n_labels);
-  std::vector<unsigned int> host_island_size(n_labels);
-  gpuMemcpyDeviceToHostAsync(host_value.data(),
-                             device_value.data(), n_labels * sizeof(float), stream);
-  gpuMemcpyDeviceToHostAsync(host_local_noise_max.data(),
-                             device_local_noise_max.data(), n_labels * sizeof(float), stream);
-  gpuMemcpyDeviceToHostAsync(host_peak_y.data(),
-                             device_peak_y.data(), n_labels * sizeof(long), stream);
-  gpuMemcpyDeviceToHostAsync(host_peak_x.data(),
-                             device_peak_x.data(), n_labels * sizeof(long), stream);
-  gpuMemcpyDeviceToHostAsync(host_island_size.data(),
-                             device_island_size.data(), n_labels * sizeof(unsigned int),
-                             stream);
-  gpuStreamSynchronize(stream);
-  gpuStreamDestroy(stream);
-
-  return {std::vector<float>(host_value.begin(), host_value.end()),
-          std::vector<float>(host_local_noise_max.begin(), host_local_noise_max.end()),
-          std::vector<long>(host_peak_y.begin(), host_peak_y.end()),
-          std::vector<long>(host_peak_x.begin(), host_peak_x.end()),
-          std::vector<unsigned int>(host_island_size.begin(), host_island_size.end())};
+  const Stream stream;
+  gpu_label_stats(device_labels, device_image, device_local_noise, labels.size(), n_x, device_count, n_labels,
+                  device_value, device_local_noise_max, device_peak_y, device_peak_x, device_island_size,
+                  stream.get());
+  return {download(device_value, stream), download(device_local_noise_max, stream), download(device_peak_y, stream),
+          download(device_peak_x, stream), download(device_island_size, stream)};
 }
 
 LabelStats host_reference(const std::vector<unsigned int> &labels, const std::vector<float> &image,
@@ -227,8 +188,7 @@ TEST_CASE("gpu_label_stats matches a host reference across many blocks", "[gpu][
 TEST_CASE("gpu_label_stats rejects an empty plane and an undersized capacity", "[gpu][label_stats]")
 {
   using Catch::Matchers::ContainsSubstring;
-  cudaStream_t stream{};
-  gpuStreamCreate(&stream);
+  const Stream stream;
 
   DeviceVector<unsigned int> labels(1);
   DeviceVector<float> image(1);
@@ -238,31 +198,15 @@ TEST_CASE("gpu_label_stats rejects an empty plane and an undersized capacity", "
   DeviceVector<long> peak_y(1);
   DeviceVector<long> peak_x(1);
   DeviceVector<unsigned int> island_size(1);
-  DeviceVector<unsigned int> count(1, 2);
+  const auto count = upload(std::vector<unsigned int>{2});
 
-  REQUIRE_THROWS_AS(gpu_label_stats(labels.data(), image.data(),
-                                    local_noise.data(), 0, 1, nullptr, 1,
-                                    value.data(),
-                                    local_noise_max.data(),
-                                    peak_y.data(), peak_x.data(),
-                                    island_size.data(), stream),
+  REQUIRE_THROWS_AS(gpu_label_stats(labels, image, local_noise, 0, 1, nullptr, 1, value, local_noise_max, peak_y,
+                                    peak_x, island_size, stream.get()),
                     std::runtime_error);
-  REQUIRE_THROWS_AS(gpu_label_stats(labels.data(), image.data(),
-                                    local_noise.data(), 1, 0, nullptr, 1,
-                                    value.data(),
-                                    local_noise_max.data(),
-                                    peak_y.data(), peak_x.data(),
-                                    island_size.data(), stream),
+  REQUIRE_THROWS_AS(gpu_label_stats(labels, image, local_noise, 1, 0, nullptr, 1, value, local_noise_max, peak_y,
+                                    peak_x, island_size, stream.get()),
                     std::runtime_error);
-
-  REQUIRE_THROWS_WITH(gpu_label_stats(labels.data(), image.data(),
-                                      local_noise.data(), 1, 1,
-                                      count.data(), 1,
-                                      value.data(),
-                                      local_noise_max.data(),
-                                      peak_y.data(), peak_x.data(),
-                                      island_size.data(), stream),
+  REQUIRE_THROWS_WITH(gpu_label_stats(labels, image, local_noise, 1, 1, count, 1, value, local_noise_max, peak_y,
+                                      peak_x, island_size, stream.get()),
                       ContainsSubstring("exceeds capacity"));
-
-  gpuStreamDestroy(stream);
 }
