@@ -1,5 +1,5 @@
+#include <cassert>
 #include <limits>
-#include <stdexcept>
 
 #include "device_vector.hpp"
 #include "gpu_kernels.hpp"
@@ -92,14 +92,8 @@ __global__ void spectral_variance_moments_kernel(const float *cube, const bool *
 void gpu_mask_or(const bool *accept_mask, size_t n_pixels, long band_start, long band_stop, bool *out_mask, int *out_any,
                  GpuStream stream)
 {
-  if (band_start < 0 || band_start >= band_stop)
-  {
-    throw std::runtime_error("gpu_mask_or: invalid band");
-  }
-  if (n_pixels == 0)
-  {
-    throw std::runtime_error("gpu_mask_or: zero pixels");
-  }
+  assert(band_start >= 0 && band_start < band_stop);
+  assert(n_pixels > 0);
 
   CHECK_GPU(cudaMemsetAsync(out_any, 0, sizeof(int), stream));
   launch_per_element(mask_or_kernel, n_pixels, stream, accept_mask, n_pixels, band_start, band_stop, out_mask,
@@ -109,14 +103,8 @@ void gpu_mask_or(const bool *accept_mask, size_t n_pixels, long band_start, long
 void gpu_weighted_band_image(const float *cube, const float *weights, const float *mean_image, float *out_plane,
                              size_t n_pixels, long band_start, long band_stop, float inv_band_size, GpuStream stream)
 {
-  if (band_start < 0 || band_start >= band_stop)
-  {
-    throw std::runtime_error("gpu_weighted_band_image: invalid band");
-  }
-  if (n_pixels == 0)
-  {
-    throw std::runtime_error("gpu_weighted_band_image: zero pixels");
-  }
+  assert(band_start >= 0 && band_start < band_stop);
+  assert(n_pixels > 0);
   launch_per_element(weighted_band_image_kernel, n_pixels, stream, cube, weights, mean_image, out_plane, n_pixels,
                      band_start, band_stop, inv_band_size);
 }
@@ -124,10 +112,7 @@ void gpu_weighted_band_image(const float *cube, const float *weights, const floa
 void gpu_spectral_variance_moments(const float *cube, const bool *nonzero_channels, float *out_sum2, float *out_sum3,
                                    float *out_sum4, size_t n_pixels, int n_channels, GpuStream stream)
 {
-  if (n_pixels == 0)
-  {
-    throw std::runtime_error("gpu_spectral_variance_moments: zero pixels");
-  }
+  assert(n_pixels > 0);
   launch_per_element(spectral_variance_moments_kernel, n_pixels, stream, cube, nonzero_channels, out_sum2, out_sum3,
                      out_sum4, n_pixels, n_channels);
 }
@@ -135,22 +120,10 @@ void gpu_spectral_variance_moments(const float *cube, const bool *nonzero_channe
 void gpu_spectral_variance_stats_host(const float *cube, const bool *nonzero_channels, size_t n_y, size_t n_x,
                                       size_t n_channels, GpuSpectralVarianceHostResult &result, GpuStream stream)
 {
-  if (n_y == 0 || n_x == 0 || n_channels == 0)
-  {
-    throw std::runtime_error("gpu_spectral_variance_stats_host: zero dimension");
-  }
-  if (cube == nullptr || nonzero_channels == nullptr)
-  {
-    throw std::runtime_error("gpu_spectral_variance_stats_host: null input");
-  }
-  if (n_y > std::numeric_limits<size_t>::max() / n_x)
-  {
-    throw std::runtime_error("gpu_spectral_variance_stats_host: pixel count overflow");
-  }
-  if (n_channels > static_cast<size_t>(std::numeric_limits<int>::max()))
-  {
-    throw std::runtime_error("gpu_spectral_variance_stats_host: channel count exceeds int");
-  }
+  assert(n_y > 0 && n_x > 0 && n_channels > 0);
+  assert(cube != nullptr && nonzero_channels != nullptr);
+  assert(n_y <= std::numeric_limits<size_t>::max() / n_x);
+  assert(n_channels <= static_cast<size_t>(std::numeric_limits<int>::max()));
 
   const size_t n_pixels = n_y * n_x;
 

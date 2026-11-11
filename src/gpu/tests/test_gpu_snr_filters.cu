@@ -402,43 +402,6 @@ TEST_CASE("gpu_snr_and_filters returns the empty summary and zero histograms whe
   }
 }
 
-TEST_CASE("gpu_snr_and_filters rejects an empty plane, empty bins and missing histograms", "[gpu][snr_and_filters]")
-{
-  using Catch::Matchers::ContainsSubstring;
-  SnrFilterParams params = default_params();
-
-  DeviceVector<float> median_noise(1);
-  float *median_noise_ptr = median_noise.data();
-
-  CHECK_THROWS_WITH(
-      gpu_snr_and_filters(nullptr, nullptr, nullptr, nullptr, nullptr, 0, params, nullptr, nullptr, nullptr, nullptr,
-                          nullptr, nullptr, nullptr, nullptr),
-      ContainsSubstring("zero pixels"));
-
-  params.max_sigma_bin = 0;
-  CHECK_THROWS_WITH(
-      gpu_snr_and_filters(nullptr, nullptr, nullptr, nullptr, nullptr, n_pixels, params, nullptr, nullptr, nullptr,
-                          nullptr, nullptr, nullptr, nullptr, nullptr),
-      ContainsSubstring("max_sigma_bin must be positive"));
-
-  params = default_params();
-  CHECK_THROWS_WITH(
-      gpu_snr_and_filters(nullptr, nullptr, nullptr, nullptr, nullptr, n_pixels, params, nullptr, nullptr, nullptr,
-                          nullptr, nullptr, nullptr, nullptr, nullptr),
-      ContainsSubstring("median_noise must be non-null"));
-
-  CHECK_THROWS_WITH(
-      gpu_snr_and_filters(nullptr, nullptr, nullptr, nullptr, median_noise_ptr, n_pixels, params, nullptr, nullptr,
-                          nullptr, nullptr, nullptr, nullptr, nullptr, nullptr),
-      ContainsSubstring("histogram0 and histogram1 must be non-null"));
-
-  params.histogram_detail = 1;
-  CHECK_THROWS_WITH(
-      gpu_snr_and_filters(nullptr, nullptr, nullptr, nullptr, median_noise_ptr, n_pixels, params, nullptr, nullptr,
-                          nullptr, nullptr, nullptr, nullptr, nullptr, nullptr),
-      ContainsSubstring("histogram2 must be non-null"));
-}
-
 TEST_CASE("gpu_snr_and_filters covers the partial last block of a 1000-pixel plane", "[gpu][snr_and_filters]")
 {
   // 1000 pixels is 3 full 256-thread blocks plus a tail of 232.

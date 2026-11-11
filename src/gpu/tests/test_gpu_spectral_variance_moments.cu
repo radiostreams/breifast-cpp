@@ -1,6 +1,5 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
-#include <catch2/matchers/catch_matchers_string.hpp>
 #include <catch2/matchers/catch_matchers_vector.hpp>
 #include <cuda_runtime.h>
 
@@ -194,13 +193,6 @@ TEST_CASE("gpu_spectral_variance_moments leaves every sum at 0 when no channel i
   CHECK_THAT(sums.sum2, Equals(zeros));
   CHECK_THAT(sums.sum3, Equals(zeros));
   CHECK_THAT(sums.sum4, Equals(zeros));
-}
-
-TEST_CASE("gpu_spectral_variance_moments rejects an empty plane", "[gpu][spectral_variance_moments]")
-{
-  using Catch::Matchers::ContainsSubstring;
-  CHECK_THROWS_WITH(gpu_spectral_variance_moments(nullptr, nullptr, nullptr, nullptr, nullptr, 0, n_channels),
-                    ContainsSubstring("zero pixels"));
 }
 
 TEST_CASE("gpu_spectral_variance_moments covers the partial last block of a 1000-pixel plane",

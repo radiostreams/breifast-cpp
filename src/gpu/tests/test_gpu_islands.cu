@@ -3,7 +3,6 @@
 #include <cuda_runtime.h>
 
 #include <cstddef>
-#include <stdexcept>
 #include <vector>
 
 #include "gpu_band_workspace.cuh"
@@ -168,16 +167,4 @@ TEST_CASE("gpu_label_islands handles all-false and all-true masks", "[gpu][islan
 
   CHECK_THAT(run_label(std::vector<unsigned char>(6, 1), 2, 3, &count), Equals(std::vector<unsigned int>(6, 1)));
   CHECK(count == 1U);
-}
-
-TEST_CASE("gpu_label_islands rejects an empty plane", "[gpu][islands]")
-{
-  const Stream stream;
-  DeviceVector<bool> mask(1);
-  DeviceVector<unsigned int> labels(1);
-  DeviceVector<unsigned int> count(1);
-  LabelScratch scratch(1);
-
-  REQUIRE_THROWS_AS(gpu_label_islands(mask, 0, 1, labels, count, scratch, stream.get()), std::runtime_error);
-  REQUIRE_THROWS_AS(gpu_label_islands(mask, 1, 0, labels, count, scratch, stream.get()), std::runtime_error);
 }

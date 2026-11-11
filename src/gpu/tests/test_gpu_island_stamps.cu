@@ -9,7 +9,6 @@
 #include <cstdint>
 #include <limits>
 #include <numeric>
-#include <stdexcept>
 #include <vector>
 
 #include "gpu_kernels.hpp"
@@ -315,19 +314,6 @@ TEST_CASE("gpu_donut_median_abs covers a stamp larger than a block against a hos
   CHECK_THAT(out[1], WithinRel(host_lmad(odd_stamp, lmad_scale)));
 }
 
-TEST_CASE("gpu_donut_median_abs rejects zero stamps and zero stamp pixels", "[gpu][island_stamps]")
-{
-  const Stream stream;
-
-  DeviceVector<float> out(1);
-  const auto count = upload(std::vector<unsigned int>{1});
-  float *out_ptr = out.data();
-  const unsigned int *count_ptr = count.data();
-
-  REQUIRE_THROWS_AS(gpu_donut_median_abs(nullptr, nullptr, 0, 9, lmad_scale, out_ptr, stream.get()), std::runtime_error);
-  REQUIRE_THROWS_AS(gpu_donut_median_abs(nullptr, count_ptr, 1, 0, lmad_scale, out_ptr, stream.get()), std::runtime_error);
-}
-
 TEST_CASE("gpu_stamp_abs_extreme matches numpy's max(abs(min), abs(max)) on a seeded 5x5 stamp",
           "[gpu][island_stamps]")
 {
@@ -395,19 +381,6 @@ TEST_CASE("gpu_stamp_abs_extreme covers a stamp larger than a block against a ho
   const float expected = std::max(std::fabs(host_min), std::fabs(host_max));
 
   CHECK_THAT(run_abs_extreme(stamp), WithinRel(expected));
-}
-
-TEST_CASE("gpu_stamp_abs_extreme rejects zero stamps and zero stamp pixels", "[gpu][island_stamps]")
-{
-  const Stream stream;
-
-  DeviceVector<float> out(1);
-  const auto count = upload(std::vector<unsigned int>{1});
-  float *out_ptr = out.data();
-  const unsigned int *count_ptr = count.data();
-
-  REQUIRE_THROWS_AS(gpu_stamp_abs_extreme(nullptr, nullptr, 0, 9, out_ptr, stream.get()), std::runtime_error);
-  REQUIRE_THROWS_AS(gpu_stamp_abs_extreme(nullptr, count_ptr, 1, 0, out_ptr, stream.get()), std::runtime_error);
 }
 
 TEST_CASE("gpu_stamp_extract copies the window and zeros the inner box on a 7x7 plane", "[gpu][island_stamps]")
@@ -507,27 +480,6 @@ TEST_CASE("gpu_stamp_extract extracts each island's stamp independently", "[gpu]
   CHECK_THAT(std::vector<float>(stamps.begin() + 25, stamps.end()), Equals(expected1));
 }
 
-TEST_CASE("gpu_stamp_extract rejects zero stamps, an empty plane and negative sizes", "[gpu][island_stamps]")
-{
-  const Stream stream;
-
-  DeviceVector<long> centres(1);
-  DeviceVector<float> stamps(1);
-  const auto count = upload(std::vector<unsigned int>{1});
-  float *stamps_ptr = stamps.data();
-  const long *centres_ptr = centres.data();
-  const unsigned int *count_ptr = count.data();
-
-  REQUIRE_THROWS_AS(gpu_stamp_extract(nullptr, 6, 7, centres_ptr, centres_ptr, nullptr, 0, 2, 0, stamps_ptr, stream.get()),
-                    std::runtime_error);
-  REQUIRE_THROWS_AS(gpu_stamp_extract(nullptr, 0, 7, centres_ptr, centres_ptr, count_ptr, 1, 2, 0, stamps_ptr, stream.get()),
-                    std::runtime_error);
-  REQUIRE_THROWS_AS(gpu_stamp_extract(nullptr, 6, 7, centres_ptr, centres_ptr, count_ptr, 1, -1, 0, stamps_ptr, stream.get()),
-                    std::runtime_error);
-  REQUIRE_THROWS_AS(gpu_stamp_extract(nullptr, 6, 7, centres_ptr, centres_ptr, count_ptr, 1, 2, -1, stamps_ptr, stream.get()),
-                    std::runtime_error);
-}
-
 TEST_CASE("gpu_stamp_extract_no_zero copies the window without zeroing the centre", "[gpu][island_stamps]")
 {
   std::vector<float> plane(49);
@@ -564,30 +516,6 @@ TEST_CASE("gpu_stamp_extract_no_zero gathers single values at radius zero", "[gp
   const auto values =
       run_stamp_extract_no_zero(stamp_plane, stamp_plane_n_y, stamp_plane_n_x, {0L, 0L, 3L}, {0L, 2L, 3L}, 0);
   CHECK_THAT(values, Equals(std::vector<float>{100.F, 102.F, 133.F}));
-}
-
-TEST_CASE("gpu_stamp_extract_no_zero rejects zero stamps, an empty plane and negative radius",
-          "[gpu][island_stamps]")
-{
-  const Stream stream;
-
-  DeviceVector<long> centres(1);
-  DeviceVector<float> stamps(1);
-  float *stamps_ptr = stamps.data();
-  const long *centres_ptr = centres.data();
-
-  const auto count = upload(std::vector<unsigned int>{1});
-  const unsigned int *count_ptr = count.data();
-
-  REQUIRE_THROWS_AS(
-      gpu_stamp_extract_no_zero(nullptr, 6, 7, centres_ptr, centres_ptr, nullptr, 0, 2, stamps_ptr, stream.get()),
-      std::runtime_error);
-  REQUIRE_THROWS_AS(
-      gpu_stamp_extract_no_zero(nullptr, 0, 7, centres_ptr, centres_ptr, count_ptr, 1, 2, stamps_ptr, stream.get()),
-      std::runtime_error);
-  REQUIRE_THROWS_AS(
-      gpu_stamp_extract_no_zero(nullptr, 6, 7, centres_ptr, centres_ptr, count_ptr, 1, -1, stamps_ptr, stream.get()),
-      std::runtime_error);
 }
 
 TEST_CASE("gpu_donut_std matches numpy's population standard deviation on the seeded 9x9 stamp",
@@ -689,23 +617,4 @@ TEST_CASE("gpu_stamp_beam_chi2 is 0 for a perfect fit, an empty stamp and a zero
 
   // Radius 0: one pixel always fits itself.
   CHECK_THAT(run_beam_chi2(std::vector<float>{3.F}, std::vector<float>{0.5F}, 1.F), WithinRel(0.F));
-}
-
-TEST_CASE("gpu_stamp_beam_chi2 rejects zero stamps and zero stamp pixels", "[gpu][island_stamps]")
-{
-  const Stream stream;
-
-  DeviceVector<float> out(1);
-  DeviceVector<float> kernel(9);
-  DeviceVector<float> extreme(1);
-  const auto count = upload(std::vector<unsigned int>{1});
-  float *out_ptr = out.data();
-  const float *kernel_ptr = kernel.data();
-  const float *extreme_ptr = extreme.data();
-  const unsigned int *count_ptr = count.data();
-
-  REQUIRE_THROWS_AS(gpu_stamp_beam_chi2(nullptr, kernel_ptr, 1.F, nullptr, 0, 9, extreme_ptr, 1.F, out_ptr, stream.get()),
-                    std::runtime_error);
-  REQUIRE_THROWS_AS(gpu_stamp_beam_chi2(nullptr, kernel_ptr, 1.F, count_ptr, 1, 0, extreme_ptr, 1.F, out_ptr, stream.get()),
-                    std::runtime_error);
 }

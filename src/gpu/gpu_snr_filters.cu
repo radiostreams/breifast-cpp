@@ -1,3 +1,5 @@
+#include <cassert>
+
 #include "gpu_kernels.hpp"
 
 #include "gpu_device_utils.cuh"
@@ -101,34 +103,12 @@ void gpu_snr_and_filters(const float *plane, const float *noise_map, const float
                          unsigned long long *histogram0, unsigned long long *histogram1, unsigned long long *histogram2,
                          float *out_min_sigma, float *out_max_sigma, GpuStream stream)
 {
-  if (n_pixels == 0)
-  {
-    throw std::runtime_error("gpu_snr_and_filters: zero pixels");
-  }
-  if (params.max_sigma_bin <= 0)
-  {
-    throw std::runtime_error("gpu_snr_and_filters: max_sigma_bin must be positive");
-  }
-  if (median_noise == nullptr)
-  {
-    throw std::runtime_error("gpu_snr_and_filters: median_noise must be non-null");
-  }
+  assert(n_pixels > 0);
+  assert(params.max_sigma_bin > 0);
+  assert(median_noise != nullptr);
+  assert(params.histogram_detail <= 1 || (histogram0 != nullptr && histogram1 != nullptr));
+  assert(params.histogram_detail <= 0 || histogram2 != nullptr);
 
-  if (params.histogram_detail > 1)
-  {
-    if (histogram0 == nullptr || histogram1 == nullptr)
-    {
-      throw std::runtime_error(
-          "gpu_snr_and_filters: histogram0 and histogram1 must be non-null when histogram_detail > 1");
-    }
-  }
-  if (params.histogram_detail > 0)
-  {
-    if (histogram2 == nullptr)
-    {
-      throw std::runtime_error("gpu_snr_and_filters: histogram2 must be non-null when histogram_detail > 0");
-    }
-  }
   if (histogram0 != nullptr)
   {
     CHECK_GPU(cudaMemsetAsync(histogram0, 0, sizeof(unsigned long long) * 2 * params.max_sigma_bin, stream));

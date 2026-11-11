@@ -1,6 +1,5 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
-#include <catch2/matchers/catch_matchers_string.hpp>
 #include <catch2/matchers/catch_matchers_vector.hpp>
 #include <cuda_runtime.h>
 
@@ -205,13 +204,6 @@ TEST_CASE("gpu_combine_noise_map overwrites the stale values of out_noise_map", 
   const auto from_zero_constant = run_gpu_combine_noise_map_constant(selfnoise_offset, dde_noise);
   CHECK_THAT(from_nan_constant, Equals(from_zero_constant));
   CHECK_THAT(from_garbage_constant, Equals(from_zero_constant));
-}
-
-TEST_CASE("gpu_combine_noise_map rejects an empty plane", "[gpu][combine_noise_map]")
-{
-  using Catch::Matchers::ContainsSubstring;
-  CHECK_THROWS_WITH(gpu_combine_noise_map(nullptr, nullptr, nullptr, nullptr, selfnoise_scale, dde_scale, nullptr, 0),
-                    ContainsSubstring("zero pixels"));
 }
 
 TEST_CASE("gpu_combine_noise_map covers the partial last block of a 1000-pixel plane", "[gpu][combine_noise_map]")

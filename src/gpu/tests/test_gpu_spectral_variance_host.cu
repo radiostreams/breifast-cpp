@@ -4,7 +4,6 @@
 #include <cuda_runtime.h>
 
 #include <cstdint>
-#include <stdexcept>
 #include <vector>
 
 #include "gpu_kernels.hpp"
@@ -51,11 +50,4 @@ TEST_CASE("gpu_spectral_variance_stats_host copies moments and mask", "[gpu][spe
     CHECK(result.sum_pow4[i] == Approx(expected_sum4[i]));
   }
   CHECK_THAT(result.nonzero_channels_mask, Equals(std::vector<unsigned char>{1, 0, 1}));
-}
-
-TEST_CASE("gpu_spectral_variance_stats_host validates dimensions", "[gpu][spectral_variance]")
-{
-  GpuSpectralVarianceHostResult result;
-  CHECK_THROWS_AS(gpu_spectral_variance_stats_host(nullptr, nullptr, 0, 1, 1, result), std::runtime_error);
-  CHECK_THROWS_AS(gpu_spectral_variance_stats_host(nullptr, nullptr, 1, 1, 1, result), std::runtime_error);
 }

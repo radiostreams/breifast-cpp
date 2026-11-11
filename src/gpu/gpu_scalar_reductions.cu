@@ -1,3 +1,5 @@
+#include <cassert>
+
 #include "gpu_kernels.hpp"
 #include "gpu_runtime.hpp"
 
@@ -31,10 +33,7 @@ __global__ void any_true_kernel(const bool *values, const size_t n, int *out_any
 
 void gpu_any_true(const bool *values, const size_t n, int *out_any, GpuStream stream)
 {
-  if (n == 0)
-  {
-    throw std::runtime_error("gpu_any_true: empty array");
-  }
+  assert(n > 0);
 
   const dim3 block_size = {block_dim};
   const dim3 grid_size = {static_cast<unsigned int>((n + block_dim - 1) / block_dim)};

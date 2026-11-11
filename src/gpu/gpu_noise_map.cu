@@ -1,4 +1,4 @@
-#include <stdexcept>
+#include <cassert>
 
 #include "gpu_kernels.hpp"
 
@@ -111,10 +111,7 @@ __global__ void combine_noise_map_kernel(const float *rms, const float *base_noi
 void gpu_rms_noise_map(const float *plane, size_t n_y, size_t n_x, long boxsize, float *row_window_sums, float *out_rms,
                        GpuStream stream)
 {
-  if (n_y == 0 || n_x == 0)
-  {
-    throw std::runtime_error("gpu_rms_noise_map: n_y and n_x must be greater than 0");
-  }
+  assert(n_y > 0 && n_x > 0);
 
   // One thread per row for the horizontal pass, then one thread per column for the vertical pass.
   launch_per_element(window_rows_kernel, n_y, stream, plane, n_y, n_x, boxsize, row_window_sums);
@@ -125,10 +122,7 @@ void gpu_combine_noise_map(const float *rms, const float *base_noise, const floa
                            const float *dde_noise, const float selfnoise_scale, const float dde_scale,
                            float *out_noise_map, const size_t n_pixels, GpuStream stream)
 {
-  if (n_pixels == 0)
-  {
-    throw std::runtime_error("gpu_combine_noise_map: zero pixels");
-  }
+  assert(n_pixels > 0);
   launch_per_element(combine_noise_map_kernel, n_pixels, stream, rms, base_noise, selfnoise_offset, dde_noise,
                      selfnoise_scale, dde_scale, out_noise_map, n_pixels);
 }

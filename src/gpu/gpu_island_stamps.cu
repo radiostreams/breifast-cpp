@@ -1,5 +1,5 @@
+#include <cassert>
 #include <cfloat>
-#include <stdexcept>
 
 #include <cuda/std/functional>
 
@@ -271,18 +271,9 @@ __global__ void stamp_beam_chi2_kernel(const unsigned int *active_count, const f
 void gpu_donut_median_abs(const float *stamps, const unsigned int *active_count, unsigned int capacity,
                           size_t stamp_pixels, float scale, float *out_lmad, GpuStream stream)
 {
-  if (capacity == 0)
-  {
-    throw std::runtime_error{"gpu_donut_median_abs: no stamps to process"};
-  }
-  if (active_count == nullptr)
-  {
-    throw std::runtime_error{"gpu_donut_median_abs: active_count must be non-null"};
-  }
-  if (stamp_pixels == 0)
-  {
-    throw std::runtime_error{"gpu_donut_median_abs: empty stamps"};
-  }
+  assert(capacity > 0);
+  assert(active_count != nullptr);
+  assert(stamp_pixels > 0);
 
   launch_per_island(donut_median_abs_kernel, capacity, stream, active_count, stamps, stamp_pixels, scale, out_lmad);
 }
@@ -290,18 +281,9 @@ void gpu_donut_median_abs(const float *stamps, const unsigned int *active_count,
 void gpu_donut_std(const float *stamps, const unsigned int *active_count, unsigned int capacity, size_t stamp_pixels,
                    float *out_std, GpuStream stream)
 {
-  if (capacity == 0)
-  {
-    throw std::runtime_error{"gpu_donut_std: no stamps to process"};
-  }
-  if (active_count == nullptr)
-  {
-    throw std::runtime_error{"gpu_donut_std: active_count must be non-null"};
-  }
-  if (stamp_pixels == 0)
-  {
-    throw std::runtime_error{"gpu_donut_std: empty stamps"};
-  }
+  assert(capacity > 0);
+  assert(active_count != nullptr);
+  assert(stamp_pixels > 0);
 
   launch_per_island(donut_std_kernel, capacity, stream, active_count, stamps, stamp_pixels, out_std);
 }
@@ -309,18 +291,9 @@ void gpu_donut_std(const float *stamps, const unsigned int *active_count, unsign
 void gpu_stamp_abs_extreme(const float *stamps, const unsigned int *active_count, unsigned int capacity,
                            size_t stamp_pixels, float *out_extreme, GpuStream stream)
 {
-  if (capacity == 0)
-  {
-    throw std::runtime_error{"gpu_stamp_abs_extreme: no stamps to process"};
-  }
-  if (active_count == nullptr)
-  {
-    throw std::runtime_error{"gpu_stamp_abs_extreme: active_count must be non-null"};
-  }
-  if (stamp_pixels == 0)
-  {
-    throw std::runtime_error{"gpu_stamp_abs_extreme: empty stamps"};
-  }
+  assert(capacity > 0);
+  assert(active_count != nullptr);
+  assert(stamp_pixels > 0);
 
   launch_per_island(stamp_abs_extreme_kernel, capacity, stream, active_count, stamps, stamp_pixels, out_extreme);
 }
@@ -329,26 +302,11 @@ void gpu_stamp_extract(const float *plane, size_t n_y, size_t n_x, const long *c
                        const unsigned int *active_count, unsigned int capacity, long radius, long inner_boxsize,
                        float *stamps, GpuStream stream)
 {
-  if (capacity == 0)
-  {
-    throw std::runtime_error{"gpu_stamp_extract: no stamps to process"};
-  }
-  if (active_count == nullptr)
-  {
-    throw std::runtime_error{"gpu_stamp_extract: active_count must be non-null"};
-  }
-  if (n_y == 0 || n_x == 0)
-  {
-    throw std::runtime_error{"gpu_stamp_extract: empty plane"};
-  }
-  if (radius < 0)
-  {
-    throw std::runtime_error{"gpu_stamp_extract: negative radius"};
-  }
-  if (inner_boxsize < 0)
-  {
-    throw std::runtime_error{"gpu_stamp_extract: negative inner_boxsize"};
-  }
+  assert(capacity > 0);
+  assert(active_count != nullptr);
+  assert(n_y > 0 && n_x > 0);
+  assert(radius >= 0);
+  assert(inner_boxsize >= 0);
 
   const size_t side = static_cast<size_t>(2 * radius + 1);
   const size_t stamp_pixels = side * side;
@@ -360,22 +318,10 @@ void gpu_stamp_extract_no_zero(const float *plane, size_t n_y, size_t n_x, const
                               const unsigned int *active_count, unsigned int capacity, long radius, float *stamps,
                               GpuStream stream)
 {
-  if (capacity == 0)
-  {
-    throw std::runtime_error{"gpu_stamp_extract_no_zero: no stamps to process"};
-  }
-  if (active_count == nullptr)
-  {
-    throw std::runtime_error{"gpu_stamp_extract_no_zero: active_count must be non-null"};
-  }
-  if (n_y == 0 || n_x == 0)
-  {
-    throw std::runtime_error{"gpu_stamp_extract_no_zero: empty plane"};
-  }
-  if (radius < 0)
-  {
-    throw std::runtime_error{"gpu_stamp_extract_no_zero: negative radius"};
-  }
+  assert(capacity > 0);
+  assert(active_count != nullptr);
+  assert(n_y > 0 && n_x > 0);
+  assert(radius >= 0);
 
   const size_t side = static_cast<size_t>(2 * radius + 1);
   const size_t stamp_pixels = side * side;
@@ -387,18 +333,9 @@ void gpu_stamp_beam_chi2(const float *stamps, const float *kernel, const float k
                          const unsigned int *active_count, unsigned int capacity, size_t stamp_pixels,
                          const float *stamp_extreme, float inv_max_to_std_ratio, float *out_chi2, GpuStream stream)
 {
-  if (capacity == 0)
-  {
-    throw std::runtime_error{"gpu_stamp_beam_chi2: no stamps to process"};
-  }
-  if (active_count == nullptr)
-  {
-    throw std::runtime_error{"gpu_stamp_beam_chi2: active_count must be non-null"};
-  }
-  if (stamp_pixels == 0)
-  {
-    throw std::runtime_error{"gpu_stamp_beam_chi2: empty stamps"};
-  }
+  assert(capacity > 0);
+  assert(active_count != nullptr);
+  assert(stamp_pixels > 0);
 
   launch_per_island(stamp_beam_chi2_kernel, capacity, stream, active_count, stamps, kernel, kernel_sum,
                     stamp_extreme, inv_max_to_std_ratio, stamp_pixels, out_chi2);

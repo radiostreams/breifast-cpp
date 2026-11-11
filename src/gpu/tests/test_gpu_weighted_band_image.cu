@@ -1,6 +1,5 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
-#include <catch2/matchers/catch_matchers_string.hpp>
 #include <catch2/matchers/catch_matchers_vector.hpp>
 #include <cuda_runtime.h>
 
@@ -247,17 +246,4 @@ TEST_CASE("gpu_weighted_band_image covers a plane spanning many blocks", "[gpu][
 {
   // 70001 pixels is 273 blocks plus a tail.
   check_plane_matches_host(70001);
-}
-
-TEST_CASE("gpu_weighted_band_image rejects an invalid band or an empty plane", "[gpu][weighted_band_image]")
-{
-  using Catch::Matchers::ContainsSubstring;
-  CHECK_THROWS_WITH(gpu_weighted_band_image(nullptr, nullptr, nullptr, nullptr, 4, -1, 1, 0.5F),
-                    ContainsSubstring("invalid band"));
-  CHECK_THROWS_WITH(gpu_weighted_band_image(nullptr, nullptr, nullptr, nullptr, 4, 1, 1, 0.5F),
-                    ContainsSubstring("invalid band"));
-  CHECK_THROWS_WITH(gpu_weighted_band_image(nullptr, nullptr, nullptr, nullptr, 4, 2, 1, 0.5F),
-                    ContainsSubstring("invalid band"));
-  CHECK_THROWS_WITH(gpu_weighted_band_image(nullptr, nullptr, nullptr, nullptr, 0, 0, 1, 0.5F),
-                    ContainsSubstring("zero pixels"));
 }

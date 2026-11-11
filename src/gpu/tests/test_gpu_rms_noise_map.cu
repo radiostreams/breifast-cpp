@@ -1,6 +1,5 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
-#include <catch2/matchers/catch_matchers_string.hpp>
 #include <catch2/matchers/catch_matchers_vector.hpp>
 #include <cuda_runtime.h>
 
@@ -9,7 +8,6 @@
 #include <cstddef>
 #include <limits>
 #include <random>
-#include <stdexcept>
 #include <vector>
 
 #include "gpu_kernels.hpp"
@@ -169,19 +167,6 @@ TEST_CASE("gpu_rms_noise_map overwrites stale scratch and output buffers", "[gpu
 
   REQUIRE(out_rms.size() == n_pixels);
   CHECK_THAT(out_rms, Catch::Matchers::Approx(rms_reference).epsilon(1e-5));
-}
-
-TEST_CASE("gpu_rms_noise_map rejects a zero dimension", "[gpu][rms_noise_map]")
-{
-  DeviceVector<float> device_plane(1);
-  DeviceVector<float> device_rows(1);
-  DeviceVector<float> device_out(1);
-
-  const Stream stream;
-  REQUIRE_THROWS_AS(gpu_rms_noise_map(device_plane, 0, n_x, boxsize, device_rows, device_out, stream.get()),
-                    std::runtime_error);
-  REQUIRE_THROWS_AS(gpu_rms_noise_map(device_plane, n_y, 0, boxsize, device_rows, device_out, stream.get()),
-                    std::runtime_error);
 }
 
 TEST_CASE("gpu_rms_noise_map covers blocks in both dimensions on a large plane", "[gpu][rms_noise_map]")

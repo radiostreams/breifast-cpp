@@ -2,7 +2,6 @@
 #include <cuda_runtime.h>
 
 #include <cstddef>
-#include <stdexcept>
 #include <vector>
 
 #include "gpu_kernels.hpp"
@@ -67,11 +66,4 @@ TEST_CASE("gpu_any_true distinguishes an all-false mask from any single true", "
   std::vector<unsigned char> wide(n, 0);
   wide[n / 2] = 255;
   CHECK(run_any_true(wide) != 0);
-}
-
-TEST_CASE("gpu_any_true rejects an empty array", "[gpu][scalar_reductions]")
-{
-  const Stream stream;
-  DeviceVector<int> out(1);
-  REQUIRE_THROWS_AS(gpu_any_true(nullptr, 0, out, stream.get()), std::runtime_error);
 }

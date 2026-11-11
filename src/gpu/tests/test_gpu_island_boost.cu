@@ -151,12 +151,6 @@ TEST_CASE("gpu_island_boost with a label that has no pixel throws", "[gpu][islan
                     ContainsSubstring("no pixel carries the label"));
 }
 
-TEST_CASE("gpu_island_boost rejects an empty plane", "[gpu][island_boost]")
-{
-  using Catch::Matchers::ContainsSubstring;
-  CHECK_THROWS_WITH(run_boost({}, {}, 1, 1.F), ContainsSubstring("greater than 0"));
-}
-
 TEST_CASE("gpu_island_boost matches a host reference across many blocks", "[gpu][island_boost]")
 {
   constexpr size_t n_y = 1024;

@@ -1,12 +1,10 @@
 #include <catch2/catch_test_macros.hpp>
-#include <catch2/matchers/catch_matchers_string.hpp>
 #include <catch2/matchers/catch_matchers_vector.hpp>
 #include <cuda_runtime.h>
 
 #include <cmath>
 #include <cstddef>
 #include <limits>
-#include <stdexcept>
 #include <vector>
 
 #include "gpu_band_workspace.cuh"
@@ -187,32 +185,4 @@ TEST_CASE("gpu_label_stats matches a host reference across many blocks", "[gpu][
   CHECK_THAT(actual.peak_y, Equals(expected.peak_y));
   CHECK_THAT(actual.peak_x, Equals(expected.peak_x));
   CHECK_THAT(actual.island_size, Equals(expected.island_size));
-}
-
-TEST_CASE("gpu_label_stats rejects an empty plane and an undersized capacity", "[gpu][label_stats]")
-{
-  using Catch::Matchers::ContainsSubstring;
-  const Stream stream;
-
-  DeviceVector<unsigned int> labels(1);
-  DeviceVector<float> image(1);
-  DeviceVector<float> local_noise(1);
-  DeviceVector<float> value(1);
-  DeviceVector<float> local_noise_max(1);
-  DeviceVector<long> peak_y(1);
-  DeviceVector<long> peak_x(1);
-  DeviceVector<unsigned int> island_size(1);
-  const auto count = upload(std::vector<unsigned int>{2});
-  IslandScratch scratch;
-  scratch.ensure(1);
-
-  REQUIRE_THROWS_AS(gpu_label_stats(labels, image, local_noise, 0, 1, nullptr, 1, value, local_noise_max, peak_y,
-                                    peak_x, island_size, scratch, stream.get()),
-                    std::runtime_error);
-  REQUIRE_THROWS_AS(gpu_label_stats(labels, image, local_noise, 1, 0, nullptr, 1, value, local_noise_max, peak_y,
-                                    peak_x, island_size, scratch, stream.get()),
-                    std::runtime_error);
-  REQUIRE_THROWS_WITH(gpu_label_stats(labels, image, local_noise, 1, 1, count, 1, value, local_noise_max, peak_y,
-                                      peak_x, island_size, scratch, stream.get()),
-                      ContainsSubstring("exceeds capacity"));
 }

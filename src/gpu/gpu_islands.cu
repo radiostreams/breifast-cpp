@@ -1,8 +1,6 @@
 #include <cassert>
 #include <cfloat>
 #include <climits>
-#include <stdexcept>
-#include <string>
 
 #include <cooperative_groups.h>
 #include <cub/device/device_scan.cuh>
@@ -266,10 +264,7 @@ LabelScratch::LabelScratch(const std::size_t n_pixels) : root_ranks(n_pixels)
 void gpu_label_islands(const bool *const mask, const size_t n_y, const size_t n_x, unsigned int *const labels,
                        unsigned int *const out_count, LabelScratch &scratch, GpuStream stream)
 {
-  if (n_y == 0 || n_x == 0)
-  {
-    throw std::runtime_error("gpu_label_islands: n_y and n_x must be greater than 0");
-  }
+  assert(n_y > 0 && n_x > 0);
 
   const size_t n = n_y * n_x;
   assert(scratch.root_ranks.size() >= n);
@@ -290,18 +285,9 @@ void gpu_island_boost(const unsigned int *const labels_per_pixel, const float *c
                       const float *const flux_per_label, float *const boost, bool *const found,
                       IslandScratch &scratch, GpuStream stream)
 {
-  if (n_pixels == 0)
-  {
-    throw std::runtime_error("gpu_island_boost: n_pixels must be greater than 0");
-  }
-  if (active_count == nullptr)
-  {
-    throw std::runtime_error("gpu_island_boost: active_count must be non-null");
-  }
-  if (capacity == 0)
-  {
-    throw std::runtime_error("gpu_island_boost: capacity must be greater than 0");
-  }
+  assert(n_pixels > 0);
+  assert(active_count != nullptr);
+  assert(capacity > 0);
 
   assert(scratch.boost_keys.size() >= capacity + 1U);
   unsigned long long *const keys_ptr = scratch.boost_keys.data();
@@ -320,27 +306,14 @@ void gpu_label_stats(const unsigned int *const labels, const float *const image,
                      long *const peak_y, long *const peak_x, unsigned int *const island_size, IslandScratch &scratch,
                      GpuStream stream)
 {
-  if (n_pixels == 0)
-  {
-    throw std::runtime_error("gpu_label_stats: n_pixels must be greater than 0");
-  }
-  if (n_x == 0)
-  {
-    throw std::runtime_error("gpu_label_stats: n_x must be greater than 0");
-  }
-  if (active_count == nullptr)
-  {
-    throw std::runtime_error("gpu_label_stats: active_count must be non-null");
-  }
+  assert(n_pixels > 0);
+  assert(n_x > 0);
+  assert(active_count != nullptr);
 
   unsigned int host_count = 0;
   CHECK_GPU(cudaMemcpyAsync(&host_count, active_count, sizeof(unsigned int), cudaMemcpyDeviceToHost, stream));
   CHECK_GPU(cudaStreamSynchronize(stream));
-  if (host_count > capacity)
-  {
-    throw std::runtime_error("gpu_label_stats: active_count " + std::to_string(host_count) +
-                             " exceeds capacity " + std::to_string(capacity));
-  }
+  assert(host_count <= capacity);
   if (host_count == 0)
   {
     return;

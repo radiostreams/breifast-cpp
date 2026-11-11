@@ -172,12 +172,3 @@ TEST_CASE("gpu_mask_or covers a plane spanning many blocks", "[gpu][mask_or]")
   CHECK(result.any);
   CHECK_THAT(result.mask, Equals(expected));
 }
-
-TEST_CASE("gpu_mask_or rejects an invalid band or an empty plane", "[gpu][mask_or]")
-{
-  using Catch::Matchers::ContainsSubstring;
-  CHECK_THROWS_WITH(gpu_mask_or(nullptr, 4, -1, 1, nullptr, nullptr), ContainsSubstring("invalid band"));
-  CHECK_THROWS_WITH(gpu_mask_or(nullptr, 4, 1, 1, nullptr, nullptr), ContainsSubstring("invalid band"));
-  CHECK_THROWS_WITH(gpu_mask_or(nullptr, 4, 2, 1, nullptr, nullptr), ContainsSubstring("invalid band"));
-  CHECK_THROWS_WITH(gpu_mask_or(nullptr, 0, 0, 1, nullptr, nullptr), ContainsSubstring("zero pixels"));
-}
