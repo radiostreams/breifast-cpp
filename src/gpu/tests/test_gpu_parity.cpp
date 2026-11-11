@@ -2,10 +2,13 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <catch2/matchers/catch_matchers_vector.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <iomanip>
 #include <random>
+#include <sstream>
 #include <vector>
 #include <optional>
 
@@ -217,9 +220,51 @@ void check_close(const double actual, const double expected, const char *name)
   CHECK_THAT(actual, WithinAbs(expected, 1e-5) || WithinRel(expected, 1e-5));
 }
 
+/// The tolerance of check_close() as a predicate, for whole arrays.
+bool values_close(const double actual, const double expected)
+{
+  if (std::isnan(actual) && std::isnan(expected))
+  {
+    return true;
+  }
+  const double difference = std::abs(actual - expected);
+  return difference <= 1e-5 || difference <= 1e-5 * std::max(std::abs(actual), std::abs(expected));
+}
+
+/// One check for the first `n` elements of an array, reporting how many differ and the first difference, instead of
+/// one check per element: a mismatching variance-stats map would otherwise log every pixel.
+template <typename Values, typename Equal>
+void check_all(const Values &gpu, const Values &cpu, const std::size_t n, const char *name, const Equal &equal)
+{
+  std::size_t mismatches = 0;
+  std::size_t first = 0;
+  for (std::size_t i = 0; i < n; ++i)
+  {
+    if (!equal(gpu[i], cpu[i]))
+    {
+      if (mismatches == 0)
+      {
+        first = i;
+      }
+      ++mismatches;
+    }
+  }
+  std::ostringstream message;
+  message << name << ": " << mismatches << " of " << n << " differ";
+  if (mismatches > 0)
+  {
+    message << std::setprecision(10) << ", first at index " << first << ": gpu " << gpu[first] << ", cpu "
+            << cpu[first];
+  }
+  INFO(message.str());
+  CHECK(mismatches == 0);
+}
 
 void compare_plane_results(const ProcessPlaneResult &cpu, const ProcessPlaneResult &gpu)
 {
+  const auto exact = [](const auto &a, const auto &b) { return a == b; };
+  const auto approx = [](const double a, const double b) { return values_close(a, b); };
+
   CHECK(cpu.any_data == gpu.any_data);
   CHECK_THAT(gpu.histograms[0], Equals(cpu.histograms[0]));
   CHECK_THAT(gpu.histograms[1], Equals(cpu.histograms[1]));
@@ -234,39 +279,35 @@ void compare_plane_results(const ProcessPlaneResult &cpu, const ProcessPlaneResu
   }
 
   REQUIRE(cpu.median_noises.size() == gpu.median_noises.size());
-  for (std::size_t i = 0; i < cpu.median_noises.size(); ++i)
-  {
-    check_close(gpu.median_noises[i], cpu.median_noises[i], "median_noise");
-  }
+  check_all(gpu.median_noises, cpu.median_noises, cpu.median_noises.size(), "median_noise", approx);
 
   const auto &cpu_detections = cpu.detections;
   const auto &gpu_detections = gpu.detections;
   REQUIRE(cpu_detections.size() == gpu_detections.size());
-  for (std::size_t i = 0; i < cpu_detections.size(); ++i)
-  {
-    CHECK(gpu_detections.stokes_label()[i] == cpu_detections.stokes_label()[i]);
-    CHECK(gpu_detections.band_label()[i] == cpu_detections.band_label()[i]);
-    CHECK(gpu_detections.peak_y()[i] == cpu_detections.peak_y()[i]);
-    CHECK(gpu_detections.peak_x()[i] == cpu_detections.peak_x()[i]);
-    CHECK(gpu_detections.island_size()[i] == cpu_detections.island_size()[i]);
-    check_close(gpu_detections.flux()[i], cpu_detections.flux()[i], "flux");
-    check_close(gpu_detections.local_noise()[i], cpu_detections.local_noise()[i], "local_noise");
-    check_close(gpu_detections.local_noise_median_ratio()[i], cpu_detections.local_noise_median_ratio()[i],
-                "local_noise_median_ratio");
-    check_close(gpu_detections.signal_to_noise()[i], cpu_detections.signal_to_noise()[i], "signal_to_noise");
-    check_close(gpu_detections.signal_to_noise_rms()[i], cpu_detections.signal_to_noise_rms()[i],
-                "signal_to_noise_rms");
-    check_close(gpu_detections.signal_to_noise_extended_box()[i], cpu_detections.signal_to_noise_extended_box()[i],
-                "signal_to_noise_extended_box");
-    check_close(gpu_detections.signal_to_noise_local_mad()[i], cpu_detections.signal_to_noise_local_mad()[i],
-                "signal_to_noise_local_mad");
-    check_close(gpu_detections.signal_to_noise_global_mad()[i], cpu_detections.signal_to_noise_global_mad()[i],
-                "signal_to_noise_global_mad");
-    check_close(gpu_detections.self_noise()[i], cpu_detections.self_noise()[i], "self_noise");
-    check_close(gpu_detections.excess_noise_factor()[i], cpu_detections.excess_noise_factor()[i], "excess_noise_factor");
-    check_close(gpu_detections.beam_chi2()[i], cpu_detections.beam_chi2()[i], "beam_chi2");
-    check_close(gpu_detections.boost()[i], cpu_detections.boost()[i], "boost");
-  }
+  const std::size_t n = cpu_detections.size();
+  check_all(gpu_detections.stokes_label(), cpu_detections.stokes_label(), n, "stokes_label", exact);
+  check_all(gpu_detections.band_label(), cpu_detections.band_label(), n, "band_label", exact);
+  check_all(gpu_detections.peak_y(), cpu_detections.peak_y(), n, "peak_y", exact);
+  check_all(gpu_detections.peak_x(), cpu_detections.peak_x(), n, "peak_x", exact);
+  check_all(gpu_detections.island_size(), cpu_detections.island_size(), n, "island_size", exact);
+  check_all(gpu_detections.flux(), cpu_detections.flux(), n, "flux", approx);
+  check_all(gpu_detections.local_noise(), cpu_detections.local_noise(), n, "local_noise", approx);
+  check_all(gpu_detections.local_noise_median_ratio(), cpu_detections.local_noise_median_ratio(), n,
+            "local_noise_median_ratio", approx);
+  check_all(gpu_detections.signal_to_noise(), cpu_detections.signal_to_noise(), n, "signal_to_noise", approx);
+  check_all(gpu_detections.signal_to_noise_rms(), cpu_detections.signal_to_noise_rms(), n, "signal_to_noise_rms",
+            approx);
+  check_all(gpu_detections.signal_to_noise_extended_box(), cpu_detections.signal_to_noise_extended_box(), n,
+            "signal_to_noise_extended_box", approx);
+  check_all(gpu_detections.signal_to_noise_local_mad(), cpu_detections.signal_to_noise_local_mad(), n,
+            "signal_to_noise_local_mad", approx);
+  check_all(gpu_detections.signal_to_noise_global_mad(), cpu_detections.signal_to_noise_global_mad(), n,
+            "signal_to_noise_global_mad", approx);
+  check_all(gpu_detections.self_noise(), cpu_detections.self_noise(), n, "self_noise", approx);
+  check_all(gpu_detections.excess_noise_factor(), cpu_detections.excess_noise_factor(), n, "excess_noise_factor",
+            approx);
+  check_all(gpu_detections.beam_chi2(), cpu_detections.beam_chi2(), n, "beam_chi2", approx);
+  check_all(gpu_detections.boost(), cpu_detections.boost(), n, "boost", approx);
 
   REQUIRE(cpu.variance_stats.has_value() == gpu.variance_stats.has_value());
   if (cpu.variance_stats.has_value())
@@ -274,17 +315,13 @@ void compare_plane_results(const ProcessPlaneResult &cpu, const ProcessPlaneResu
     const auto &cpu_variance = *cpu.variance_stats;
     const auto &gpu_variance = *gpu.variance_stats;
     REQUIRE(cpu_variance.sum_pow2.shape() == gpu_variance.sum_pow2.shape());
-    for (std::size_t i = 0; i < cpu_variance.sum_pow2.size(); ++i)
-    {
-      check_close(gpu_variance.sum_pow2.data()[i], cpu_variance.sum_pow2.data()[i], "sum_pow2");
-      check_close(gpu_variance.sum_pow3.data()[i], cpu_variance.sum_pow3.data()[i], "sum_pow3");
-      check_close(gpu_variance.sum_pow4.data()[i], cpu_variance.sum_pow4.data()[i], "sum_pow4");
-    }
+    const std::size_t n_pixels = cpu_variance.sum_pow2.size();
+    check_all(gpu_variance.sum_pow2.data(), cpu_variance.sum_pow2.data(), n_pixels, "sum_pow2", approx);
+    check_all(gpu_variance.sum_pow3.data(), cpu_variance.sum_pow3.data(), n_pixels, "sum_pow3", approx);
+    check_all(gpu_variance.sum_pow4.data(), cpu_variance.sum_pow4.data(), n_pixels, "sum_pow4", approx);
     REQUIRE(cpu_variance.nonzero_channels_mask.shape() == gpu_variance.nonzero_channels_mask.shape());
-    for (std::size_t i = 0; i < cpu_variance.nonzero_channels_mask.size(); ++i)
-    {
-      CHECK(gpu_variance.nonzero_channels_mask.data()[i] == cpu_variance.nonzero_channels_mask.data()[i]);
-    }
+    check_all(gpu_variance.nonzero_channels_mask.data(), cpu_variance.nonzero_channels_mask.data(),
+              cpu_variance.nonzero_channels_mask.size(), "nonzero_channels_mask", exact);
   }
 }
 /// Runs the CPU and GPU on copies of the fixture's item, compares the results and returns the CPU one.
