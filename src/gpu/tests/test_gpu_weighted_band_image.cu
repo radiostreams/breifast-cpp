@@ -102,30 +102,30 @@ std::vector<float> run_gpu_weighted_band_image(const std::vector<float> &cube_va
   DeviceVector<float> device_out(n_plane_pixels);
   DeviceVector<float> device_mean(subtract_mean ? mean_values.size() : 0);
 
-  float *const cube_ptr = thrust::raw_pointer_cast(device_cube.data());
-  float *const weights_ptr = thrust::raw_pointer_cast(device_weights.data());
-  float *const out_ptr = thrust::raw_pointer_cast(device_out.data());
-  float *const mean_ptr = subtract_mean ? thrust::raw_pointer_cast(device_mean.data()) : nullptr;
+  float *const cube_ptr = device_cube.data();
+  float *const weights_ptr = device_weights.data();
+  float *const out_ptr = device_out.data();
+  float *const mean_ptr = subtract_mean ? device_mean.data() : nullptr;
 
   cudaStream_t stream{};
   gpuStreamCreate(&stream);
 
-  gpuMemcpyHostToDeviceAsync(cube_ptr, thrust::raw_pointer_cast(host_cube.data()),
+  gpuMemcpyHostToDeviceAsync(cube_ptr, host_cube.data(),
                              cube_values.size() * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(weights_ptr, thrust::raw_pointer_cast(host_weights.data()),
+  gpuMemcpyHostToDeviceAsync(weights_ptr, host_weights.data(),
                              weights_values.size() * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(out_ptr, thrust::raw_pointer_cast(host_out.data()), n_plane_pixels * sizeof(float),
+  gpuMemcpyHostToDeviceAsync(out_ptr, host_out.data(), n_plane_pixels * sizeof(float),
                              stream);
   if (subtract_mean)
   {
-    gpuMemcpyHostToDeviceAsync(mean_ptr, thrust::raw_pointer_cast(host_mean.data()),
+    gpuMemcpyHostToDeviceAsync(mean_ptr, host_mean.data(),
                                mean_values.size() * sizeof(float), stream);
   }
 
   gpu_weighted_band_image(cube_ptr, weights_ptr, mean_ptr, out_ptr, n_plane_pixels, band_start, band_stop,
                           1.F / static_cast<float>(band_stop - band_start), stream);
 
-  gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_out.data()), out_ptr, n_plane_pixels * sizeof(float),
+  gpuMemcpyDeviceToHostAsync(host_out.data(), out_ptr, n_plane_pixels * sizeof(float),
                              stream);
   gpuStreamSynchronize(stream);
   gpuStreamDestroy(stream);

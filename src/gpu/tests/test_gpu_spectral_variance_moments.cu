@@ -81,28 +81,28 @@ Sums run_gpu_spectral_variance_moments(const std::vector<float> &cube_values, co
   cudaStream_t stream{};
   gpuStreamCreate(&stream);
 
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_cube.data()), thrust::raw_pointer_cast(host_cube.data()),
+  gpuMemcpyHostToDeviceAsync(device_cube.data(), host_cube.data(),
                              cube_values.size() * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_flags.data()), thrust::raw_pointer_cast(host_flags.data()),
+  gpuMemcpyHostToDeviceAsync(device_flags.data(), host_flags.data(),
                              flags.size(), stream);
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_sum2.data()), thrust::raw_pointer_cast(host_sum2.data()),
+  gpuMemcpyHostToDeviceAsync(device_sum2.data(), host_sum2.data(),
                              n_plane_pixels * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_sum3.data()), thrust::raw_pointer_cast(host_sum3.data()),
+  gpuMemcpyHostToDeviceAsync(device_sum3.data(), host_sum3.data(),
                              n_plane_pixels * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_sum4.data()), thrust::raw_pointer_cast(host_sum4.data()),
+  gpuMemcpyHostToDeviceAsync(device_sum4.data(), host_sum4.data(),
                              n_plane_pixels * sizeof(float), stream);
 
   gpu_spectral_variance_moments(
-      thrust::raw_pointer_cast(device_cube.data()),
-      reinterpret_cast<const bool *>(thrust::raw_pointer_cast(device_flags.data())),
-      thrust::raw_pointer_cast(device_sum2.data()), thrust::raw_pointer_cast(device_sum3.data()),
-      thrust::raw_pointer_cast(device_sum4.data()), n_plane_pixels, static_cast<int>(n_plane_channels), stream);
+      device_cube.data(),
+      reinterpret_cast<const bool *>(device_flags.data()),
+      device_sum2.data(), device_sum3.data(),
+      device_sum4.data(), n_plane_pixels, static_cast<int>(n_plane_channels), stream);
 
-  gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_sum2.data()), thrust::raw_pointer_cast(device_sum2.data()),
+  gpuMemcpyDeviceToHostAsync(host_sum2.data(), device_sum2.data(),
                              n_plane_pixels * sizeof(float), stream);
-  gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_sum3.data()), thrust::raw_pointer_cast(device_sum3.data()),
+  gpuMemcpyDeviceToHostAsync(host_sum3.data(), device_sum3.data(),
                              n_plane_pixels * sizeof(float), stream);
-  gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_sum4.data()), thrust::raw_pointer_cast(device_sum4.data()),
+  gpuMemcpyDeviceToHostAsync(host_sum4.data(), device_sum4.data(),
                              n_plane_pixels * sizeof(float), stream);
   gpuStreamSynchronize(stream);
   gpuStreamDestroy(stream);

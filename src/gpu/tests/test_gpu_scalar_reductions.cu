@@ -29,15 +29,15 @@ int run_any_true(const std::vector<unsigned char> &values)
 
   if (n > 0)
   {
-    gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_values.data()), thrust::raw_pointer_cast(host_values.data()),
+    gpuMemcpyHostToDeviceAsync(device_values.data(), host_values.data(),
                                n * sizeof(unsigned char), stream);
   }
 
-  const bool *mask = reinterpret_cast<const bool *>(thrust::raw_pointer_cast(device_values.data()));
-  gpu_any_true(mask, n, thrust::raw_pointer_cast(device_out.data()), stream);
+  const bool *mask = reinterpret_cast<const bool *>(device_values.data());
+  gpu_any_true(mask, n, device_out.data(), stream);
 
   int result = -1;
-  gpuMemcpyDeviceToHostAsync(&result, thrust::raw_pointer_cast(device_out.data()), sizeof(int), stream);
+  gpuMemcpyDeviceToHostAsync(&result, device_out.data(), sizeof(int), stream);
   gpuStreamSynchronize(stream);
   gpuStreamDestroy(stream);
   return result;
@@ -91,7 +91,7 @@ TEST_CASE("gpu_any_true rejects an empty array", "[gpu][scalar_reductions]")
   gpuStreamCreate(&stream);
 
   DeviceVector<int> out(1);
-  int *out_ptr = thrust::raw_pointer_cast(out.data());
+  int *out_ptr = out.data();
 
   REQUIRE_THROWS_AS(gpu_any_true(nullptr, 0, out_ptr, stream), std::runtime_error);
 

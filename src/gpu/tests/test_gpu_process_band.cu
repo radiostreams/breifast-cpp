@@ -130,8 +130,8 @@ float copy_scalar(const float *value, GpuStream stream)
 void set_accept_mask(Fixture &fixture, const std::vector<uint8_t> &mask)
 {
   std::vector<uint8_t> host_mask(mask.begin(), mask.end());
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(fixture.accept_mask.data()),
-                             thrust::raw_pointer_cast(host_mask.data()), mask.size(), fixture.stream);
+  gpuMemcpyHostToDeviceAsync(fixture.accept_mask.data(),
+                             host_mask.data(), mask.size(), fixture.stream);
   gpuStreamSynchronize(fixture.stream);
 }
 } // namespace
@@ -161,7 +161,7 @@ TEST_CASE("gpu_process_band runs the RMS noise stage and reports no detections",
   CHECK_THAT(copy_scalar(fixture.result.global_mad, fixture.stream), WithinRel(1.4826F, 1e-6));
 
   std::vector<unsigned long long> histogram(Fixture::histogram_bins, 1ULL);
-  gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(histogram.data()), fixture.result.histogram0,
+  gpuMemcpyDeviceToHostAsync(histogram.data(), fixture.result.histogram0,
                              Fixture::histogram_bins * sizeof(unsigned long long), fixture.stream);
   gpuStreamSynchronize(fixture.stream);
   for (const auto bin : histogram)

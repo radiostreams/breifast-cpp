@@ -162,64 +162,64 @@ Outputs run_gpu_snr_and_filters(const std::vector<float> &plane_values, const st
   cudaStream_t stream{};
   gpuStreamCreate(&stream);
 
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_plane.data()), thrust::raw_pointer_cast(host_plane.data()),
+  gpuMemcpyHostToDeviceAsync(device_plane.data(), host_plane.data(),
                              n * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_noise.data()), thrust::raw_pointer_cast(host_noise.data()),
+  gpuMemcpyHostToDeviceAsync(device_noise.data(), host_noise.data(),
                              n * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_out.data()), thrust::raw_pointer_cast(host_out.data()),
+  gpuMemcpyHostToDeviceAsync(device_out.data(), host_out.data(),
                              n * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_median_noise.data()),
-                             thrust::raw_pointer_cast(host_median_noise.data()), sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_mask.data()), thrust::raw_pointer_cast(host_mask.data()), n,
+  gpuMemcpyHostToDeviceAsync(device_median_noise.data(),
+                             host_median_noise.data(), sizeof(float), stream);
+  gpuMemcpyHostToDeviceAsync(device_mask.data(), host_mask.data(), n,
                              stream);
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_histogram0.data()),
-                             thrust::raw_pointer_cast(host_histogram0.data()), n_bins * sizeof(unsigned long long),
+  gpuMemcpyHostToDeviceAsync(device_histogram0.data(),
+                             host_histogram0.data(), n_bins * sizeof(unsigned long long),
                              stream);
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_histogram1.data()),
-                             thrust::raw_pointer_cast(host_histogram1.data()), n_bins * sizeof(unsigned long long),
+  gpuMemcpyHostToDeviceAsync(device_histogram1.data(),
+                             host_histogram1.data(), n_bins * sizeof(unsigned long long),
                              stream);
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_histogram2.data()),
-                             thrust::raw_pointer_cast(host_histogram2.data()), n_bins * sizeof(unsigned long long),
+  gpuMemcpyHostToDeviceAsync(device_histogram2.data(),
+                             host_histogram2.data(), n_bins * sizeof(unsigned long long),
                              stream);
   if (snr_cutoff_enabled)
   {
-    gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_snr_cutoff.data()),
-                               thrust::raw_pointer_cast(host_snr_cutoff.data()),
+    gpuMemcpyHostToDeviceAsync(device_snr_cutoff.data(),
+                               host_snr_cutoff.data(),
                                snr_cutoff_values.size() * sizeof(float), stream);
   }
   if (flux_cutoff_enabled)
   {
-    gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_flux_cutoff.data()),
-                               thrust::raw_pointer_cast(host_flux_cutoff.data()),
+    gpuMemcpyHostToDeviceAsync(device_flux_cutoff.data(),
+                               host_flux_cutoff.data(),
                                flux_cutoff_values.size() * sizeof(float), stream);
   }
 
   gpu_snr_and_filters(
-      thrust::raw_pointer_cast(device_plane.data()), thrust::raw_pointer_cast(device_noise.data()),
-      snr_cutoff_enabled ? thrust::raw_pointer_cast(device_snr_cutoff.data()) : nullptr,
-      flux_cutoff_enabled ? thrust::raw_pointer_cast(device_flux_cutoff.data()) : nullptr,
-      thrust::raw_pointer_cast(device_median_noise.data()), n, params,
-      thrust::raw_pointer_cast(device_out.data()), reinterpret_cast<bool *>(thrust::raw_pointer_cast(device_mask.data())),
-      thrust::raw_pointer_cast(device_histogram0.data()), thrust::raw_pointer_cast(device_histogram1.data()),
-      thrust::raw_pointer_cast(device_histogram2.data()), thrust::raw_pointer_cast(device_min.data()),
-      thrust::raw_pointer_cast(device_max.data()), stream);
+      device_plane.data(), device_noise.data(),
+      snr_cutoff_enabled ? device_snr_cutoff.data() : nullptr,
+      flux_cutoff_enabled ? device_flux_cutoff.data() : nullptr,
+      device_median_noise.data(), n, params,
+      device_out.data(), reinterpret_cast<bool *>(device_mask.data()),
+      device_histogram0.data(), device_histogram1.data(),
+      device_histogram2.data(), device_min.data(),
+      device_max.data(), stream);
 
-  gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_out.data()), thrust::raw_pointer_cast(device_out.data()),
+  gpuMemcpyDeviceToHostAsync(host_out.data(), device_out.data(),
                              n * sizeof(float), stream);
-  gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_mask.data()), thrust::raw_pointer_cast(device_mask.data()), n,
+  gpuMemcpyDeviceToHostAsync(host_mask.data(), device_mask.data(), n,
                              stream);
-  gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_histogram0.data()),
-                             thrust::raw_pointer_cast(device_histogram0.data()), n_bins * sizeof(unsigned long long),
+  gpuMemcpyDeviceToHostAsync(host_histogram0.data(),
+                             device_histogram0.data(), n_bins * sizeof(unsigned long long),
                              stream);
-  gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_histogram1.data()),
-                             thrust::raw_pointer_cast(device_histogram1.data()), n_bins * sizeof(unsigned long long),
+  gpuMemcpyDeviceToHostAsync(host_histogram1.data(),
+                             device_histogram1.data(), n_bins * sizeof(unsigned long long),
                              stream);
-  gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_histogram2.data()),
-                             thrust::raw_pointer_cast(device_histogram2.data()), n_bins * sizeof(unsigned long long),
+  gpuMemcpyDeviceToHostAsync(host_histogram2.data(),
+                             device_histogram2.data(), n_bins * sizeof(unsigned long long),
                              stream);
-  gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_min.data()), thrust::raw_pointer_cast(device_min.data()),
+  gpuMemcpyDeviceToHostAsync(host_min.data(), device_min.data(),
                              sizeof(float), stream);
-  gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_max.data()), thrust::raw_pointer_cast(device_max.data()),
+  gpuMemcpyDeviceToHostAsync(host_max.data(), device_max.data(),
                              sizeof(float), stream);
 
   gpuStreamSynchronize(stream);
@@ -478,7 +478,7 @@ TEST_CASE("gpu_snr_and_filters rejects an empty plane, empty bins and missing hi
   SnrFilterParams params = default_params();
 
   DeviceVector<float> median_noise(1);
-  float *median_noise_ptr = thrust::raw_pointer_cast(median_noise.data());
+  float *median_noise_ptr = median_noise.data();
 
   CHECK_THROWS_WITH(
       gpu_snr_and_filters(nullptr, nullptr, nullptr, nullptr, nullptr, 0, params, nullptr, nullptr, nullptr, nullptr,

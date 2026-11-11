@@ -34,8 +34,8 @@ TEST_CASE("gpu_spectral_variance_stats_host copies moments and mask", "[gpu][spe
   DeviceVector<std::uint8_t> mask(mask_host.begin(), mask_host.end());
 
   GpuSpectralVarianceHostResult result;
-  gpu_spectral_variance_stats_host(thrust::raw_pointer_cast(cube.data()),
-                                   reinterpret_cast<const bool *>(thrust::raw_pointer_cast(mask.data())), n_y, n_x,
+  gpu_spectral_variance_stats_host(cube.data(),
+                                   reinterpret_cast<const bool *>(mask.data()), n_y, n_x,
                                    n_channels, result);
 
   REQUIRE(result.sum_pow2.size() == n_pixels);

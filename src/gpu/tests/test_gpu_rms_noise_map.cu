@@ -68,17 +68,17 @@ std::vector<float> run_gpu_rms_noise_map(const std::vector<float> &plane_values,
   cudaStream_t stream{};
   gpuStreamCreate(&stream);
 
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_plane.data()), thrust::raw_pointer_cast(host_plane.data()),
+  gpuMemcpyHostToDeviceAsync(device_plane.data(), host_plane.data(),
                              n_plane_pixels * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_rows.data()), thrust::raw_pointer_cast(host_rows.data()),
+  gpuMemcpyHostToDeviceAsync(device_rows.data(), host_rows.data(),
                              n_plane_pixels * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_out.data()), thrust::raw_pointer_cast(host_out.data()),
+  gpuMemcpyHostToDeviceAsync(device_out.data(), host_out.data(),
                              n_plane_pixels * sizeof(float), stream);
 
-  gpu_rms_noise_map(thrust::raw_pointer_cast(device_plane.data()), n_rows, n_cols, box,
-                    thrust::raw_pointer_cast(device_rows.data()), thrust::raw_pointer_cast(device_out.data()), stream);
+  gpu_rms_noise_map(device_plane.data(), n_rows, n_cols, box,
+                    device_rows.data(), device_out.data(), stream);
 
-  gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_out.data()), thrust::raw_pointer_cast(device_out.data()),
+  gpuMemcpyDeviceToHostAsync(host_out.data(), device_out.data(),
                              n_plane_pixels * sizeof(float), stream);
   gpuStreamSynchronize(stream);
   gpuStreamDestroy(stream);
@@ -198,13 +198,13 @@ TEST_CASE("gpu_rms_noise_map rejects a zero dimension", "[gpu][rms_noise_map]")
   cudaStream_t stream{};
   gpuStreamCreate(&stream);
 
-  REQUIRE_THROWS_AS(gpu_rms_noise_map(thrust::raw_pointer_cast(device_plane.data()), 0, n_x, boxsize,
-                                      thrust::raw_pointer_cast(device_rows.data()),
-                                      thrust::raw_pointer_cast(device_out.data()), stream),
+  REQUIRE_THROWS_AS(gpu_rms_noise_map(device_plane.data(), 0, n_x, boxsize,
+                                      device_rows.data(),
+                                      device_out.data(), stream),
                     std::runtime_error);
-  REQUIRE_THROWS_AS(gpu_rms_noise_map(thrust::raw_pointer_cast(device_plane.data()), n_y, 0, boxsize,
-                                      thrust::raw_pointer_cast(device_rows.data()),
-                                      thrust::raw_pointer_cast(device_out.data()), stream),
+  REQUIRE_THROWS_AS(gpu_rms_noise_map(device_plane.data(), n_y, 0, boxsize,
+                                      device_rows.data(),
+                                      device_out.data(), stream),
                     std::runtime_error);
 
   gpuStreamDestroy(stream);

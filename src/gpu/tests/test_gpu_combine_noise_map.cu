@@ -71,22 +71,22 @@ std::vector<float> run_gpu_combine_noise_map_rms(const std::vector<float> &rms_v
   cudaStream_t stream{};
   gpuStreamCreate(&stream);
 
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_rms.data()), thrust::raw_pointer_cast(host_rms.data()),
+  gpuMemcpyHostToDeviceAsync(device_rms.data(), host_rms.data(),
                              n_plane_pixels * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_selfnoise.data()),
-                             thrust::raw_pointer_cast(host_selfnoise.data()), n_plane_pixels * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_dde.data()), thrust::raw_pointer_cast(host_dde.data()),
+  gpuMemcpyHostToDeviceAsync(device_selfnoise.data(),
+                             host_selfnoise.data(), n_plane_pixels * sizeof(float), stream);
+  gpuMemcpyHostToDeviceAsync(device_dde.data(), host_dde.data(),
                              n_plane_pixels * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_out.data()), thrust::raw_pointer_cast(host_out.data()),
+  gpuMemcpyHostToDeviceAsync(device_out.data(), host_out.data(),
                              n_plane_pixels * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_floor.data()), &floor, sizeof(float), stream);
+  gpuMemcpyHostToDeviceAsync(device_floor.data(), &floor, sizeof(float), stream);
 
-  gpu_combine_noise_map(thrust::raw_pointer_cast(device_rms.data()), thrust::raw_pointer_cast(device_floor.data()),
-                        thrust::raw_pointer_cast(device_selfnoise.data()), thrust::raw_pointer_cast(device_dde.data()),
-                        selfnoise_scale, dde_scale, thrust::raw_pointer_cast(device_out.data()), n_plane_pixels,
+  gpu_combine_noise_map(device_rms.data(), device_floor.data(),
+                        device_selfnoise.data(), device_dde.data(),
+                        selfnoise_scale, dde_scale, device_out.data(), n_plane_pixels,
                         stream);
 
-  gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_out.data()), thrust::raw_pointer_cast(device_out.data()),
+  gpuMemcpyDeviceToHostAsync(host_out.data(), device_out.data(),
                              n_plane_pixels * sizeof(float), stream);
   gpuStreamSynchronize(stream);
   gpuStreamDestroy(stream);
@@ -112,20 +112,20 @@ std::vector<float> run_gpu_combine_noise_map_constant(const std::vector<float> &
   cudaStream_t stream{};
   gpuStreamCreate(&stream);
 
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_selfnoise.data()),
-                             thrust::raw_pointer_cast(host_selfnoise.data()), n_plane_pixels * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_dde.data()), thrust::raw_pointer_cast(host_dde.data()),
+  gpuMemcpyHostToDeviceAsync(device_selfnoise.data(),
+                             host_selfnoise.data(), n_plane_pixels * sizeof(float), stream);
+  gpuMemcpyHostToDeviceAsync(device_dde.data(), host_dde.data(),
                              n_plane_pixels * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_out.data()), thrust::raw_pointer_cast(host_out.data()),
+  gpuMemcpyHostToDeviceAsync(device_out.data(), host_out.data(),
                              n_plane_pixels * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_base_noise.data()), &base_noise, sizeof(float), stream);
+  gpuMemcpyHostToDeviceAsync(device_base_noise.data(), &base_noise, sizeof(float), stream);
 
-  gpu_combine_noise_map(nullptr, thrust::raw_pointer_cast(device_base_noise.data()),
-                        thrust::raw_pointer_cast(device_selfnoise.data()), thrust::raw_pointer_cast(device_dde.data()),
-                        selfnoise_scale, dde_scale, thrust::raw_pointer_cast(device_out.data()), n_plane_pixels,
+  gpu_combine_noise_map(nullptr, device_base_noise.data(),
+                        device_selfnoise.data(), device_dde.data(),
+                        selfnoise_scale, dde_scale, device_out.data(), n_plane_pixels,
                         stream);
 
-  gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_out.data()), thrust::raw_pointer_cast(device_out.data()),
+  gpuMemcpyDeviceToHostAsync(host_out.data(), device_out.data(),
                              n_plane_pixels * sizeof(float), stream);
   gpuStreamSynchronize(stream);
   gpuStreamDestroy(stream);

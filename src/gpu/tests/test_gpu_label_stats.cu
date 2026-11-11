@@ -50,38 +50,38 @@ LabelStats run_stats(const std::vector<unsigned int> &labels, const std::vector<
   cudaStream_t stream{};
   gpuStreamCreate(&stream);
 
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_labels.data()),
-                             thrust::raw_pointer_cast(host_labels.data()), labels.size() * sizeof(unsigned int), stream);
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_image.data()), thrust::raw_pointer_cast(host_image.data()),
+  gpuMemcpyHostToDeviceAsync(device_labels.data(),
+                             host_labels.data(), labels.size() * sizeof(unsigned int), stream);
+  gpuMemcpyHostToDeviceAsync(device_image.data(), host_image.data(),
                              image.size() * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_local_noise.data()),
-                             thrust::raw_pointer_cast(host_local_noise.data()), local_noise.size() * sizeof(float),
+  gpuMemcpyHostToDeviceAsync(device_local_noise.data(),
+                             host_local_noise.data(), local_noise.size() * sizeof(float),
                              stream);
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_count.data()), &n_labels, sizeof(unsigned int), stream);
+  gpuMemcpyHostToDeviceAsync(device_count.data(), &n_labels, sizeof(unsigned int), stream);
 
-  gpu_label_stats(thrust::raw_pointer_cast(device_labels.data()), thrust::raw_pointer_cast(device_image.data()),
-                  thrust::raw_pointer_cast(device_local_noise.data()), labels.size(), n_x,
-                  thrust::raw_pointer_cast(device_count.data()), n_labels,
-                  thrust::raw_pointer_cast(device_value.data()),
-                  thrust::raw_pointer_cast(device_local_noise_max.data()),
-                  thrust::raw_pointer_cast(device_peak_y.data()), thrust::raw_pointer_cast(device_peak_x.data()),
-                  thrust::raw_pointer_cast(device_island_size.data()), stream);
+  gpu_label_stats(device_labels.data(), device_image.data(),
+                  device_local_noise.data(), labels.size(), n_x,
+                  device_count.data(), n_labels,
+                  device_value.data(),
+                  device_local_noise_max.data(),
+                  device_peak_y.data(), device_peak_x.data(),
+                  device_island_size.data(), stream);
 
   std::vector<float> host_value(n_labels);
   std::vector<float> host_local_noise_max(n_labels);
   std::vector<long> host_peak_y(n_labels);
   std::vector<long> host_peak_x(n_labels);
   std::vector<unsigned int> host_island_size(n_labels);
-  gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_value.data()),
-                             thrust::raw_pointer_cast(device_value.data()), n_labels * sizeof(float), stream);
-  gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_local_noise_max.data()),
-                             thrust::raw_pointer_cast(device_local_noise_max.data()), n_labels * sizeof(float), stream);
-  gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_peak_y.data()),
-                             thrust::raw_pointer_cast(device_peak_y.data()), n_labels * sizeof(long), stream);
-  gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_peak_x.data()),
-                             thrust::raw_pointer_cast(device_peak_x.data()), n_labels * sizeof(long), stream);
-  gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_island_size.data()),
-                             thrust::raw_pointer_cast(device_island_size.data()), n_labels * sizeof(unsigned int),
+  gpuMemcpyDeviceToHostAsync(host_value.data(),
+                             device_value.data(), n_labels * sizeof(float), stream);
+  gpuMemcpyDeviceToHostAsync(host_local_noise_max.data(),
+                             device_local_noise_max.data(), n_labels * sizeof(float), stream);
+  gpuMemcpyDeviceToHostAsync(host_peak_y.data(),
+                             device_peak_y.data(), n_labels * sizeof(long), stream);
+  gpuMemcpyDeviceToHostAsync(host_peak_x.data(),
+                             device_peak_x.data(), n_labels * sizeof(long), stream);
+  gpuMemcpyDeviceToHostAsync(host_island_size.data(),
+                             device_island_size.data(), n_labels * sizeof(unsigned int),
                              stream);
   gpuStreamSynchronize(stream);
   gpuStreamDestroy(stream);
@@ -240,28 +240,28 @@ TEST_CASE("gpu_label_stats rejects an empty plane and an undersized capacity", "
   DeviceVector<unsigned int> island_size(1);
   DeviceVector<unsigned int> count(1, 2);
 
-  REQUIRE_THROWS_AS(gpu_label_stats(thrust::raw_pointer_cast(labels.data()), thrust::raw_pointer_cast(image.data()),
-                                    thrust::raw_pointer_cast(local_noise.data()), 0, 1, nullptr, 1,
-                                    thrust::raw_pointer_cast(value.data()),
-                                    thrust::raw_pointer_cast(local_noise_max.data()),
-                                    thrust::raw_pointer_cast(peak_y.data()), thrust::raw_pointer_cast(peak_x.data()),
-                                    thrust::raw_pointer_cast(island_size.data()), stream),
+  REQUIRE_THROWS_AS(gpu_label_stats(labels.data(), image.data(),
+                                    local_noise.data(), 0, 1, nullptr, 1,
+                                    value.data(),
+                                    local_noise_max.data(),
+                                    peak_y.data(), peak_x.data(),
+                                    island_size.data(), stream),
                     std::runtime_error);
-  REQUIRE_THROWS_AS(gpu_label_stats(thrust::raw_pointer_cast(labels.data()), thrust::raw_pointer_cast(image.data()),
-                                    thrust::raw_pointer_cast(local_noise.data()), 1, 0, nullptr, 1,
-                                    thrust::raw_pointer_cast(value.data()),
-                                    thrust::raw_pointer_cast(local_noise_max.data()),
-                                    thrust::raw_pointer_cast(peak_y.data()), thrust::raw_pointer_cast(peak_x.data()),
-                                    thrust::raw_pointer_cast(island_size.data()), stream),
+  REQUIRE_THROWS_AS(gpu_label_stats(labels.data(), image.data(),
+                                    local_noise.data(), 1, 0, nullptr, 1,
+                                    value.data(),
+                                    local_noise_max.data(),
+                                    peak_y.data(), peak_x.data(),
+                                    island_size.data(), stream),
                     std::runtime_error);
 
-  REQUIRE_THROWS_WITH(gpu_label_stats(thrust::raw_pointer_cast(labels.data()), thrust::raw_pointer_cast(image.data()),
-                                      thrust::raw_pointer_cast(local_noise.data()), 1, 1,
-                                      thrust::raw_pointer_cast(count.data()), 1,
-                                      thrust::raw_pointer_cast(value.data()),
-                                      thrust::raw_pointer_cast(local_noise_max.data()),
-                                      thrust::raw_pointer_cast(peak_y.data()), thrust::raw_pointer_cast(peak_x.data()),
-                                      thrust::raw_pointer_cast(island_size.data()), stream),
+  REQUIRE_THROWS_WITH(gpu_label_stats(labels.data(), image.data(),
+                                      local_noise.data(), 1, 1,
+                                      count.data(), 1,
+                                      value.data(),
+                                      local_noise_max.data(),
+                                      peak_y.data(), peak_x.data(),
+                                      island_size.data(), stream),
                       ContainsSubstring("exceeds capacity"));
 
   gpuStreamDestroy(stream);

@@ -45,28 +45,28 @@ float run_boost(const std::vector<unsigned int> &labels, const std::vector<float
 
   if (!labels.empty())
   {
-    gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_labels.data()),
-                               thrust::raw_pointer_cast(host_labels.data()), labels.size() * sizeof(unsigned int),
+    gpuMemcpyHostToDeviceAsync(device_labels.data(),
+                               host_labels.data(), labels.size() * sizeof(unsigned int),
                                stream);
-    gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_baseline.data()),
-                               thrust::raw_pointer_cast(host_baseline.data()), baseline_flux.size() * sizeof(float),
+    gpuMemcpyHostToDeviceAsync(device_baseline.data(),
+                               host_baseline.data(), baseline_flux.size() * sizeof(float),
                                stream);
   }
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_count.data()),
-                             thrust::raw_pointer_cast(host_count.data()), sizeof(unsigned int), stream);
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_flux.data()),
-                             thrust::raw_pointer_cast(host_flux.data()), capacity * sizeof(float), stream);
+  gpuMemcpyHostToDeviceAsync(device_count.data(),
+                             host_count.data(), sizeof(unsigned int), stream);
+  gpuMemcpyHostToDeviceAsync(device_flux.data(),
+                             host_flux.data(), capacity * sizeof(float), stream);
 
-  gpu_island_boost(thrust::raw_pointer_cast(device_labels.data()), thrust::raw_pointer_cast(device_baseline.data()),
-                   labels.size(), thrust::raw_pointer_cast(device_count.data()), capacity,
-                   thrust::raw_pointer_cast(device_flux.data()), thrust::raw_pointer_cast(device_boost.data()),
-                   reinterpret_cast<bool *>(thrust::raw_pointer_cast(device_found.data())), stream);
+  gpu_island_boost(device_labels.data(), device_baseline.data(),
+                   labels.size(), device_count.data(), capacity,
+                   device_flux.data(), device_boost.data(),
+                   reinterpret_cast<bool *>(device_found.data()), stream);
 
   float boost = 0.F;
   unsigned char found = 0;
-  gpuMemcpyDeviceToHostAsync(&boost, thrust::raw_pointer_cast(device_boost.data()) + (label - 1U), sizeof(float),
+  gpuMemcpyDeviceToHostAsync(&boost, device_boost.data() + (label - 1U), sizeof(float),
                              stream);
-  gpuMemcpyDeviceToHostAsync(&found, thrust::raw_pointer_cast(device_found.data()) + (label - 1U), sizeof(unsigned char),
+  gpuMemcpyDeviceToHostAsync(&found, device_found.data() + (label - 1U), sizeof(unsigned char),
                              stream);
   gpuStreamSynchronize(stream);
   gpuStreamDestroy(stream);

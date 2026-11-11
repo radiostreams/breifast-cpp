@@ -30,17 +30,17 @@ std::vector<unsigned int> run_label(const std::vector<unsigned char> &mask, size
   cudaStream_t stream{};
   gpuStreamCreate(&stream);
 
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_mask.data()), thrust::raw_pointer_cast(host_mask.data()),
+  gpuMemcpyHostToDeviceAsync(device_mask.data(), host_mask.data(),
                              n * sizeof(unsigned char), stream);
-  gpu_label_islands(reinterpret_cast<const bool *>(thrust::raw_pointer_cast(device_mask.data())), n_y, n_x,
-                    thrust::raw_pointer_cast(device_labels.data()), thrust::raw_pointer_cast(device_count.data()),
-                    thrust::raw_pointer_cast(device_scratch.data()), stream);
+  gpu_label_islands(reinterpret_cast<const bool *>(device_mask.data()), n_y, n_x,
+                    device_labels.data(), device_count.data(),
+                    device_scratch.data(), stream);
 
   std::vector<unsigned int> host_labels(n);
   unsigned int count = 0;
-  gpuMemcpyDeviceToHostAsync(&count, thrust::raw_pointer_cast(device_count.data()), sizeof(unsigned int), stream);
-  gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_labels.data()),
-                             thrust::raw_pointer_cast(device_labels.data()), n * sizeof(unsigned int), stream);
+  gpuMemcpyDeviceToHostAsync(&count, device_count.data(), sizeof(unsigned int), stream);
+  gpuMemcpyDeviceToHostAsync(host_labels.data(),
+                             device_labels.data(), n * sizeof(unsigned int), stream);
   gpuStreamSynchronize(stream);
   gpuStreamDestroy(stream);
 
@@ -188,13 +188,13 @@ TEST_CASE("gpu_label_islands rejects an empty plane", "[gpu][islands]")
   DeviceVector<unsigned int> count(1);
   DeviceVector<unsigned int> scratch(1);
 
-  REQUIRE_THROWS_AS(gpu_label_islands(reinterpret_cast<const bool *>(thrust::raw_pointer_cast(mask.data())), 0, 1,
-                                      thrust::raw_pointer_cast(labels.data()), thrust::raw_pointer_cast(count.data()),
-                                      thrust::raw_pointer_cast(scratch.data()), stream),
+  REQUIRE_THROWS_AS(gpu_label_islands(reinterpret_cast<const bool *>(mask.data()), 0, 1,
+                                      labels.data(), count.data(),
+                                      scratch.data(), stream),
                     std::runtime_error);
-  REQUIRE_THROWS_AS(gpu_label_islands(reinterpret_cast<const bool *>(thrust::raw_pointer_cast(mask.data())), 1, 0,
-                                      thrust::raw_pointer_cast(labels.data()), thrust::raw_pointer_cast(count.data()),
-                                      thrust::raw_pointer_cast(scratch.data()), stream),
+  REQUIRE_THROWS_AS(gpu_label_islands(reinterpret_cast<const bool *>(mask.data()), 1, 0,
+                                      labels.data(), count.data(),
+                                      scratch.data(), stream),
                     std::runtime_error);
 
   gpuStreamDestroy(stream);

@@ -49,18 +49,18 @@ Result run_gpu_mask_or(const std::vector<std::string> &channels, int band_start,
   cudaStream_t stream{};
   gpuStreamCreate(&stream);
 
-  gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_mask.data()),
-                             thrust::raw_pointer_cast(host_mask.data()), n_channels * n_pixels, stream);
-  gpuMemsetAsync(thrust::raw_pointer_cast(device_any.data()), 0xFF, sizeof(int), stream);
+  gpuMemcpyHostToDeviceAsync(device_mask.data(),
+                             host_mask.data(), n_channels * n_pixels, stream);
+  gpuMemsetAsync(device_any.data(), 0xFF, sizeof(int), stream);
 
-  gpu_mask_or(reinterpret_cast<const bool *>(thrust::raw_pointer_cast(device_mask.data())), n_pixels, band_start,
-              band_stop, reinterpret_cast<bool *>(thrust::raw_pointer_cast(device_out.data())),
-              thrust::raw_pointer_cast(device_any.data()), stream);
+  gpu_mask_or(reinterpret_cast<const bool *>(device_mask.data()), n_pixels, band_start,
+              band_stop, reinterpret_cast<bool *>(device_out.data()),
+              device_any.data(), stream);
 
-  gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_out.data()),
-                             thrust::raw_pointer_cast(device_out.data()), n_pixels, stream);
-  gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_any.data()),
-                             thrust::raw_pointer_cast(device_any.data()), sizeof(int), stream);
+  gpuMemcpyDeviceToHostAsync(host_out.data(),
+                             device_out.data(), n_pixels, stream);
+  gpuMemcpyDeviceToHostAsync(host_any.data(),
+                             device_any.data(), sizeof(int), stream);
   gpuStreamSynchronize(stream);
   gpuStreamDestroy(stream);
 

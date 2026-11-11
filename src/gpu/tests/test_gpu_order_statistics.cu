@@ -33,22 +33,22 @@ float run_median(const std::vector<float> &values, bool abs_mode, float abs_scal
 
   if (n > 0)
   {
-    gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_values.data()), thrust::raw_pointer_cast(host_values.data()),
+    gpuMemcpyHostToDeviceAsync(device_values.data(), host_values.data(),
                                n * sizeof(float), stream);
   }
 
   if (abs_mode)
   {
-    gpu_median_abs(thrust::raw_pointer_cast(device_values.data()), n, thrust::raw_pointer_cast(device_median.data()),
+    gpu_median_abs(device_values.data(), n, device_median.data(),
                    abs_scale, stream);
   }
   else
   {
-    gpu_median(thrust::raw_pointer_cast(device_values.data()), n, thrust::raw_pointer_cast(device_median.data()), stream);
+    gpu_median(device_values.data(), n, device_median.data(), stream);
   }
 
   float result = 0.F;
-  gpuMemcpyDeviceToHostAsync(&result, thrust::raw_pointer_cast(device_median.data()), sizeof(float), stream);
+  gpuMemcpyDeviceToHostAsync(&result, device_median.data(), sizeof(float), stream);
   gpuStreamSynchronize(stream);
   gpuStreamDestroy(stream);
   return result;

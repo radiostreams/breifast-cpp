@@ -1,7 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 #include <cuda_runtime.h>
-#include <thrust/copy.h>
 
 #include <cstddef>
 #include <vector>
@@ -26,9 +25,9 @@ TEST_CASE("pinned and device vectors round trip a float array", "[gpu][smoke]")
   REQUIRE(host_out.size() == n);
   REQUIRE(device.size() == n);
 
-  float *const in = thrust::raw_pointer_cast(host_in.data());
-  float *const out = thrust::raw_pointer_cast(host_out.data());
-  float *const device_ptr = thrust::raw_pointer_cast(device.data());
+  float *const in = host_in.data();
+  float *const out = host_out.data();
+  float *const device_ptr = device.data();
 
   // The device allocation comes from device memory.
   cudaPointerAttributes attributes{};
@@ -50,19 +49,10 @@ TEST_CASE("pinned and device vectors round trip a float array", "[gpu][smoke]")
   gpuStreamDestroy(stream);
   REQUIRE(std::memcmp(in, out, bytes) == 0);
 
-  // Round trip through Thrust copies.
-  for (size_t i = 0; i < n; ++i)
-  {
-    out[i] = -1.F;
-  }
-  thrust::copy(host_in.begin(), host_in.end(), device.begin());
-  thrust::copy(device.begin(), device.end(), host_out.begin());
-  REQUIRE(std::memcmp(in, out, bytes) == 0);
-
   // A moved-to vector owns the data of the moved-from one.
   std::vector<float> moved = std::move(host_out);
   REQUIRE(moved.size() == n);
-  REQUIRE(std::memcmp(in, thrust::raw_pointer_cast(moved.data()), bytes) == 0);
+  REQUIRE(std::memcmp(in, moved.data(), bytes) == 0);
 }
 
 TEST_CASE("CHECK_GPU throws a GpuError that carries the CUDA error", "[gpu][smoke]")
