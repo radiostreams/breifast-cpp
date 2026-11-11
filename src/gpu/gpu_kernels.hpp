@@ -171,8 +171,10 @@ void gpu_rms_noise_map(const float *plane, size_t n_y, size_t n_x, long boxsize,
  * per pass. Device pointers; the work is enqueued on `stream`. `n` must be greater than 0.
  * @param values `[n]` floats, read only.
  * @param out_median One float, written by this call.
+ * @param scratch Reused by every call on the same stream; each call resets the parts it reads.
  */
-void gpu_median(const float *values, size_t n, float *out_median, GpuStream stream = nullptr);
+struct MedianScratch;
+void gpu_median(const float *values, size_t n, float *out_median, MedianScratch &scratch, GpuStream stream = nullptr);
 
 /**
  * @brief Exact median of `|values|`, the global MAD input.
@@ -182,7 +184,8 @@ void gpu_median(const float *values, size_t n, float *out_median, GpuStream stre
  * @param out_median One float, written by this call.
  * @param scale Multiplier applied to the median before writing it.
  */
-void gpu_median_abs(const float *values, size_t n, float *out_median, float scale, GpuStream stream = nullptr);
+void gpu_median_abs(const float *values, size_t n, float *out_median, float scale, MedianScratch &scratch,
+                    GpuStream stream = nullptr);
 
 /**
  * @brief Scaled median absolute value of the nonzero pixels of each stamp: the `lmad` of stamp_donut_stats.

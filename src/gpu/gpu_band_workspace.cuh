@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 
@@ -98,6 +99,14 @@ inline void validate_band_workspace_sizes(const GpuBandWorkspaceSizes &sizes)
   }
 }
 
+/// Device scratch of gpu_median and gpu_median_abs: the 256-bin digit histogram, then the radix-select state (count
+/// below the prefix, prefix, coverage) and the largest key below the median.
+struct MedianScratch
+{
+  static constexpr std::size_t histogram_bins = 256;
+  DeviceVector<std::uint32_t> words{histogram_bins + 4};
+};
+
 struct GpuBandWorkspace
 {
   explicit GpuBandWorkspace(const GpuBandWorkspaceSizes &sizes);
@@ -125,6 +134,8 @@ struct GpuBandWorkspace
 
   DeviceVector<int> any_flag;
   DeviceVector<unsigned int> label_count;
+
+  MedianScratch median_scratch;
 };
 
 struct GpuBandResult

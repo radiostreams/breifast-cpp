@@ -1,9 +1,7 @@
 #include <cassert>
 #include <cstdint>
 
-#include <thrust/device_vector.h>
-#include <thrust/device_ptr.h>
-
+#include "gpu_band_workspace.cuh"
 #include "gpu_kernels.hpp"
 #include "gpu_device_utils.cuh"
 #include "radix_keys.cuh"
@@ -56,17 +54,18 @@ __global__ void radix_finalize_kernel(const uint32_t *state, const uint32_t *low
   *out_median = median_of_keys(n, state[0], state[1], *lower_max, abs_mode) * scale;
 }
 
-void gpu_median_impl(const float *values, size_t n, float *out_median, bool abs_mode, float scale, GpuStream stream)
+void gpu_median_impl(const float *values, size_t n, float *out_median, bool abs_mode, float scale,
+                     MedianScratch &scratch, GpuStream stream)
 {
+  static_assert(MedianScratch::histogram_bins == radix_bins);
   assert(n > 0);
+  assert(scratch.words.size() == radix_bins + 4);
 
-  constexpr size_t scratch_words = radix_bins + 4; // 256 bins, then state[3] and lower_max[1]
-  thrust::device_vector<uint32_t> scratch(scratch_words, 0);
-  uint32_t *scratch_ptr = thrust::raw_pointer_cast(scratch.data());
-
-  uint32_t *histogram = scratch_ptr;
-  uint32_t *state = scratch_ptr + radix_bins;      // below, prefix, coverage
-  uint32_t *lower_max = scratch_ptr + radix_bins + 3;
+  uint32_t *histogram = scratch.words.data();
+  uint32_t *state = histogram + radix_bins; // below, prefix, coverage
+  uint32_t *lower_max = state + 3;
+  // The scratch still holds the previous call's state; the histogram is cleared on every pass below.
+  CHECK_GPU(cudaMemsetAsync(state, 0, 4 * sizeof(uint32_t), stream));
 
   for (int shift = 24; shift >= 0; shift -= 8)
   {
@@ -84,13 +83,14 @@ void gpu_median_impl(const float *values, size_t n, float *out_median, bool abs_
 }
 } // namespace
 
-void gpu_median(const float *values, size_t n, float *out_median, GpuStream stream)
+void gpu_median(const float *values, size_t n, float *out_median, MedianScratch &scratch, GpuStream stream)
 {
-  gpu_median_impl(values, n, out_median, false, 1.F, stream);
+  gpu_median_impl(values, n, out_median, false, 1.F, scratch, stream);
 }
 
-void gpu_median_abs(const float *values, size_t n, float *out_median, float scale, GpuStream stream)
+void gpu_median_abs(const float *values, size_t n, float *out_median, float scale, MedianScratch &scratch,
+                    GpuStream stream)
 {
-  gpu_median_impl(values, n, out_median, true, scale, stream);
+  gpu_median_impl(values, n, out_median, true, scale, scratch, stream);
 }
 } // namespace breifast::gpu

@@ -171,14 +171,14 @@ GpuBandStatus gpu_process_band(const GpuBandInput &input, GpuBandWorkspace &work
                           input.n_pixels, input.band_start, input.band_stop, input.inv_band_size, stream);
 
   // Both noise modes need it: the band result reports it, and it is the base noise without an RMS map.
-  gpu_median_abs(workspace.plane, input.n_pixels, result.global_mad, 1.4826F, stream);
+  gpu_median_abs(workspace.plane, input.n_pixels, result.global_mad, 1.4826F, workspace.median_scratch, stream);
   const float *rms = nullptr;
   const float *base_noise = result.global_mad;
   if (input.use_rms_noise_estimator)
   {
     gpu_rms_noise_map(workspace.plane, input.n_y, input.n_x, input.boxsize, workspace.row_sums, workspace.rms_map,
                       stream);
-    gpu_median(workspace.rms_map, input.n_pixels, result.rms_floor, stream);
+    gpu_median(workspace.rms_map, input.n_pixels, result.rms_floor, workspace.median_scratch, stream);
     rms = workspace.rms_map;
     base_noise = result.rms_floor;
   }
@@ -189,7 +189,7 @@ GpuBandStatus gpu_process_band(const GpuBandInput &input, GpuBandWorkspace &work
   gpu_combine_noise_map(rms, base_noise, input.selfnoise_offset, input.dde_noise, input.selfnoise_scale_factor,
                         input.ddenoise_scaling_factor, workspace.noise_map, input.n_pixels, stream);
 
-  gpu_median(workspace.noise_map, input.n_pixels, result.median_noise, stream);
+  gpu_median(workspace.noise_map, input.n_pixels, result.median_noise, workspace.median_scratch, stream);
 
   common::SnrFilterParams params;
   params.inv_band_size = input.inv_band_size;

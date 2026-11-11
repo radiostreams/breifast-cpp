@@ -8,12 +8,14 @@
 #include <limits>
 #include <vector>
 
+#include "gpu_band_workspace.cuh"
 #include "gpu_kernels.hpp"
 #include "gpu_test_utils.hpp"
 
 using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_median;
 using breifast::gpu::gpu_median_abs;
+using breifast::gpu::MedianScratch;
 using breifast::gpu::Stream;
 using breifast::gpu::test::download_scalar;
 using breifast::gpu::test::upload;
@@ -21,7 +23,7 @@ using Catch::Matchers::WithinRel;
 
 namespace
 {
-float run_median(const std::vector<float> &values, bool abs_mode, float abs_scale = 1.F)
+float run_median(const std::vector<float> &values, bool abs_mode, float abs_scale, MedianScratch &scratch)
 {
   const auto device_values = upload(values);
   DeviceVector<float> device_median(1);
@@ -29,13 +31,19 @@ float run_median(const std::vector<float> &values, bool abs_mode, float abs_scal
   const Stream stream;
   if (abs_mode)
   {
-    gpu_median_abs(device_values, values.size(), device_median, abs_scale, stream.get());
+    gpu_median_abs(device_values, values.size(), device_median, abs_scale, scratch, stream.get());
   }
   else
   {
-    gpu_median(device_values, values.size(), device_median, stream.get());
+    gpu_median(device_values, values.size(), device_median, scratch, stream.get());
   }
   return download_scalar(device_median.data(), stream);
+}
+
+float run_median(const std::vector<float> &values, bool abs_mode, float abs_scale = 1.F)
+{
+  MedianScratch scratch;
+  return run_median(values, abs_mode, abs_scale, scratch);
 }
 
 // Same LCG as the Python reference and the CPU test, so both sides build bit-identical float32 inputs. Every value is an
@@ -127,4 +135,13 @@ TEST_CASE("gpu_median_abs applies its scale on the final write", "[gpu][order_st
 {
   CHECK_THAT(run_median({-2.F, 4.F, -6.F}, true, 1.4826F), WithinRel(4.F * 1.4826F));
   CHECK_THAT(run_median({-2.F, 4.F, -6.F, -8.F}, true, 0.5F), WithinRel(5.F * 0.5F));
+}
+
+TEST_CASE("gpu_median gives the same results through a reused scratch", "[gpu][order_statistics]")
+{
+  // The scratch keeps the previous call's select state and lower key: each call must reset them.
+  MedianScratch scratch;
+  CHECK_THAT(run_median({5.F, 1.F, 3.F}, false, 1.F, scratch), WithinRel(3.F));
+  CHECK_THAT(run_median({-8.F, 2.F, 4.F, 6.F}, false, 1.F, scratch), WithinRel(3.F));
+  CHECK_THAT(run_median({-8.F, 2.F, 4.F, 6.F}, true, 2.F, scratch), WithinRel(10.F));
 }
