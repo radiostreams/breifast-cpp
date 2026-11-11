@@ -119,6 +119,24 @@ struct LabelScratch
   DeviceVector<std::byte> scan_storage;
 };
 
+/// Device scratch of gpu_label_stats and gpu_island_boost: the per-island reduction keys and partial results.
+struct IslandScratch
+{
+  /// Grows every array to hold `capacity` islands; the contents are unspecified after growing.
+  void ensure(std::size_t capacity)
+  {
+    value_keys.ensure(capacity);
+    local_noise_max.ensure(capacity);
+    sizes.ensure(capacity);
+    boost_keys.ensure(capacity + 1); // indexed by label, 1..capacity
+  }
+
+  DeviceVector<unsigned long long> value_keys;
+  DeviceVector<float> local_noise_max;
+  DeviceVector<unsigned int> sizes;
+  DeviceVector<unsigned long long> boost_keys;
+};
+
 struct GpuBandWorkspace
 {
   explicit GpuBandWorkspace(const GpuBandWorkspaceSizes &sizes);
@@ -140,6 +158,7 @@ struct GpuBandWorkspace
 
   DeviceVector<unsigned int> labels;
   LabelScratch label_scratch;
+  IslandScratch island_scratch;
 
   DeviceVector<float> donut_stamps;
   DeviceVector<float> beam_stamps;

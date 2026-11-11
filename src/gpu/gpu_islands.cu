@@ -6,8 +6,6 @@
 
 #include <cooperative_groups.h>
 #include <cub/device/device_scan.cuh>
-#include <thrust/device_vector.h>
-#include <thrust/device_ptr.h>
 
 #include "gpu_band_workspace.cuh"
 #include "gpu_kernels.hpp"
@@ -289,7 +287,8 @@ void gpu_label_islands(const bool *const mask, const size_t n_y, const size_t n_
 
 void gpu_island_boost(const unsigned int *const labels_per_pixel, const float *const baseline_flux,
                       const size_t n_pixels, const unsigned int *const active_count, const unsigned int capacity,
-                      const float *const flux_per_label, float *const boost, bool *const found, GpuStream stream)
+                      const float *const flux_per_label, float *const boost, bool *const found,
+                      IslandScratch &scratch, GpuStream stream)
 {
   if (n_pixels == 0)
   {
@@ -304,8 +303,10 @@ void gpu_island_boost(const unsigned int *const labels_per_pixel, const float *c
     throw std::runtime_error("gpu_island_boost: capacity must be greater than 0");
   }
 
-  thrust::device_vector<unsigned long long> keys(capacity + 1U, 0ULL);
-  unsigned long long *keys_ptr = thrust::raw_pointer_cast(keys.data());
+  assert(scratch.boost_keys.size() >= capacity + 1U);
+  unsigned long long *const keys_ptr = scratch.boost_keys.data();
+  // atomicMax keys: they start at 0, and the scratch still holds the previous call's.
+  CHECK_GPU(cudaMemsetAsync(keys_ptr, 0, (capacity + 1U) * sizeof(unsigned long long), stream));
 
   launch_per_element(island_boost_atomic_kernel, n_pixels, stream, labels_per_pixel, n_pixels, baseline_flux,
                      active_count, capacity, flux_per_label, keys_ptr);
@@ -316,7 +317,8 @@ void gpu_island_boost(const unsigned int *const labels_per_pixel, const float *c
 void gpu_label_stats(const unsigned int *const labels, const float *const image, const float *const local_noise,
                      const size_t n_pixels, const size_t n_x, const unsigned int *const active_count,
                      const unsigned int capacity, float *const value, float *const out_local_noise,
-                     long *const peak_y, long *const peak_x, unsigned int *const island_size, GpuStream stream)
+                     long *const peak_y, long *const peak_x, unsigned int *const island_size, IslandScratch &scratch,
+                     GpuStream stream)
 {
   if (n_pixels == 0)
   {
@@ -344,12 +346,11 @@ void gpu_label_stats(const unsigned int *const labels, const float *const image,
     return;
   }
 
-  thrust::device_vector<unsigned long long> value_keys(capacity);
-  thrust::device_vector<float> local_noise_max(capacity);
-  thrust::device_vector<unsigned int> sizes(capacity);
-  unsigned long long *value_keys_ptr = thrust::raw_pointer_cast(value_keys.data());
-  float *local_noise_max_ptr = thrust::raw_pointer_cast(local_noise_max.data());
-  unsigned int *sizes_ptr = thrust::raw_pointer_cast(sizes.data());
+  // The init kernel below resets all three for this call.
+  assert(scratch.sizes.size() >= capacity);
+  unsigned long long *const value_keys_ptr = scratch.value_keys.data();
+  float *const local_noise_max_ptr = scratch.local_noise_max.data();
+  unsigned int *const sizes_ptr = scratch.sizes.data();
 
   launch_per_element(label_stats_init_kernel, capacity, stream, capacity, value_keys_ptr, local_noise_max_ptr,
                      sizes_ptr);

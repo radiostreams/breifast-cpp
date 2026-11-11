@@ -223,7 +223,7 @@ GpuBandStatus gpu_process_band(const GpuBandInput &input, GpuBandWorkspace &work
 
   gpu_label_stats(workspace.labels, workspace.snr, workspace.noise_map, input.n_pixels, input.n_x,
                   workspace.label_count, island_capacity, result.peak_value, result.peak_local_noise,
-                  result.peak_y, result.peak_x, result.island_size, stream);
+                  result.peak_y, result.peak_x, result.island_size, workspace.island_scratch, stream);
 
   gpu_stamp_extract(workspace.plane, input.n_y, input.n_x, result.peak_y, result.peak_x, workspace.label_count,
                     island_capacity, radius, input.inner_boxsize, workspace.donut_stamps, stream);
@@ -266,7 +266,7 @@ GpuBandStatus gpu_process_band(const GpuBandInput &input, GpuBandWorkspace &work
   if (input.baseline_flux != nullptr)
   {
     gpu_island_boost(workspace.labels, input.baseline_flux, input.n_pixels, workspace.label_count, island_capacity,
-                     result.flux, result.boost, result.boost_found, stream);
+                     result.flux, result.boost, result.boost_found, workspace.island_scratch, stream);
   }
   else
   {

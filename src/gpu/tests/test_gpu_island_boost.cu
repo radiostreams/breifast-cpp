@@ -10,11 +10,13 @@
 #include <stdexcept>
 #include <vector>
 
+#include "gpu_band_workspace.cuh"
 #include "gpu_kernels.hpp"
 #include "gpu_test_utils.hpp"
 
 using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_island_boost;
+using breifast::gpu::IslandScratch;
 using breifast::gpu::Stream;
 using breifast::gpu::test::download_scalar;
 using breifast::gpu::test::upload;
@@ -22,7 +24,7 @@ using breifast::gpu::test::upload;
 namespace
 {
 float run_boost(const std::vector<unsigned int> &labels, const std::vector<float> &baseline_flux,
-                unsigned int label, float flux)
+                unsigned int label, float flux, IslandScratch &scratch)
 {
   REQUIRE(labels.size() == baseline_flux.size());
   REQUIRE(label > 0U);
@@ -38,10 +40,11 @@ float run_boost(const std::vector<unsigned int> &labels, const std::vector<float
   const auto device_flux = upload(host_flux);
   DeviceVector<float> device_boost(capacity);
   DeviceVector<bool> device_found(capacity);
+  scratch.ensure(capacity);
 
   const Stream stream;
   gpu_island_boost(device_labels, device_baseline, labels.size(), device_count, capacity, device_flux, device_boost,
-                   device_found, stream.get());
+                   device_found, scratch, stream.get());
   const float boost = download_scalar(device_boost.data() + (label - 1U), stream);
   const bool found = download_scalar(device_found.data() + (label - 1U), stream);
 
@@ -50,6 +53,13 @@ float run_boost(const std::vector<unsigned int> &labels, const std::vector<float
     throw std::runtime_error("no pixel carries the label");
   }
   return boost;
+}
+
+float run_boost(const std::vector<unsigned int> &labels, const std::vector<float> &baseline_flux,
+                unsigned int label, float flux)
+{
+  IslandScratch scratch;
+  return run_boost(labels, baseline_flux, label, flux, scratch);
 }
 
 float host_boost(const std::vector<unsigned int> &labels, const std::vector<float> &baseline_flux, unsigned int label,
@@ -169,4 +179,13 @@ TEST_CASE("gpu_island_boost matches a host reference across many blocks", "[gpu]
                  Catch::Matchers::WithinRel(host_boost(labels, baseline, label, flux), 1e-6));
     }
   }
+}
+
+TEST_CASE("gpu_island_boost resets its keys when the scratch is reused", "[gpu][island_boost]")
+{
+  // The first call leaves label 1 a larger key (ratio 8 at pixel 0) than the second call produces (ratio 2 at pixel 1):
+  // without the reset, the second call would keep pixel 0 and report 1 / 1.
+  IslandScratch scratch;
+  CHECK(run_boost({1, 1}, {0.125F, 1.F}, 1, 1.F, scratch) == 8.F);
+  CHECK(run_boost({1, 1}, {1.F, 0.5F}, 1, 1.F, scratch) == 2.F);
 }

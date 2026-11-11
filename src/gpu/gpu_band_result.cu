@@ -22,6 +22,7 @@ GpuBandWorkspace::GpuBandWorkspace(const GpuBandWorkspaceSizes &sizes) : sizes(s
 
   labels.ensure(this->sizes.n_pixels);
   label_scratch = LabelScratch(this->sizes.n_pixels);
+  island_scratch.ensure(this->sizes.stamp_capacity);
 
   donut_stamps.ensure(this->sizes.stamp_capacity * this->sizes.stamp_pixels);
   if (this->sizes.beam_stamp_pixels > 0)

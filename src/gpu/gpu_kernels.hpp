@@ -339,11 +339,13 @@ void gpu_label_islands(const bool *mask, size_t n_y, size_t n_x, unsigned int *l
  * @param peak_y `[n_labels]` peak rows, written.
  * @param peak_x `[n_labels]` peak columns, written.
  * @param island_size `[n_labels]` pixel counts, written.
+ * @param scratch Grown to at least `capacity` islands.
  */
+struct IslandScratch;
 void gpu_label_stats(const unsigned int *labels, const float *image, const float *local_noise, size_t n_pixels,
                      size_t n_x, const unsigned int *active_count, unsigned int capacity, float *value,
                      float *out_local_noise, long *peak_y, long *peak_x, unsigned int *island_size,
-                     GpuStream stream = nullptr);
+                     IslandScratch &scratch, GpuStream stream = nullptr);
 
 /**
  * @brief Batched island boost: for every compact label `1..*active_count`, the largest-magnitude
@@ -361,8 +363,9 @@ void gpu_label_stats(const unsigned int *labels, const float *image, const float
  * @param flux_per_label `[capacity]` floats, one numerator per label slot.
  * @param boost `[capacity]` floats, written completely; 0 when a label has no pixel.
  * @param found `[capacity]` bools, written completely.
+ * @param scratch Grown to at least `capacity` islands.
  */
 void gpu_island_boost(const unsigned int *labels_per_pixel, const float *baseline_flux, size_t n_pixels,
                       const unsigned int *active_count, unsigned int capacity, const float *flux_per_label,
-                      float *boost, bool *found, GpuStream stream = nullptr);
+                      float *boost, bool *found, IslandScratch &scratch, GpuStream stream = nullptr);
 } // namespace breifast::gpu

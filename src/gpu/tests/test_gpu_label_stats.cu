@@ -9,11 +9,13 @@
 #include <stdexcept>
 #include <vector>
 
+#include "gpu_band_workspace.cuh"
 #include "gpu_kernels.hpp"
 #include "gpu_test_utils.hpp"
 
 using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_label_stats;
+using breifast::gpu::IslandScratch;
 using breifast::gpu::Stream;
 using breifast::gpu::test::download;
 using breifast::gpu::test::upload;
@@ -45,11 +47,13 @@ LabelStats run_stats(const std::vector<unsigned int> &labels, const std::vector<
   DeviceVector<long> device_peak_y(n_labels);
   DeviceVector<long> device_peak_x(n_labels);
   DeviceVector<unsigned int> device_island_size(n_labels);
+  IslandScratch scratch;
+  scratch.ensure(n_labels);
 
   const Stream stream;
   gpu_label_stats(device_labels, device_image, device_local_noise, labels.size(), n_x, device_count, n_labels,
                   device_value, device_local_noise_max, device_peak_y, device_peak_x, device_island_size,
-                  stream.get());
+                  scratch, stream.get());
   return {download(device_value, stream), download(device_local_noise_max, stream), download(device_peak_y, stream),
           download(device_peak_x, stream), download(device_island_size, stream)};
 }
@@ -199,14 +203,16 @@ TEST_CASE("gpu_label_stats rejects an empty plane and an undersized capacity", "
   DeviceVector<long> peak_x(1);
   DeviceVector<unsigned int> island_size(1);
   const auto count = upload(std::vector<unsigned int>{2});
+  IslandScratch scratch;
+  scratch.ensure(1);
 
   REQUIRE_THROWS_AS(gpu_label_stats(labels, image, local_noise, 0, 1, nullptr, 1, value, local_noise_max, peak_y,
-                                    peak_x, island_size, stream.get()),
+                                    peak_x, island_size, scratch, stream.get()),
                     std::runtime_error);
   REQUIRE_THROWS_AS(gpu_label_stats(labels, image, local_noise, 1, 0, nullptr, 1, value, local_noise_max, peak_y,
-                                    peak_x, island_size, stream.get()),
+                                    peak_x, island_size, scratch, stream.get()),
                     std::runtime_error);
   REQUIRE_THROWS_WITH(gpu_label_stats(labels, image, local_noise, 1, 1, count, 1, value, local_noise_max, peak_y,
-                                      peak_x, island_size, stream.get()),
+                                      peak_x, island_size, scratch, stream.get()),
                       ContainsSubstring("exceeds capacity"));
 }
