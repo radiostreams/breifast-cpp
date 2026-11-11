@@ -123,6 +123,7 @@ itt_dep = declare_dependency(
 # own compiler arguments apply.
 cpu_sources = [
   'src/plane_lot_dispatch.cpp',
+  'src/plane_lot_validation.cpp',
   'src/cpu/channel_reductions.cpp',
   'src/cpu/island_stamps.cpp',
   'src/cpu/islands.cpp',
@@ -208,6 +209,7 @@ test_breifast_core_sources = cpu_sources + [
   'tests/cpp/group4_dispatch/test_run_batch_core.cpp',
   'tests/cpp/group4_dispatch/test_run_batch_core_random.cpp',
   'tests/cpp/group4_dispatch/test_run_batch_core_scratch_persistence.cpp',
+  'tests/cpp/group4_dispatch/test_validate_plane_inputs.cpp',
 ]
 
 test_breifast_core = executable(

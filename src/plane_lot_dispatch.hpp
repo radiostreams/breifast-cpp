@@ -325,6 +325,16 @@ ProcessPlaneResult process_plane(ProcessBandScratch &scratch, const PlaneConfig 
                                  const PlaneBatchGroup &group);
 
 /**
+ * @brief Throws std::invalid_argument, naming the plane and the field, when a plane is inconsistent with itself, its
+ *        group or the config: array shapes, band ranges, group index, beam inputs and config values.
+ *
+ * Both backends run it on every plane before any work, so a bad input fails the whole call up front instead of one
+ * plane midway.
+ */
+void validate_plane_inputs(const std::vector<PlaneBatchItem> &items, const std::vector<PlaneBatchGroup> &groups,
+                           const PlaneConfig &config);
+
+/**
  * @brief Run process_plane() over every item in `items`, in parallel via TBB.
  *
  * Each item's group is looked up by `group_index` into `groups`. Per-item exceptions are caught and logged rather
