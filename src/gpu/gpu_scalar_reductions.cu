@@ -1,4 +1,4 @@
-#include "gpu_pipeline.hpp"
+#include "gpu_kernels.hpp"
 #include "gpu_runtime.hpp"
 
 namespace breifast::gpu

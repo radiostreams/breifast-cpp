@@ -7,7 +7,7 @@
 #include <pybind11/stl.h>
 
 #ifdef BREIFAST_HAVE_GPU
-#include "gpu/gpu_pipeline.hpp"
+#include "gpu/gpu_kernels.hpp"
 #include "gpu/gpu_lot_integration.hpp"
 #endif
 

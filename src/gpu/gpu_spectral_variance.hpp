@@ -2,7 +2,7 @@
 
 #include <cstddef>
 
-#include "gpu_pipeline.hpp"
+#include "gpu_kernels.hpp"
 #include "process_plane_result.hpp"
 
 namespace breifast::gpu

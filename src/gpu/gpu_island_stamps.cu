@@ -3,7 +3,7 @@
 
 #include <cuda/std/functional>
 
-#include "gpu_pipeline.hpp"
+#include "gpu_kernels.hpp"
 
 #include "gpu_device_utils.cuh"
 #include "radix_keys.cuh"

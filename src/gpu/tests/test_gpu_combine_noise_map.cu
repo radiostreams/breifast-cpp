@@ -12,7 +12,7 @@
 #include <cmath>
 
 #include "device_vector.hpp"
-#include "gpu_pipeline.hpp"
+#include "gpu_kernels.hpp"
 #include "gpu_runtime.hpp"
 
 using breifast::gpu::DeviceVector;

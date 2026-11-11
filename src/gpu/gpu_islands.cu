@@ -4,7 +4,7 @@
 #include <thrust/device_ptr.h>
 #include <thrust/scan.h>
 
-#include "gpu_pipeline.hpp"
+#include "gpu_kernels.hpp"
 
 #include "gpu_device_utils.cuh"
 

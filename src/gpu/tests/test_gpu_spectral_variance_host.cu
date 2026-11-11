@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "device_vector.hpp"
-#include "gpu_pipeline.hpp"
+#include "gpu_kernels.hpp"
 
 using breifast::gpu::DeviceVector;
 using breifast::gpu::GpuSpectralVarianceHostResult;

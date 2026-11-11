@@ -1,6 +1,6 @@
 #include <stdexcept>
 
-#include "gpu_pipeline.hpp"
+#include "gpu_kernels.hpp"
 
 #include "gpu_device_utils.cuh"
 
