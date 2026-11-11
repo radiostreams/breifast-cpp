@@ -1,8 +1,8 @@
 #include "windows.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
-#include <stdexcept>
 
 namespace breifast::plane_lot::detail
 {
@@ -11,22 +11,10 @@ void rms_noise_map(std::span<const float> plane, const size_t n_y_size, const si
                    std::span<float> row_window_sums, std::span<double> column_accumulators, std::span<float> out_rms)
 {
   const size_t n_pixels = n_y_size * n_x_size;
-  if (plane.size() != n_pixels)
-  {
-    throw std::runtime_error("rms_noise_map: plane size mismatch with n_y * n_x");
-  }
-  if (row_window_sums.size() != n_pixels)
-  {
-    throw std::runtime_error("rms_noise_map: row_window_sums size mismatch with n_y * n_x");
-  }
-  if (column_accumulators.size() != n_x_size)
-  {
-    throw std::runtime_error("rms_noise_map: column_accumulators size mismatch with n_x");
-  }
-  if (out_rms.size() != n_pixels)
-  {
-    throw std::runtime_error("rms_noise_map: out_rms size mismatch with n_y * n_x");
-  }
+  assert(plane.size() == n_pixels);
+  assert(row_window_sums.size() == n_pixels);
+  assert(column_accumulators.size() == n_x_size);
+  assert(out_rms.size() == n_pixels);
 
   const long n_y = static_cast<long>(n_y_size);
   const long n_x = static_cast<long>(n_x_size);

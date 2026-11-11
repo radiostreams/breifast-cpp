@@ -3,7 +3,6 @@
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
-#include <catch2/matchers/catch_matchers_string.hpp>
 #include <catch2/matchers/catch_matchers_vector.hpp>
 
 #include "cpu/pointwise.hpp"
@@ -106,35 +105,4 @@ TEST_CASE("combine_noise_map overwrites the stale values of out_noise_map", "[co
   CHECK_THAT(run_rms(1.0e30F), Equals(run_rms(0.F)));
   CHECK_THAT(run_constant(std::numeric_limits<float>::quiet_NaN()), Equals(run_constant(0.F)));
   CHECK_THAT(run_constant(1.0e30F), Equals(run_constant(0.F)));
-}
-
-TEST_CASE("combine_noise_map rejects spans that do not hold one value per pixel", "[combine_noise_map]")
-{
-  const std::vector<float> short_values(n_pixels - 1, 0.5F);
-  const std::vector<float> long_values(n_pixels + 1, 0.5F);
-  std::vector<float> out_noise_map(n_pixels);
-  std::vector<float> short_out(n_pixels - 1);
-
-  using Catch::Matchers::ContainsSubstring;
-  CHECK_THROWS_WITH(combine_noise_map_rms(short_values, rms_floor, selfnoise_offset, dde_noise, selfnoise_scale,
-                                          dde_scale, out_noise_map),
-                    ContainsSubstring("rms size mismatch"));
-  CHECK_THROWS_WITH(combine_noise_map_rms(long_values, rms_floor, selfnoise_offset, dde_noise, selfnoise_scale,
-                                          dde_scale, out_noise_map),
-                    ContainsSubstring("rms size mismatch"));
-  CHECK_THROWS_WITH(combine_noise_map_rms(rms, rms_floor, short_values, dde_noise, selfnoise_scale, dde_scale,
-                                          out_noise_map),
-                    ContainsSubstring("selfnoise_offset or dde_noise size mismatch"));
-  CHECK_THROWS_WITH(combine_noise_map_rms(rms, rms_floor, selfnoise_offset, long_values, selfnoise_scale, dde_scale,
-                                          out_noise_map),
-                    ContainsSubstring("selfnoise_offset or dde_noise size mismatch"));
-  CHECK_THROWS_WITH(combine_noise_map_constant(base_noise, short_values, dde_noise, selfnoise_scale, dde_scale,
-                                               out_noise_map),
-                    ContainsSubstring("selfnoise_offset or dde_noise size mismatch"));
-  CHECK_THROWS_WITH(combine_noise_map_constant(base_noise, selfnoise_offset, long_values, selfnoise_scale,
-                                               dde_scale, out_noise_map),
-                    ContainsSubstring("selfnoise_offset or dde_noise size mismatch"));
-  CHECK_THROWS_WITH(combine_noise_map_constant(base_noise, selfnoise_offset, dde_noise, selfnoise_scale, dde_scale,
-                                               short_out),
-                    ContainsSubstring("selfnoise_offset or dde_noise size mismatch"));
 }

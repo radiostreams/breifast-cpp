@@ -3,7 +3,6 @@
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
-#include <catch2/matchers/catch_matchers_string.hpp>
 #include <catch2/matchers/catch_matchers_vector.hpp>
 
 #include "cpu/windows.hpp"
@@ -68,26 +67,4 @@ TEST_CASE("rms_noise_map ignores whatever the workspaces and the output held bef
 
   CHECK_THAT(run_rms_noise_map(std::numeric_limits<float>::quiet_NaN()), Equals(from_zero));
   CHECK_THAT(run_rms_noise_map(1.0e30F), Equals(from_zero));
-}
-
-TEST_CASE("rms_noise_map rejects buffers of the wrong size", "[rms_noise_map]")
-{
-  std::vector<float> row_window_sums(n_pixels);
-  std::vector<double> column_accumulators(n_x);
-  std::vector<float> out_rms(n_pixels);
-  const std::vector<float> short_plane(n_pixels - 1);
-  std::vector<float> short_rows(n_pixels - 1);
-  std::vector<double> short_columns(n_x - 1);
-  std::vector<float> short_out(n_pixels - 1);
-
-  using Catch::Matchers::ContainsSubstring;
-  CHECK_THROWS_WITH(rms_noise_map(short_plane, n_y, n_x, boxsize, row_window_sums, column_accumulators, out_rms),
-                    ContainsSubstring("plane size mismatch"));
-  CHECK_THROWS_WITH(rms_noise_map(plane, n_y, n_x, boxsize, short_rows, column_accumulators, out_rms),
-                    ContainsSubstring("row_window_sums size mismatch"));
-  CHECK_THROWS_WITH(rms_noise_map(plane, n_y, n_x, boxsize, row_window_sums, short_columns, out_rms),
-                    ContainsSubstring("column_accumulators size mismatch"));
-  CHECK_THROWS_WITH(rms_noise_map(plane, n_y, n_x, boxsize, row_window_sums, column_accumulators, short_out),
-                    ContainsSubstring("out_rms size mismatch"));
-  CHECK_NOTHROW(rms_noise_map(plane, n_y, n_x, boxsize, row_window_sums, column_accumulators, out_rms));
 }

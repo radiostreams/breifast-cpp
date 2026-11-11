@@ -4,7 +4,6 @@
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
-#include <catch2/matchers/catch_matchers_string.hpp>
 #include <catch2/matchers/catch_matchers_vector.hpp>
 #include <xtensor/containers/xtensor.hpp>
 #include <xtensor/core/xmath.hpp>
@@ -71,20 +70,6 @@ TEST_CASE("stamp_zero_inner_box handles inner_boxsize 0, the radius itself and a
   std::vector<float> single = {7.F};
   stamp_zero_inner_box(single, 0, 0);
   CHECK_THAT(single, Equals(std::vector<float>{0.F}));
-}
-
-TEST_CASE("stamp_zero_inner_box rejects a negative radius or inner_boxsize and a stamp of the wrong size",
-          "[stamp_adjacent_noise]")
-{
-  auto stamp = counting_stamp();
-  std::vector<float> short_stamp(48);
-
-  using Catch::Matchers::ContainsSubstring;
-  CHECK_THROWS_WITH(stamp_zero_inner_box(stamp, -1, 1), ContainsSubstring("negative radius"));
-  CHECK_THROWS_WITH(stamp_zero_inner_box(stamp, 3, -1), ContainsSubstring("negative inner_boxsize"));
-  CHECK_THROWS_WITH(stamp_zero_inner_box(short_stamp, 3, 1), ContainsSubstring("stamp size mismatch"));
-  CHECK_THROWS_WITH(stamp_zero_inner_box(stamp, 2, 1), ContainsSubstring("stamp size mismatch"));
-  CHECK_NOTHROW(stamp_zero_inner_box(stamp, 3, 1));
 }
 
 TEST_CASE("stamp_abs_extreme matches numpy's max(abs(min), abs(max)) on a seeded-random 5x5 stamp",

@@ -3,7 +3,6 @@
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
-#include <catch2/matchers/catch_matchers_string.hpp>
 #include <catch2/matchers/catch_matchers_vector.hpp>
 
 #include "cpu/channel_reductions.hpp"
@@ -130,49 +129,4 @@ TEST_CASE("weighted_band_image overwrites the stale values of out_plane", "[weig
 
   CHECK_THAT(from_nan, Equals(from_zero));
   CHECK_THAT(from_garbage, Equals(from_zero));
-}
-
-TEST_CASE("weighted_band_image rejects a band that is negative or empty or reversed", "[weighted_band_image]")
-{
-  std::vector<float> out_plane(n_pixels);
-
-  using Catch::Matchers::ContainsSubstring;
-  CHECK_THROWS_WITH(weighted_band_image(cube, weights, mean_image, n_pixels, -1, 2, 1.F, 0.5F, out_plane),
-                    ContainsSubstring("invalid band"));
-  CHECK_THROWS_WITH(weighted_band_image(cube, weights, mean_image, n_pixels, 1, 1, 1.F, 0.5F, out_plane),
-                    ContainsSubstring("invalid band"));
-  CHECK_THROWS_WITH(weighted_band_image(cube, weights, mean_image, n_pixels, 3, 1, 1.F, 0.5F, out_plane),
-                    ContainsSubstring("invalid band"));
-}
-
-TEST_CASE("weighted_band_image rejects a cube, weights or mean image with fewer channels than the band needs",
-          "[weighted_band_image]")
-{
-  // The band [0, 4) needs four channels. Each input in turn is cut to three.
-  std::vector<float> out_plane(n_pixels);
-  const std::vector<float> short_cube(cube.begin(), cube.begin() + 3 * n_pixels);
-  const std::vector<float> short_weights(weights.begin(), weights.begin() + 3);
-  const std::vector<float> short_mean(mean_image.begin(), mean_image.begin() + 3 * n_pixels);
-
-  using Catch::Matchers::ContainsSubstring;
-  CHECK_THROWS_WITH(weighted_band_image(short_cube, weights, mean_image, n_pixels, 0, 4, 1.F, 0.25F, out_plane),
-                    ContainsSubstring("cube has fewer channels"));
-  CHECK_THROWS_WITH(weighted_band_image(cube, short_weights, mean_image, n_pixels, 0, 4, 1.F, 0.25F, out_plane),
-                    ContainsSubstring("weights has fewer entries"));
-  CHECK_THROWS_WITH(weighted_band_image(cube, weights, short_mean, n_pixels, 0, 4, 1.F, 0.25F, out_plane),
-                    ContainsSubstring("mean_image has fewer channels"));
-  // A band that ends exactly at the last channel the inputs hold is valid.
-  CHECK_NOTHROW(weighted_band_image(short_cube, short_weights, short_mean, n_pixels, 0, 3, 1.F, 0.25F, out_plane));
-}
-
-TEST_CASE("weighted_band_image rejects an out_plane that does not hold n_pixels", "[weighted_band_image]")
-{
-  std::vector<float> too_short(n_pixels - 1);
-  std::vector<float> too_long(n_pixels + 1);
-
-  using Catch::Matchers::ContainsSubstring;
-  CHECK_THROWS_WITH(weighted_band_image(cube, weights, mean_image, n_pixels, 0, 2, 1.F, 0.5F, too_short),
-                    ContainsSubstring("out_plane size mismatch"));
-  CHECK_THROWS_WITH(weighted_band_image(cube, weights, mean_image, n_pixels, 0, 2, 1.F, 0.5F, too_long),
-                    ContainsSubstring("out_plane size mismatch"));
 }

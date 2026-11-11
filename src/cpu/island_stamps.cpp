@@ -2,9 +2,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <cmath>
 #include <limits>
-#include <stdexcept>
 
 #include <xtensor/containers/xadapt.hpp>
 #include <xtensor/core/xmath.hpp>
@@ -17,19 +17,10 @@ namespace breifast::plane_lot::detail
 void stamp_extract(std::span<const float> plane, size_t n_y, size_t n_x, long centre_y, long centre_x, long radius,
                    std::span<float> out_stamp)
 {
-  if (plane.size() != n_y * n_x)
-  {
-    throw std::runtime_error("stamp_extract: plane size mismatch with n_y * n_x");
-  }
-  if (radius < 0)
-  {
-    throw std::runtime_error("stamp_extract: negative radius");
-  }
+  assert(plane.size() == n_y * n_x);
+  assert(radius >= 0);
   const long size = 2 * radius + 1;
-  if (out_stamp.size() != static_cast<size_t>(size) * static_cast<size_t>(size))
-  {
-    throw std::runtime_error("stamp_extract: out_stamp size mismatch with (2 * radius + 1)^2");
-  }
+  assert(out_stamp.size() == static_cast<size_t>(size) * static_cast<size_t>(size));
 
   std::fill(out_stamp.begin(), out_stamp.end(), 0.F);
 
@@ -53,19 +44,10 @@ void stamp_extract(std::span<const float> plane, size_t n_y, size_t n_x, long ce
 
 void stamp_zero_inner_box(std::span<float> stamp, long radius, long inner_boxsize)
 {
-  if (radius < 0)
-  {
-    throw std::runtime_error("stamp_zero_inner_box: negative radius");
-  }
-  if (inner_boxsize < 0)
-  {
-    throw std::runtime_error("stamp_zero_inner_box: negative inner_boxsize");
-  }
+  assert(radius >= 0);
+  assert(inner_boxsize >= 0);
   const long size = 2 * radius + 1;
-  if (stamp.size() != static_cast<size_t>(size) * static_cast<size_t>(size))
-  {
-    throw std::runtime_error("stamp_zero_inner_box: stamp size mismatch with (2 * radius + 1)^2");
-  }
+  assert(stamp.size() == static_cast<size_t>(size) * static_cast<size_t>(size));
 
   const long half = std::min(inner_boxsize, radius);
   for (long row = radius - half; row <= radius + half; ++row)
@@ -89,15 +71,9 @@ float stamp_abs_extreme(std::span<const float> stamp)
 
 DonutStats stamp_donut_stats(std::span<const float> stamp, long radius)
 {
-  if (radius < 0)
-  {
-    throw std::runtime_error("stamp_donut_stats: negative radius");
-  }
+  assert(radius >= 0);
   const size_t size = static_cast<size_t>(2 * radius + 1);
-  if (stamp.size() != size * size)
-  {
-    throw std::runtime_error("stamp_donut_stats: stamp size mismatch with (2 * radius + 1)^2");
-  }
+  assert(stamp.size() == size * size);
 
   const auto sub_image = xt::adapt(stamp.data(), stamp.size(), xt::no_ownership(), std::array<size_t, 2>{size, size});
   const auto donut = xt::filter(sub_image, xt::not_equal(sub_image, 0.F));
@@ -109,19 +85,10 @@ DonutStats stamp_donut_stats(std::span<const float> stamp, long radius)
 float stamp_beam_chi2(std::span<const float> beam_stamp, std::span<const float> beam_kernel, long halfsize,
                       float adjacent_noise)
 {
-  if (halfsize < 0)
-  {
-    throw std::runtime_error("stamp_beam_chi2: negative halfsize");
-  }
+  assert(halfsize >= 0);
   const size_t size = static_cast<size_t>(2 * halfsize + 1);
-  if (beam_stamp.size() != size * size)
-  {
-    throw std::runtime_error("stamp_beam_chi2: beam_stamp size mismatch with (2 * halfsize + 1)^2");
-  }
-  if (beam_kernel.size() != size * size)
-  {
-    throw std::runtime_error("stamp_beam_chi2: beam_kernel size mismatch with (2 * halfsize + 1)^2");
-  }
+  assert(beam_stamp.size() == size * size);
+  assert(beam_kernel.size() == size * size);
 
   const auto beam_sub_image =
       xt::adapt(beam_stamp.data(), beam_stamp.size(), xt::no_ownership(), std::array<size_t, 2>{size, size});

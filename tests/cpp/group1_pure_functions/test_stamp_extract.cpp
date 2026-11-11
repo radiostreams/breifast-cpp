@@ -2,7 +2,6 @@
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
-#include <catch2/matchers/catch_matchers_string.hpp>
 #include <catch2/matchers/catch_matchers_vector.hpp>
 
 #include "cpu/island_stamps.hpp"
@@ -147,17 +146,4 @@ TEST_CASE("stamp_extract overwrites the stale values of out_stamp", "[stamp_extr
   CHECK_THAT(run_stamp_extract(0, 0, 2, std::numeric_limits<float>::quiet_NaN()), Equals(from_zero));
   CHECK_THAT(run_stamp_extract(0, 0, 2, 1.0e30F), Equals(from_zero));
   CHECK_THAT(run_stamp_extract(-10, 3, 2, 1.0e30F), Equals(std::vector<float>(25, 0.F)));
-}
-
-TEST_CASE("stamp_extract rejects a plane or stamp of the wrong size and a negative radius", "[stamp_extract]")
-{
-  std::vector<float> stamp(25);
-  std::vector<float> short_stamp(24);
-  const std::vector<float> short_plane(n_y * n_x - 1);
-
-  using Catch::Matchers::ContainsSubstring;
-  CHECK_THROWS_WITH(stamp_extract(short_plane, n_y, n_x, 3, 3, 2, stamp), ContainsSubstring("plane size mismatch"));
-  CHECK_THROWS_WITH(stamp_extract(plane, n_y, n_x, 3, 3, 2, short_stamp), ContainsSubstring("out_stamp size mismatch"));
-  CHECK_THROWS_WITH(stamp_extract(plane, n_y, n_x, 3, 3, -1, stamp), ContainsSubstring("negative radius"));
-  CHECK_NOTHROW(stamp_extract(plane, n_y, n_x, 3, 3, 2, stamp));
 }

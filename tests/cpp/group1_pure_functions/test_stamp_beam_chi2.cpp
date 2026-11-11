@@ -3,7 +3,6 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
-#include <catch2/matchers/catch_matchers_string.hpp>
 
 #include "cpu/island_stamps.hpp"
 
@@ -68,15 +67,4 @@ TEST_CASE("stamp_beam_chi2 is 0 for a perfect fit, an all-zero stamp and a zero 
 
   // Radius 0: one pixel always fits itself.
   CHECK(stamp_beam_chi2(std::vector<float>{3.F}, std::vector<float>{0.5F}, 0, 1.F) == 0.F);
-}
-
-TEST_CASE("stamp_beam_chi2 rejects a negative halfsize and a stamp or kernel of the wrong size", "[stamp_beam_chi2]")
-{
-  const std::vector<float> nine(9, 1.F);
-  using Catch::Matchers::ContainsSubstring;
-  CHECK_THROWS_WITH(stamp_beam_chi2(nine, nine, -1, 1.F), ContainsSubstring("negative halfsize"));
-  CHECK_THROWS_WITH(stamp_beam_chi2(std::vector<float>(8, 1.F), nine, 1, 1.F), ContainsSubstring("beam_stamp size"));
-  CHECK_THROWS_WITH(stamp_beam_chi2(nine, std::vector<float>(10, 1.F), 1, 1.F), ContainsSubstring("beam_kernel size"));
-  CHECK_THROWS_WITH(stamp_beam_chi2(nine, std::vector<float>(), 1, 1.F), ContainsSubstring("beam_kernel size"));
-  CHECK_NOTHROW(stamp_beam_chi2(nine, nine, 1, 1.F));
 }

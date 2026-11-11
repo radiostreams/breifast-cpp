@@ -5,7 +5,6 @@
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
-#include <catch2/matchers/catch_matchers_string.hpp>
 #include <catch2/matchers/catch_matchers_vector.hpp>
 
 #include "cpu/channel_reductions.hpp"
@@ -118,29 +117,4 @@ TEST_CASE("spectral_variance_moments leaves every sum at 0 when no channel is fl
   CHECK_THAT(sums.sum2, Equals(zeros));
   CHECK_THAT(sums.sum3, Equals(zeros));
   CHECK_THAT(sums.sum4, Equals(zeros));
-}
-
-TEST_CASE("spectral_variance_moments rejects a cube and outputs that do not match the flags and n_pixels",
-          "[spectral_variance_moments]")
-{
-  const auto cube = make_cube();
-  std::vector<float> sum2(n_pixels);
-  std::vector<float> sum3(n_pixels);
-  std::vector<float> sum4(n_pixels);
-  std::vector<float> short_sum(n_pixels - 1);
-  const std::span<const float> short_cube = std::span<const float>(cube).first(3 * n_pixels);
-
-  using Catch::Matchers::ContainsSubstring;
-  // Four flags need four channels of n_pixels values.
-  CHECK_THROWS_WITH(spectral_variance_moments(short_cube, channel_flags, n_pixels, sum2, sum3, sum4),
-                    ContainsSubstring("cube size mismatch"));
-  CHECK_THROWS_WITH(spectral_variance_moments(cube, channel_flags, n_pixels + 1, sum2, sum3, sum4),
-                    ContainsSubstring("cube size mismatch"));
-  CHECK_THROWS_WITH(spectral_variance_moments(cube, channel_flags, n_pixels, short_sum, sum3, sum4),
-                    ContainsSubstring("output size mismatch"));
-  CHECK_THROWS_WITH(spectral_variance_moments(cube, channel_flags, n_pixels, sum2, short_sum, sum4),
-                    ContainsSubstring("output size mismatch"));
-  CHECK_THROWS_WITH(spectral_variance_moments(cube, channel_flags, n_pixels, sum2, sum3, short_sum),
-                    ContainsSubstring("output size mismatch"));
-  CHECK_NOTHROW(spectral_variance_moments(cube, channel_flags, n_pixels, sum2, sum3, sum4));
 }

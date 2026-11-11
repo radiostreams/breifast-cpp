@@ -2,10 +2,10 @@
 
 #include <algorithm>
 #include <bit>
+#include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <limits>
-#include <stdexcept>
 #include <xsimd/xsimd.hpp>
 
 namespace breifast::plane_lot::detail
@@ -17,36 +17,16 @@ SnrFilterSummary snr_and_filters(std::span<const float> plane, std::span<const f
                                  std::array<std::span<long>, 3> histograms)
 {
   const size_t n_pixels = plane.size();
-  if (noise_map.size() != n_pixels || out_snr.size() != n_pixels || image_mask.size() != n_pixels)
+  assert(noise_map.size() == n_pixels && out_snr.size() == n_pixels && image_mask.size() == n_pixels);
+  assert(params.max_sigma_bin > 0);
+  assert(std::ranges::all_of(histograms, [&](const auto &histogram)
+                             { return histogram.size() == static_cast<size_t>(2 * params.max_sigma_bin); }));
+  [[maybe_unused]] const auto covers_band = [&](std::span<const float> cutoff)
   {
-    throw std::runtime_error("snr_and_filters: noise_map, out_snr or image_mask size mismatch with plane");
-  }
-  if (params.max_sigma_bin <= 0)
-  {
-    throw std::runtime_error("snr_and_filters: max_sigma_bin must be positive");
-  }
-  for (const auto &histogram : histograms)
-  {
-    if (histogram.size() != static_cast<size_t>(2 * params.max_sigma_bin))
-    {
-      throw std::runtime_error("snr_and_filters: histogram size mismatch with 2 * max_sigma_bin");
-    }
-  }
-  for (const auto &cutoff : {snr_cutoff, flux_cutoff})
-  {
-    if (cutoff.empty())
-    {
-      continue;
-    }
-    if (params.band_start < 0 || params.band_start >= params.band_stop)
-    {
-      throw std::runtime_error("snr_and_filters: invalid band");
-    }
-    if (cutoff.size() < static_cast<size_t>(params.band_stop) * n_pixels)
-    {
-      throw std::runtime_error("snr_and_filters: cutoff cube has fewer channels than the band needs");
-    }
-  }
+    return cutoff.empty() || (params.band_start >= 0 && params.band_start < params.band_stop &&
+                              cutoff.size() >= static_cast<size_t>(params.band_stop) * n_pixels);
+  };
+  assert(covers_band(snr_cutoff) && covers_band(flux_cutoff));
   for (const auto &histogram : histograms)
   {
     std::fill(histogram.begin(), histogram.end(), 0L);
