@@ -2,8 +2,10 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <catch2/matchers/catch_matchers_vector.hpp>
 
+#include <array>
 #include <cmath>
 #include <cstddef>
+#include <random>
 #include <vector>
 #include <optional>
 
@@ -13,6 +15,7 @@
 using namespace breifast;
 using Catch::Matchers::Equals;
 using Catch::Matchers::WithinAbs;
+using Catch::Matchers::WithinRel;
 
 namespace
 {
@@ -58,6 +61,150 @@ Fixture make_fixture(const bool use_rms, const long histogram_detail)
   return fixture;
 }
 
+// A plane with structure, so that CPU/GPU differences show up. make_fixture() has a cube of ones with unit noise,
+// where the SNR plane equals the input and many divergences are invisible. Here: seeded Gaussian noise in every
+// channel, five Gaussian sources (sigma 1 pixel) with a spectral slope, non-uniform weights, an excluded border strip
+// and noise maps that vary across the plane. Every band has several channels, so the CPU's single-channel SNR
+// write-back does not happen (see the write-back tests below).
+constexpr std::size_t structured_n_y = 64;
+constexpr std::size_t structured_n_x = 80;
+constexpr std::size_t structured_n_channels = 4;
+
+Fixture make_structured_fixture(const bool use_rms)
+{
+  Fixture fixture;
+  auto &cube = fixture.item.stokes_cube;
+  cube.resize({structured_n_channels, structured_n_y, structured_n_x});
+  std::mt19937 generator(12345);
+  std::normal_distribution<float> noise(0.F, 1.F);
+  for (std::size_t i = 0; i < cube.size(); ++i)
+  {
+    cube.data()[i] = noise(generator);
+  }
+
+  struct Source
+  {
+    float y;
+    float x;
+    float peak;
+  };
+  constexpr std::array<Source, 5> sources{
+      {{12.F, 15.F, 20.F}, {30.F, 40.F, 15.F}, {50.F, 20.F, 25.F}, {20.F, 65.F, 12.F}, {45.F, 60.F, 18.F}}};
+  for (std::size_t c = 0; c < structured_n_channels; ++c)
+  {
+    const float slope = 1.F + 0.1F * (static_cast<float>(c) - 1.5F);
+    for (std::size_t y = 0; y < structured_n_y; ++y)
+    {
+      for (std::size_t x = 0; x < structured_n_x; ++x)
+      {
+        for (const auto &source : sources)
+        {
+          const float dy = static_cast<float>(y) - source.y;
+          const float dx = static_cast<float>(x) - source.x;
+          cube(c, y, x) += source.peak * slope * std::exp(-(dy * dy + dx * dx) / 2.F);
+        }
+      }
+    }
+  }
+  fixture.item.weights = xt::xarray<float>({1.F, 0.8F, 1.2F, 0.6F});
+  fixture.item.nonzero_channels = xt::xarray<bool>({true, true, true, true});
+  fixture.item.stokes_label = "I";
+
+  fixture.group.accept_mask.resize({structured_n_channels, structured_n_y, structured_n_x});
+  fixture.group.accept_mask.fill(true);
+  for (std::size_t c = 0; c < structured_n_channels; ++c)
+  {
+    for (std::size_t y = 0; y < structured_n_y; ++y)
+    {
+      for (std::size_t x = 0; x < 3; ++x)
+      {
+        fixture.group.accept_mask(c, y, x) = false;
+      }
+    }
+  }
+  fixture.group.selfnoise_offset.resize({structured_n_y, structured_n_x});
+  fixture.group.selfnoise_raw.resize({structured_n_y, structured_n_x});
+  fixture.group.dde_noise.resize({structured_n_y, structured_n_x});
+  for (std::size_t y = 0; y < structured_n_y; ++y)
+  {
+    for (std::size_t x = 0; x < structured_n_x; ++x)
+    {
+      fixture.group.selfnoise_offset(y, x) = 0.01F * static_cast<float>(x) / static_cast<float>(structured_n_x);
+      fixture.group.dde_noise(y, x) = 0.005F * static_cast<float>(y) / static_cast<float>(structured_n_y);
+      fixture.group.selfnoise_raw(y, x) = 1.F + 0.1F * std::sin(0.3F * static_cast<float>(x));
+    }
+  }
+
+  fixture.config.subtract_mean = false;
+  fixture.config.use_rms_noise_estimator = use_rms;
+  // Much larger than the sources, so that a source barely raises its own RMS noise.
+  fixture.config.boxsize = 21;
+  fixture.config.inner_boxsize = 2;
+  fixture.config.histogram_detail = 2;
+  fixture.config.max_sigma_bin = 20;
+  fixture.config.threshold = 5.F;
+  fixture.config.beam_size_enabled = false;
+  fixture.config.band_slices = {
+      BandSlice{.start = 0, .stop = 4, .selfnoise_scale_factor = 1.F, .label = "B0~3"},
+      BandSlice{.start = 0, .stop = 2, .selfnoise_scale_factor = 1.5F, .label = "B0~1"},
+      BandSlice{.start = 2, .stop = 4, .selfnoise_scale_factor = 1.5F, .label = "B2~3"},
+  };
+  return fixture;
+}
+
+// Bands are processed in reverse list order, so B1 and B0 run first and write their SNR planes back into channels 1
+// and 0 on the CPU, and the wide band B0~3 then reads those channels.
+std::vector<BandSlice> write_back_bands()
+{
+  return {
+      BandSlice{.start = 0, .stop = 4, .selfnoise_scale_factor = 1.F, .label = "B0~3"},
+      BandSlice{.start = 0, .stop = 1, .selfnoise_scale_factor = 4.F, .label = "B0"},
+      BandSlice{.start = 1, .stop = 2, .selfnoise_scale_factor = 4.F, .label = "B1"},
+  };
+}
+
+// A 256 x 256 single-channel plane with an isolated 100.0 spike every third pixel in both directions (85 x 85 = 7225
+// single-pixel islands) on a deterministic background within +-0.3. In global-MAD mode the noise is about 0.25, so
+// every spike is far above the threshold and no background pixel reaches it.
+Fixture make_many_islands_fixture()
+{
+  constexpr std::size_t size = 256;
+  Fixture fixture;
+  auto &cube = fixture.item.stokes_cube;
+  cube.resize({1, size, size});
+  for (std::size_t y = 0; y < size; ++y)
+  {
+    for (std::size_t x = 0; x < size; ++x)
+    {
+      const bool spike = y % 3 == 1 && x % 3 == 1;
+      cube(0, y, x) = spike ? 100.F : 0.3F * (static_cast<float>((y * 7 + x * 13) % 11) - 5.F) / 5.F;
+    }
+  }
+  fixture.item.weights = xt::xarray<float>({1.F});
+  fixture.item.nonzero_channels = xt::xarray<bool>({true});
+  fixture.item.stokes_label = "I";
+
+  fixture.group.accept_mask.resize({1, size, size});
+  fixture.group.accept_mask.fill(true);
+  fixture.group.selfnoise_offset.resize({size, size});
+  fixture.group.selfnoise_offset.fill(0.F);
+  fixture.group.selfnoise_raw.resize({size, size});
+  fixture.group.selfnoise_raw.fill(1.F);
+  fixture.group.dde_noise.resize({size, size});
+  fixture.group.dde_noise.fill(0.F);
+
+  fixture.config.subtract_mean = false;
+  fixture.config.use_rms_noise_estimator = false;
+  fixture.config.boxsize = 5;
+  fixture.config.inner_boxsize = 0;
+  fixture.config.histogram_detail = 0;
+  fixture.config.max_sigma_bin = 5;
+  fixture.config.threshold = 5.F;
+  fixture.config.beam_size_enabled = false;
+  fixture.config.band_slices = {BandSlice{.start = 0, .stop = 1, .selfnoise_scale_factor = 1.F, .label = "B0"}};
+  return fixture;
+}
+
 void check_close(const double actual, const double expected, const char *name)
 {
   INFO(name);
@@ -65,7 +212,9 @@ void check_close(const double actual, const double expected, const char *name)
   {
     return;
   }
-  CHECK_THAT(actual, WithinAbs(expected, 1e-5));
+  // Absolute for values near 0, relative for large ones: the structured fixture has fluxes and moments far above 1,
+  // where float rounding (operation order, FMA contraction) differs between the host compiler and nvcc.
+  CHECK_THAT(actual, WithinAbs(expected, 1e-5) || WithinRel(expected, 1e-5));
 }
 
 
@@ -138,7 +287,8 @@ void compare_plane_results(const ProcessPlaneResult &cpu, const ProcessPlaneResu
     }
   }
 }
-void run_parity(Fixture fixture)
+/// Runs the CPU and GPU on copies of the fixture's item, compares the results and returns the CPU one.
+ProcessPlaneResult run_parity(Fixture fixture)
 {
   auto cpu_item = fixture.item;
   auto gpu_item = fixture.item;
@@ -146,6 +296,7 @@ void run_parity(Fixture fixture)
   const auto cpu_result = process_plane(scratch, fixture.config, cpu_item, fixture.group);
   const auto gpu_result = gpu::gpu_process_plane_batch(gpu_item, fixture.group, fixture.config);
   compare_plane_results(cpu_result, gpu_result);
+  return cpu_result;
 }
 } // namespace
 
@@ -263,4 +414,63 @@ TEST_CASE("GPU batch runner matches CPU batch runner", "[gpu][parity][batch]")
   {
     compare_plane_results(cpu_results[i], gpu_results[i]);
   }
+}
+
+TEST_CASE("GPU parity on a structured plane in RMS noise mode", "[gpu][parity]")
+{
+  const auto cpu_result = run_parity(make_structured_fixture(true));
+  INFO("the fixture must produce detections to be meaningful");
+  CHECK(cpu_result.detections.size() >= 5);
+}
+
+TEST_CASE("GPU parity on a structured plane in global-MAD noise mode", "[gpu][parity]")
+{
+  const auto cpu_result = run_parity(make_structured_fixture(false));
+  INFO("the fixture must produce detections to be meaningful");
+  CHECK(cpu_result.detections.size() >= 5);
+}
+
+// Control for the next test: the CPU really does write the SNR of single-channel bands back into the cube with
+// write_back_bands(), so a failure there is the GPU missing it, not a fixture that never triggers it.
+TEST_CASE("CPU writes the SNR of single-channel bands back into the cube", "[parity][fixture]")
+{
+  auto fixture = make_structured_fixture(true);
+  fixture.config.band_slices = write_back_bands();
+  auto item = fixture.item;
+  ProcessBandScratch scratch;
+  process_plane(scratch, fixture.config, item, fixture.group);
+
+  const auto &before = fixture.item.stokes_cube;
+  const auto &after = item.stokes_cube;
+  CHECK(after(0, 30, 40) != before(0, 30, 40));
+  CHECK(after(1, 30, 40) != before(1, 30, 40));
+  CHECK(after(2, 30, 40) == before(2, 30, 40));
+  CHECK(after(3, 30, 40) == before(3, 30, 40));
+}
+
+// Known GPU bug: the GPU neither writes the SNR back nor computes the spectral variance stats after the bands, so the
+// wide band's detections and the variance stats differ from the CPU. Remove [!shouldfail] when the refactor fixes it
+// (gpu-refactor-plan.md, step 15).
+TEST_CASE("GPU parity when a wide band follows single-channel bands", "[gpu][parity][!shouldfail]")
+{
+  auto fixture = make_structured_fixture(true);
+  fixture.config.band_slices = write_back_bands();
+  run_parity(fixture);
+}
+
+// Control for the next test: the fixture has more islands than the GPU's 4096 cap.
+TEST_CASE("CPU finds more than 4096 islands in the many-islands fixture", "[parity][fixture]")
+{
+  auto fixture = make_many_islands_fixture();
+  ProcessBandScratch scratch;
+  const auto result = process_plane(scratch, fixture.config, fixture.item, fixture.group);
+  CHECK(result.detections.size() == 85 * 85);
+}
+
+// Known GPU bug: a band with more than 4096 islands throws on the GPU (and the batch runner then returns an empty
+// result); the CPU has no limit. Remove [!shouldfail] when the refactor removes the cap (gpu-refactor-plan.md,
+// step 14).
+TEST_CASE("GPU parity with more than 4096 islands", "[gpu][parity][!shouldfail]")
+{
+  run_parity(make_many_islands_fixture());
 }
