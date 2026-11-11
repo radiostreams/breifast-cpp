@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cassert>
 #include <span>
 #include <type_traits>
 
@@ -114,18 +115,11 @@ void band_plane(ProcessBandScratch &scratch, const PlaneBatchItem &item, const P
   auto &plane = scratch.plane;
   plane.resize({n_y, n_x});
   const auto &cube = item.stokes_cube;
-  if (cube.shape(1) != n_y || cube.shape(2) != n_x)
-  {
-    throw std::runtime_error("stokes_cube shape mismatch with plane");
-  }
   std::span<const float> mean_image_span;
   if (do_subtract_mean)
   {
     const auto &mean_image = *group.mean_image;
-    if (mean_image.shape(1) != n_y || mean_image.shape(2) != n_x)
-    {
-      throw std::runtime_error("mean_image shape mismatch with plane");
-    }
+    assert(mean_image.shape(1) == n_y && mean_image.shape(2) == n_x);
     mean_image_span = std::span<const float>(mean_image.data(), mean_image.size());
   }
   plane_lot::detail::weighted_band_image({cube.data(), cube.size()}, {weights.data(), weights.size()}, mean_image_span,
@@ -150,12 +144,9 @@ NoiseStage noise_stage(ProcessBandScratch &scratch, const PlaneBatchGroup &group
   const size_t n_y = plane.shape(0);
   const size_t n_x = plane.shape(1);
 
-  // Precondition: group.selfnoise_offset/dde_noise must match the plane's shape.
-  if (group.selfnoise_offset.shape() != std::array<size_t, 2>{n_y, n_x} ||
-      group.dde_noise.shape() != std::array<size_t, 2>{n_y, n_x})
-  {
-    throw std::runtime_error("selfnoise_offset/dde_noise shape mismatch with plane");
-  }
+  // validate_plane_inputs() checked these shapes.
+  [[maybe_unused]] const std::array<size_t, 2> plane_shape{n_y, n_x};
+  assert(group.selfnoise_offset.shape() == plane_shape && group.dde_noise.shape() == plane_shape);
   const std::span<const float> selfnoise_span(group.selfnoise_offset.data(), group.selfnoise_offset.size());
   const std::span<const float> dde_span(group.dde_noise.data(), group.dde_noise.size());
 
@@ -306,17 +297,11 @@ inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, cons
   const size_t n_y = item.stokes_cube.shape(1);
   const size_t n_x = item.stokes_cube.shape(2);
   const auto n_pixels = n_y * n_x;
-  if (band.start < 0 || static_cast<size_t>(band.stop) > item.stokes_cube.shape(0))
-  {
-    throw std::runtime_error("band exceeds the stokes_cube channels");
-  }
+  assert(band.start >= 0 && static_cast<size_t>(band.stop) <= item.stokes_cube.shape(0));
 
   // Masking
   auto &image_mask = scratch.image_mask;
-  if (group.accept_mask.shape(1) != n_y || group.accept_mask.shape(2) != n_x)
-  {
-    throw std::runtime_error("accept_mask shape mismatch with plane");
-  }
+  assert(group.accept_mask.shape(1) == n_y && group.accept_mask.shape(2) == n_x);
   image_mask.resize({n_y, n_x});
   if (!plane_lot::detail::or_accept_masks(std::span<const bool>(group.accept_mask.data(), group.accept_mask.size()),
                                           n_pixels, band.start, band.stop,
