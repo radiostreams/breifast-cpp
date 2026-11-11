@@ -282,49 +282,6 @@ GpuBandJob::GpuBandJob(GpuBandInput input, const GpuBandWorkspaceSizes &workspac
     : input(input), workspace_sizes(workspace_sizes), result_n_pixels(result_n_pixels),
       result_histogram_bins(result_histogram_bins)
 {
-  cudaStream_t raw_stream{};
-  gpuStreamCreate(&raw_stream);
-  stream = GpuStream{raw_stream};
-}
-
-GpuBandJob::GpuBandJob(GpuBandJob &&other) noexcept
-    : input(other.input), workspace_sizes(other.workspace_sizes), result_n_pixels(other.result_n_pixels),
-      result_histogram_bins(other.result_histogram_bins), workspace(std::move(other.workspace)),
-      result(std::move(other.result)), stream(other.stream), status(other.status), error(std::move(other.error))
-{
-  other.stream = GpuStream{};
-}
-
-GpuBandJob &GpuBandJob::operator=(GpuBandJob &&other) noexcept
-{
-  if (this != &other)
-  {
-    if (stream.handle_ != nullptr)
-    {
-      (void)cudaStreamSynchronize(stream);
-      (void)cudaStreamDestroy(stream);
-    }
-    input = other.input;
-    workspace_sizes = other.workspace_sizes;
-    result_n_pixels = other.result_n_pixels;
-    result_histogram_bins = other.result_histogram_bins;
-    workspace = std::move(other.workspace);
-    result = std::move(other.result);
-    stream = other.stream;
-    status = other.status;
-    error = std::move(other.error);
-    other.stream = GpuStream{};
-  }
-  return *this;
-}
-
-GpuBandJob::~GpuBandJob()
-{
-  if (stream.handle_ != nullptr)
-  {
-    (void)cudaStreamSynchronize(stream);
-    (void)cudaStreamDestroy(stream);
-  }
 }
 
 void gpu_process_bands(std::vector<GpuBandJob> &jobs)
@@ -341,7 +298,7 @@ void gpu_process_bands(std::vector<GpuBandJob> &jobs)
           {
             job.workspace.emplace(job.workspace_sizes);
             job.result.emplace(job.result_n_pixels, job.result_histogram_bins);
-            job.status = gpu_process_band(job.input, *job.workspace, *job.result, job.stream);
+            job.status = gpu_process_band(job.input, *job.workspace, *job.result, job.stream.get());
           }
           catch (...)
           {

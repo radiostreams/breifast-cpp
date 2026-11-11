@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "gpu_band_workspace.cuh"
+#include "gpu_runtime.hpp"
 
 namespace breifast::gpu
 {
@@ -24,11 +25,10 @@ struct GpuBandJob
   GpuBandJob(GpuBandInput input, const GpuBandWorkspaceSizes &workspace_sizes, std::size_t result_n_pixels,
              std::size_t result_histogram_bins);
 
-  GpuBandJob(const GpuBandJob &) = delete;
-  GpuBandJob &operator=(const GpuBandJob &) = delete;
-  GpuBandJob(GpuBandJob &&) noexcept;
-  GpuBandJob &operator=(GpuBandJob &&) noexcept;
-  ~GpuBandJob();
+  GpuBandJob(GpuBandJob &&) = default;
+  // Members are assigned in declaration order, so a default move assignment would free the buffers before waiting
+  // for this job's stream.
+  GpuBandJob &operator=(GpuBandJob &&) = delete;
 
   GpuBandInput input;
   GpuBandWorkspaceSizes workspace_sizes;
@@ -36,7 +36,8 @@ struct GpuBandJob
   std::size_t result_histogram_bins = 0;
   std::optional<GpuBandWorkspace> workspace;
   std::optional<GpuBandResult> result;
-  GpuStream stream{};
+  // Declared after the buffers: destroyed first, it waits for their work.
+  Stream stream;
   GpuBandStatus status = GpuBandStatus::skipped;
   std::exception_ptr error;
 };

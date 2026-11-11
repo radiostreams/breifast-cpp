@@ -2,8 +2,10 @@
 
 #include <cuda_runtime.h>
 
+#include <cassert>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace breifast::gpu
 {
@@ -59,6 +61,54 @@ inline void check(const cudaError_t error, const char *const expression, const c
 /// Throws GpuError when `expression`, a CUDA runtime call, does not return cudaSuccess. Kernel launches are checked
 /// with CHECK_GPU(cudaGetLastError()).
 #define CHECK_GPU(expression) ::breifast::gpu::detail::check((expression), #expression, __FILE__, __LINE__)
+
+namespace breifast::gpu
+{
+/// Owns a non-blocking CUDA stream. The destructor waits for the stream's work before destroying it, so a Stream
+/// declared after the buffers its work uses is destroyed first and nothing is freed while still in use.
+class Stream
+{
+public:
+  Stream() { CHECK_GPU(cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking)); }
+  Stream(Stream &&other) noexcept : stream_{std::exchange(other.stream_, nullptr)} {}
+  Stream &operator=(Stream &&other) noexcept
+  {
+    if (this != &other)
+    {
+      reset();
+      stream_ = std::exchange(other.stream_, nullptr);
+    }
+    return *this;
+  }
+  Stream(const Stream &) = delete;
+  Stream &operator=(const Stream &) = delete;
+  ~Stream() { reset(); }
+
+  /// Waits for the work enqueued so far; throws GpuError if any of it failed.
+  void synchronize() const { CHECK_GPU(cudaStreamSynchronize(get())); }
+
+  [[nodiscard]] cudaStream_t get() const noexcept
+  {
+    assert(stream_ != nullptr && "moved-from Stream");
+    return stream_;
+  }
+  operator cudaStream_t() const noexcept { return get(); }
+
+private:
+  /// Never throws: an error here comes from earlier work, which synchronize() reports.
+  void reset() noexcept
+  {
+    if (stream_ != nullptr)
+    {
+      (void)cudaStreamSynchronize(stream_);
+      (void)cudaStreamDestroy(stream_);
+      stream_ = nullptr;
+    }
+  }
+
+  cudaStream_t stream_ = nullptr;
+};
+} // namespace breifast::gpu
 
 #define gpuMemcpyHostToDeviceAsync(dst, src, size, stream)                                                             \
   CHECK_GPU(cudaMemcpyAsync(dst, src, size, cudaMemcpyHostToDevice, stream))

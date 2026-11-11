@@ -166,7 +166,7 @@ void copy_band_jobs(std::vector<GpuBandJob> &jobs, std::vector<GpuBandHostResult
     {
       continue;
     }
-    copy_band_result(*jobs[i].result, results[i], jobs[i].stream);
+    copy_band_result(*jobs[i].result, results[i], jobs[i].stream.get());
   }
 }
 
