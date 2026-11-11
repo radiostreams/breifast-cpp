@@ -107,6 +107,18 @@ struct MedianScratch
   DeviceVector<std::uint32_t> words{histogram_bins + 4};
 };
 
+/// Device scratch of gpu_label_islands: the per-pixel root ranks, the convergence flag, and the temporary storage of
+/// the rank scan (cub::DeviceScan), sized once for n_pixels.
+struct LabelScratch
+{
+  LabelScratch() = default;
+  explicit LabelScratch(std::size_t n_pixels); // in gpu_islands.cu, where CUB is available
+
+  DeviceVector<unsigned int> root_ranks;
+  DeviceVector<unsigned int> changed{1};
+  DeviceVector<std::byte> scan_storage;
+};
+
 struct GpuBandWorkspace
 {
   explicit GpuBandWorkspace(const GpuBandWorkspaceSizes &sizes);
@@ -127,7 +139,7 @@ struct GpuBandWorkspace
   DeviceVector<float> rms_map;
 
   DeviceVector<unsigned int> labels;
-  DeviceVector<unsigned int> label_scratch;
+  LabelScratch label_scratch;
 
   DeviceVector<float> donut_stamps;
   DeviceVector<float> beam_stamps;

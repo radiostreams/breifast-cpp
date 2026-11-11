@@ -6,11 +6,13 @@
 #include <stdexcept>
 #include <vector>
 
+#include "gpu_band_workspace.cuh"
 #include "gpu_kernels.hpp"
 #include "gpu_test_utils.hpp"
 
 using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_label_islands;
+using breifast::gpu::LabelScratch;
 using breifast::gpu::Stream;
 using breifast::gpu::test::download;
 using breifast::gpu::test::download_scalar;
@@ -27,10 +29,10 @@ std::vector<unsigned int> run_label(const std::vector<unsigned char> &mask, size
   const auto device_mask = upload(std::vector<bool>(mask.begin(), mask.end()));
   DeviceVector<unsigned int> device_labels(n);
   DeviceVector<unsigned int> device_count(1);
-  DeviceVector<unsigned int> device_scratch(n);
+  LabelScratch scratch(n);
 
   const Stream stream;
-  gpu_label_islands(device_mask, n_y, n_x, device_labels, device_count, device_scratch, stream.get());
+  gpu_label_islands(device_mask, n_y, n_x, device_labels, device_count, scratch, stream.get());
   const auto host_labels = download(device_labels, stream);
   const unsigned int count = download_scalar(device_count.data(), stream);
 
@@ -174,7 +176,7 @@ TEST_CASE("gpu_label_islands rejects an empty plane", "[gpu][islands]")
   DeviceVector<bool> mask(1);
   DeviceVector<unsigned int> labels(1);
   DeviceVector<unsigned int> count(1);
-  DeviceVector<unsigned int> scratch(1);
+  LabelScratch scratch(1);
 
   REQUIRE_THROWS_AS(gpu_label_islands(mask, 0, 1, labels, count, scratch, stream.get()), std::runtime_error);
   REQUIRE_THROWS_AS(gpu_label_islands(mask, 1, 0, labels, count, scratch, stream.get()), std::runtime_error);

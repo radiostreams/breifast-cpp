@@ -310,10 +310,11 @@ void gpu_stamp_beam_chi2(const float *stamps, const float *kernel, float kernel_
  * @param mask `[n_y * n_x]` bools, row major.
  * @param labels `[n_y * n_x]` output labels, `0` outside every island.
  * @param out_count One `unsigned int`, the number of islands.
- * @param scratch `[n_y * n_x]` `unsigned int` scan workspace.
+ * @param scratch Built for at least `n_y * n_x` pixels.
  */
+struct LabelScratch;
 void gpu_label_islands(const bool *mask, size_t n_y, size_t n_x, unsigned int *labels, unsigned int *out_count,
-                       unsigned int *scratch, GpuStream stream = nullptr);
+                       LabelScratch &scratch, GpuStream stream = nullptr);
 
 /**
  * @brief Per-label statistics of a labeled image: the `peak_per_label` outputs of the CPU label_islands() pass.

@@ -1,13 +1,15 @@
+#include <cassert>
 #include <cfloat>
+#include <climits>
 #include <stdexcept>
 #include <string>
 
 #include <cooperative_groups.h>
+#include <cub/device/device_scan.cuh>
 #include <thrust/device_vector.h>
-#include <thrust/execution_policy.h>
 #include <thrust/device_ptr.h>
-#include <thrust/scan.h>
 
+#include "gpu_band_workspace.cuh"
 #include "gpu_kernels.hpp"
 
 #include "gpu_device_utils.cuh"
@@ -254,8 +256,17 @@ __global__ void label_stats_finalize_kernel(const unsigned int *const active_cou
 }
 } // namespace
 
+LabelScratch::LabelScratch(const std::size_t n_pixels) : root_ranks(n_pixels)
+{
+  assert(n_pixels <= static_cast<std::size_t>(INT_MAX));
+  std::size_t bytes = 0;
+  CHECK_GPU(cub::DeviceScan::InclusiveSum(nullptr, bytes, root_ranks.data(), root_ranks.data(),
+                                          static_cast<int>(n_pixels)));
+  scan_storage = DeviceVector<std::byte>(bytes);
+}
+
 void gpu_label_islands(const bool *const mask, const size_t n_y, const size_t n_x, unsigned int *const labels,
-                       unsigned int *const out_count, unsigned int *const scratch, GpuStream stream)
+                       unsigned int *const out_count, LabelScratch &scratch, GpuStream stream)
 {
   if (n_y == 0 || n_x == 0)
   {
@@ -263,15 +274,17 @@ void gpu_label_islands(const bool *const mask, const size_t n_y, const size_t n_
   }
 
   const size_t n = n_y * n_x;
+  assert(scratch.root_ranks.size() >= n);
   launch_per_element(init_labels_kernel, n, stream, mask, n, labels);
+  launch_cooperative(converge_labels_kernel, n, stream, mask, n_y, n_x, labels, scratch.changed.data());
 
-  thrust::device_vector<unsigned int> changed(1);
-  launch_cooperative(converge_labels_kernel, n, stream, mask, n_y, n_x, labels,
-                     thrust::raw_pointer_cast(changed.data()));
-
-  launch_per_element(mark_roots_kernel, n, stream, n, labels, scratch);
-  thrust::inclusive_scan(thrust::cuda::par.on(stream), scratch, scratch + n, scratch);
-  launch_per_element(scatter_labels_kernel, n, stream, mask, n, labels, scratch, out_count);
+  // Rank each component's root among the roots: an inclusive scan, in place.
+  unsigned int *const ranks = scratch.root_ranks.data();
+  launch_per_element(mark_roots_kernel, n, stream, n, labels, ranks);
+  std::size_t scan_bytes = scratch.scan_storage.size();
+  CHECK_GPU(cub::DeviceScan::InclusiveSum(scratch.scan_storage.data(), scan_bytes, ranks, ranks, static_cast<int>(n),
+                                          stream));
+  launch_per_element(scatter_labels_kernel, n, stream, mask, n, labels, ranks, out_count);
 }
 
 void gpu_island_boost(const unsigned int *const labels_per_pixel, const float *const baseline_flux,

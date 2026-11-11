@@ -41,7 +41,7 @@ TEST_CASE("GpuBandWorkspace allocates every scratch buffer", "[gpu][band_workspa
   CHECK(workspace.row_sums.size() == sizes.n_pixels);
   CHECK(workspace.rms_map.size() == sizes.n_pixels);
   CHECK(workspace.labels.size() == sizes.n_pixels);
-  CHECK(workspace.label_scratch.size() == sizes.n_pixels);
+  CHECK(workspace.label_scratch.root_ranks.size() == sizes.n_pixels);
   CHECK(workspace.donut_stamps.size() == sizes.stamp_capacity * sizes.stamp_pixels);
   CHECK(workspace.beam_stamps.size() == sizes.stamp_capacity * sizes.beam_stamp_pixels);
   CHECK(workspace.any_flag.size() == 1);
