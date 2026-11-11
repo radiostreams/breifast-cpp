@@ -23,68 +23,25 @@ __global__ void donut_median_abs_kernel(const unsigned int *active_count, const 
   const auto i_stamp = blockIdx.x;
   const auto stamp = stamps + i_stamp * stamp_pixels;
 
-  __shared__ uint32_t histogram[256];
+  __shared__ uint32_t histogram[radix_bins];
   __shared__ uint32_t non_zero_count;
-  __shared__ uint8_t first_bin;
+  __shared__ uint32_t below;
   __shared__ uint32_t prefix;
   __shared__ uint32_t coverage;
   __shared__ uint32_t lower_max;
-  for (size_t i = threadIdx.x; i < 256; i += blockDim.x)
-  {
-    histogram[i] = 0;
-  }
   if (threadIdx.x == 0)
   {
-    non_zero_count = 0;
+    below = 0;
     prefix = 0;
     coverage = 0;
     lower_max = 0;
   }
-  __syncthreads();
 
-  for (size_t i_pixel = threadIdx.x; i_pixel < stamp_pixels; i_pixel += blockDim.x)
+  // One byte of the nonzero pixels' abs keys per pass. coverage starts at 0, so the first pass sees every nonzero pixel
+  // and its histogram sums to their count.
+  for (int shift = 24; shift >= 0; shift -= 8)
   {
-    const float value = stamp[i_pixel];
-    if (value != 0.0f)
-    {
-      const uint8_t bin = static_cast<uint8_t>(abs_key(value) >> 24);
-      atomicAdd(&histogram[bin], 1U);
-      atomicAdd(&non_zero_count, 1U);
-    }
-  }
-  __syncthreads();
-  const auto mid = non_zero_count / 2;
-  if (non_zero_count == 0)
-  {
-    if (threadIdx.x == 0)
-    {
-      out_lmad[i_stamp] = 0;
-    }
-    return;
-  }
-
-  size_t below = 0;
-  if (threadIdx.x == 0)
-  {
-    for (size_t i = 0; i < 256; ++i)
-    {
-      const size_t count = histogram[i];
-      if (below + count > mid)
-      {
-        first_bin = i;
-        break;
-      }
-      below += count;
-    }
-    prefix = static_cast<uint32_t>(first_bin) << 24;
-    coverage = 0xFFU << 24;
-  }
-  __syncthreads();
-
-  for (size_t bin = 1; bin < 4; ++bin)
-  {
-    const auto shift = 16 - (bin - 1) * 8;
-    for (size_t i = threadIdx.x; i < 256; i += blockDim.x)
+    for (size_t i = threadIdx.x; i < radix_bins; i += blockDim.x)
     {
       histogram[i] = 0;
     }
@@ -103,19 +60,29 @@ __global__ void donut_median_abs_kernel(const unsigned int *active_count, const 
 
     if (threadIdx.x == 0)
     {
-      for (size_t i = 0; i < 256; ++i)
+      if (shift == 24)
       {
-        const size_t count = histogram[i];
-        if (below + count > mid)
+        non_zero_count = 0;
+        for (uint32_t i = 0; i < radix_bins; ++i)
         {
-          prefix |= static_cast<uint32_t>(i) << shift;
-          coverage |= 0xFFU << shift;
-          break;
+          non_zero_count += histogram[i];
         }
-        below += count;
+      }
+      if (non_zero_count > 0)
+      {
+        select_radix_digit(histogram, non_zero_count / 2, shift, below, prefix, coverage);
       }
     }
     __syncthreads();
+
+    if (non_zero_count == 0)
+    {
+      if (threadIdx.x == 0)
+      {
+        out_lmad[i_stamp] = 0;
+      }
+      return;
+    }
   }
 
   if (non_zero_count % 2 == 0)
@@ -134,15 +101,7 @@ __global__ void donut_median_abs_kernel(const unsigned int *active_count, const 
 
   if (threadIdx.x == 0)
   {
-    if (non_zero_count % 2 == 1)
-    {
-      out_lmad[i_stamp] = scale * abs_value(prefix);
-    }
-    else
-    {
-      const uint32_t lo_key = mid > below ? prefix : lower_max;
-      out_lmad[i_stamp] = scale * (abs_value(lo_key) + abs_value(prefix)) / 2.F;
-    }
+    out_lmad[i_stamp] = scale * median_of_keys(non_zero_count, below, prefix, lower_max, true);
   }
 }
 

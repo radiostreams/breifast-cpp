@@ -11,9 +11,6 @@ namespace breifast::gpu
 {
 namespace
 {
-constexpr size_t n_digits = 4;
-constexpr size_t histogram_bins = 1 << 8;
-
 // One byte per pass, most significant first, of the keys whose resolved high bytes equal the prefix. Counts into a
 // device-wide 256-bin histogram.
 __global__ void radix_histogram_kernel(const float *values, size_t n, uint32_t *histogram, int shift, bool abs_mode,
@@ -30,26 +27,10 @@ __global__ void radix_histogram_kernel(const float *values, size_t n, uint32_t *
   }
 }
 
-// Cumulative count over the bins, stopping where rank `k` lands. state[0] is the count below the current prefix, which
-// this advances; state[1] and state[2] extend the prefix and the coverage with the chosen byte.
+// Single thread. state[0..2] are below, prefix and coverage.
 __global__ void radix_scan_kernel(const uint32_t *histogram, size_t rank, int shift, uint32_t *state)
 {
-  if (blockIdx.x == 0 && threadIdx.x == 0)
-  {
-    size_t cumulative = state[0];
-    uint32_t bin = 0;
-    for (; bin < histogram_bins; ++bin)
-    {
-      if (cumulative + histogram[bin] > rank)
-      {
-        break;
-      }
-      cumulative += histogram[bin];
-    }
-    state[0] = static_cast<uint32_t>(cumulative);
-    state[1] |= bin << shift;
-    state[2] |= 0xFFU << shift;
-  }
+  select_radix_digit(histogram, rank, shift, state[0], state[1], state[2]);
 }
 
 // Even n only: the largest key strictly below the resolved rank-k key, to resolve rank k-1 when it is not a repeat.
@@ -67,24 +48,11 @@ __global__ void radix_refine_kernel(const float *values, size_t n, bool abs_mode
   }
 }
 
-// state[1] is the full rank-k key. Even n averages it with rank k-1: the same key when the rank-k key is not the first
-// of its repeats, else the largest key below it.
+// Single thread. state[1] is the full rank-n/2 key.
 __global__ void radix_finalize_kernel(const uint32_t *state, const uint32_t *lower_max, bool abs_mode, size_t n,
                                       float scale, float *out_median)
 {
-  if (blockIdx.x == 0 && threadIdx.x == 0)
-  {
-    const uint32_t hi_key = state[1];
-    const float hi = abs_mode ? abs_value(hi_key) : signed_value(hi_key);
-    if (n % 2 == 1)
-    {
-      *out_median = hi * scale;
-      return;
-    }
-    const uint32_t lo_key = static_cast<size_t>(n / 2) > state[0] ? hi_key : lower_max[0];
-    const float lo = abs_mode ? abs_value(lo_key) : signed_value(lo_key);
-    *out_median = ((lo + hi) / 2.F) * scale;
-  }
+  *out_median = median_of_keys(n, state[0], state[1], *lower_max, abs_mode) * scale;
 }
 
 __global__ void write_nan_kernel(float *out)
@@ -100,18 +68,17 @@ void gpu_median_impl(const float *values, size_t n, float *out_median, bool abs_
     return;
   }
 
-  constexpr size_t scratch_words = histogram_bins + 4; // 256 bins, then state[3] and lower_max[1]
+  constexpr size_t scratch_words = radix_bins + 4; // 256 bins, then state[3] and lower_max[1]
   thrust::device_vector<uint32_t> scratch(scratch_words, 0);
   uint32_t *scratch_ptr = thrust::raw_pointer_cast(scratch.data());
 
   uint32_t *histogram = scratch_ptr;
-  uint32_t *state = scratch_ptr + histogram_bins;      // below, prefix, coverage
-  uint32_t *lower_max = scratch_ptr + histogram_bins + 3;
+  uint32_t *state = scratch_ptr + radix_bins;      // below, prefix, coverage
+  uint32_t *lower_max = scratch_ptr + radix_bins + 3;
 
-  const int shifts[n_digits] = {24, 16, 8, 0};
-  for (int shift : shifts)
+  for (int shift = 24; shift >= 0; shift -= 8)
   {
-    gpuMemsetAsync(histogram, 0, histogram_bins * sizeof(uint32_t), stream);
+    gpuMemsetAsync(histogram, 0, radix_bins * sizeof(uint32_t), stream);
     launch_per_element(radix_histogram_kernel, n, stream, values, n, histogram, shift, abs_mode, state);
     launch(radix_scan_kernel, 1, 1, stream, histogram, n / 2, shift, state);
   }
