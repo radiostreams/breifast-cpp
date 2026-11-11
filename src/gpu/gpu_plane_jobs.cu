@@ -80,29 +80,32 @@ GpuPlaneJobs::GpuPlaneJobs(const GpuPlaneJobSpec &spec, const GpuPlaneSizes &siz
     : n_y(spec.n_y), n_x(spec.n_x), n_channels(spec.n_channels),
       max_to_std_ratio_value(spec.max_to_std_ratio_value),
       use_rms_noise_estimator(spec.use_rms_noise_estimator),
-      cube(spec.cube, sizes.channel_pixels), weights(spec.weights, spec.n_channels),
-      nonzero_channels(spec.nonzero_channels, spec.n_channels), accept_mask(spec.accept_mask, sizes.channel_pixels),
-      selfnoise_offset(spec.selfnoise_offset, sizes.n_pixels), selfnoise_raw(spec.selfnoise_raw, sizes.n_pixels),
-      dde_noise(spec.dde_noise, sizes.n_pixels)
+      cube(DeviceVector<float>::from_host(spec.cube, sizes.channel_pixels)),
+      weights(DeviceVector<float>::from_host(spec.weights, spec.n_channels)),
+      nonzero_channels(DeviceVector<bool>::from_host(spec.nonzero_channels, spec.n_channels)),
+      accept_mask(DeviceVector<bool>::from_host(spec.accept_mask, sizes.channel_pixels)),
+      selfnoise_offset(DeviceVector<float>::from_host(spec.selfnoise_offset, sizes.n_pixels)),
+      selfnoise_raw(DeviceVector<float>::from_host(spec.selfnoise_raw, sizes.n_pixels)),
+      dde_noise(DeviceVector<float>::from_host(spec.dde_noise, sizes.n_pixels))
 {
   const std::size_t n_pixels = sizes.n_pixels;
   const std::size_t channel_pixels = sizes.channel_pixels;
 
   if (spec.subtract_mean && spec.mean_image != nullptr)
   {
-    mean_image.emplace(spec.mean_image, channel_pixels);
+    mean_image = DeviceVector<float>::from_host(spec.mean_image, channel_pixels);
   }
   if (spec.snr_cutoff != nullptr)
   {
-    snr_cutoff.emplace(spec.snr_cutoff, channel_pixels);
+    snr_cutoff = DeviceVector<float>::from_host(spec.snr_cutoff, channel_pixels);
   }
   if (spec.flux_cutoff != nullptr)
   {
-    flux_cutoff.emplace(spec.flux_cutoff, channel_pixels);
+    flux_cutoff = DeviceVector<float>::from_host(spec.flux_cutoff, channel_pixels);
   }
   if (spec.baseline_flux != nullptr)
   {
-    baseline_flux.emplace(spec.baseline_flux, n_pixels);
+    baseline_flux = DeviceVector<float>::from_host(spec.baseline_flux, n_pixels);
   }
 
   const long radius = spec.boxsize / 2;
@@ -118,7 +121,7 @@ GpuPlaneJobs::GpuPlaneJobs(const GpuPlaneJobSpec &spec, const GpuPlaneSizes &siz
       throw std::runtime_error("GpuPlaneJobs: fixed_beam_halfsize must be non-negative");
     }
     const std::size_t beam_side = static_cast<std::size_t>(2 * spec.fixed_beam_halfsize + 1);
-    fixed_beam_kernel.emplace(spec.fixed_beam_kernel, beam_side * beam_side);
+    fixed_beam_kernel = DeviceVector<float>::from_host(spec.fixed_beam_kernel, beam_side * beam_side);
   }
   const float fixed_beam_sum = use_fixed_beam ? beam_kernel_sum(spec.fixed_beam_kernel, spec.fixed_beam_halfsize) : 0.F;
 
@@ -183,7 +186,7 @@ GpuPlaneJobs::GpuPlaneJobs(const GpuPlaneJobSpec &spec, const GpuPlaneSizes &siz
 
         const auto host_kernel =
             build_gaussian_beam_kernel_vector(beam_halfsize, major_weighted, minor_weighted, angle_weighted);
-        band_beam_kernels.emplace_back(host_kernel.data(), host_kernel.size());
+        band_beam_kernels.push_back(DeviceVector<float>::from_host(host_kernel.data(), host_kernel.size()));
         beam_device = band_beam_kernels.back().data();
         beam_sum = beam_kernel_sum(host_kernel.data(), beam_halfsize);
       }

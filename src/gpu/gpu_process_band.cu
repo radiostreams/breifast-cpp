@@ -182,6 +182,10 @@ GpuBandStatus gpu_process_band(const GpuBandInput &input, GpuBandWorkspace &work
     rms = workspace.rms_map;
     base_noise = result.rms_floor;
   }
+  else
+  {
+    gpuMemsetAsync(result.rms_floor, 0, sizeof(float), stream); // 0 in the global MAD mode, as on the CPU
+  }
   gpu_combine_noise_map(rms, base_noise, input.selfnoise_offset, input.dde_noise, input.selfnoise_scale_factor,
                         input.ddenoise_scaling_factor, workspace.noise_map, input.n_pixels, stream);
 

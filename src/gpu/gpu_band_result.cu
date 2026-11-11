@@ -13,24 +13,24 @@ GpuBandWorkspace::GpuBandWorkspace(const GpuBandWorkspaceSizes &sizes) : sizes(s
 {
   validate_band_workspace_sizes(this->sizes);
 
-  plane.resize(this->sizes.n_pixels);
-  noise_map.resize(this->sizes.n_pixels);
-  snr.resize(this->sizes.n_pixels);
-  mask.resize(this->sizes.n_pixels);
-  row_sums.resize(this->sizes.n_pixels);
-  rms_map.resize(this->sizes.n_pixels);
+  plane.ensure(this->sizes.n_pixels);
+  noise_map.ensure(this->sizes.n_pixels);
+  snr.ensure(this->sizes.n_pixels);
+  mask.ensure(this->sizes.n_pixels);
+  row_sums.ensure(this->sizes.n_pixels);
+  rms_map.ensure(this->sizes.n_pixels);
 
-  labels.resize(this->sizes.n_pixels);
-  label_scratch.resize(this->sizes.n_pixels);
+  labels.ensure(this->sizes.n_pixels);
+  label_scratch.ensure(this->sizes.n_pixels);
 
-  donut_stamps.resize(this->sizes.stamp_capacity * this->sizes.stamp_pixels);
+  donut_stamps.ensure(this->sizes.stamp_capacity * this->sizes.stamp_pixels);
   if (this->sizes.beam_stamp_pixels > 0)
   {
-    beam_stamps.resize(this->sizes.stamp_capacity * this->sizes.beam_stamp_pixels);
+    beam_stamps.ensure(this->sizes.stamp_capacity * this->sizes.beam_stamp_pixels);
   }
 
-  any_flag.resize(1);
-  label_count.resize(1);
+  any_flag.ensure(1);
+  label_count.ensure(1);
 }
 
 GpuBandWorkspace::GpuBandWorkspace(GpuBandWorkspace &&) noexcept = default;
@@ -49,33 +49,33 @@ GpuBandResult::GpuBandResult(std::size_t n_pixels, std::size_t histogram_bins)
     throw std::runtime_error("GpuBandResult: histogram_bins must be greater than 0");
   }
 
-  peak_value.resize(n_pixels);
-  peak_local_noise.resize(n_pixels);
-  peak_y.resize(n_pixels);
-  peak_x.resize(n_pixels);
-  island_size.resize(n_pixels);
+  peak_value.ensure(n_pixels);
+  peak_local_noise.ensure(n_pixels);
+  peak_y.ensure(n_pixels);
+  peak_x.ensure(n_pixels);
+  island_size.ensure(n_pixels);
 
-  stamp_extreme.resize(n_pixels);
-  donut_std.resize(n_pixels);
-  donut_lmad.resize(n_pixels);
-  beam_chi2.resize(n_pixels);
-  flux.resize(n_pixels);
-  boost.resize(n_pixels);
-  boost_found.resize(n_pixels);
+  stamp_extreme.ensure(n_pixels);
+  donut_std.ensure(n_pixels);
+  donut_lmad.ensure(n_pixels);
+  beam_chi2.ensure(n_pixels);
+  flux.ensure(n_pixels);
+  boost.ensure(n_pixels);
+  boost_found.ensure(n_pixels);
 
-  noise_at_peak.resize(n_pixels);
-  rms_at_peak.resize(n_pixels);
-  selfnoise_at_peak.resize(n_pixels);
+  noise_at_peak.ensure(n_pixels);
+  rms_at_peak.ensure(n_pixels);
+  selfnoise_at_peak.ensure(n_pixels);
 
-  histogram0.resize(histogram_bins);
-  histogram1.resize(histogram_bins);
-  histogram2.resize(histogram_bins);
+  histogram0.ensure(histogram_bins);
+  histogram1.ensure(histogram_bins);
+  histogram2.ensure(histogram_bins);
 
-  min_sigma.resize(1);
-  max_sigma.resize(1);
-  median_noise.resize(1);
-  rms_floor.resize(1);
-  global_mad.resize(1);
+  min_sigma.ensure(1);
+  max_sigma.ensure(1);
+  median_noise.ensure(1);
+  rms_floor.ensure(1);
+  global_mad.ensure(1);
 }
 
 GpuBandResult::GpuBandResult(GpuBandResult &&) noexcept = default;

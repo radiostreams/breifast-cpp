@@ -57,7 +57,7 @@ struct DetectionFixture
     dde_noise.assign(n_pixels, 0.F);
     std::vector<uint8_t> host_accept_mask(n_pixels * n_channels, 0U);
     host_accept_mask[0] = 1U;
-    accept_mask = DeviceVector<uint8_t>(host_accept_mask.data(), host_accept_mask.size());
+    accept_mask = DeviceVector<uint8_t>::from_host(host_accept_mask.data(), host_accept_mask.size());
     nonzero_channels.assign(n_channels, 1U);
 
     const GpuBandInput input{

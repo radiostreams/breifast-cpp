@@ -1,93 +1,118 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
-#include <stdexcept>
-#include <type_traits>
+#include <iterator>
+#include <memory>
 
 #include <cuda_runtime.h>
-#include <thrust/device_ptr.h>
-#include <thrust/device_vector.h>
+
+#include "gpu_runtime.hpp"
 
 namespace breifast::gpu
 {
-// Owning device buffer: construction allocates, destruction frees. The implicit
-// pointer conversion keeps kernel call sites unchanged. bool is stored as bytes
-// because thrust::device_vector<bool> is bit-packed.
+/// Owning device array: plain cudaMalloc/cudaFree, move-only. The implicit pointer conversion keeps kernel call sites
+/// short. Uploads go through the legacy default stream and wait for it, so their data is in place before any other
+/// stream, blocking or not, can read it.
 template <typename T> class DeviceVector
 {
 public:
-  using Storage = std::conditional_t<std::is_same_v<T, bool>, unsigned char, T>;
-
   DeviceVector() = default;
-  explicit DeviceVector(std::size_t n) : data_(n) {}
-  DeviceVector(std::size_t n, const T &value) : data_(n, static_cast<Storage>(value)) {}
-  DeviceVector(const T *host, std::size_t n) : data_(n)
+
+  /// Uninitialised. Assert builds fill it with 0xFF bytes, so that a read before the first write shows up in tests.
+  explicit DeviceVector(std::size_t n) : data_{allocate(n)}, size_{n} {}
+
+  static DeviceVector zeros(std::size_t n)
   {
-    if (n > 0 && cudaMemcpy(data(), host, n * sizeof(T), cudaMemcpyHostToDevice) != cudaSuccess)
+    DeviceVector vector(n);
+    if (n > 0)
     {
-      throw std::runtime_error("DeviceVector: host-to-device copy failed");
+      CHECK_GPU(cudaMemset(vector.data(), 0, n * sizeof(T)));
+      CHECK_GPU(cudaStreamSynchronize(cudaStreamLegacy));
+    }
+    return vector;
+  }
+
+  static DeviceVector from_host(const T *host, std::size_t n)
+  {
+    DeviceVector vector(n);
+    vector.upload(host, n);
+    return vector;
+  }
+
+  /// Grows to at least n elements; the contents are unspecified after growing.
+  void ensure(std::size_t n)
+  {
+    if (n > size_)
+    {
+      data_.reset();
+      size_ = 0;
+      data_ = allocate(n);
+      size_ = n;
     }
   }
-  template <typename InputIt> DeviceVector(InputIt first, InputIt last) : data_(first, last) {}
 
-  DeviceVector(const DeviceVector &) = delete;
-  DeviceVector &operator=(const DeviceVector &) = delete;
-  DeviceVector(DeviceVector &&) noexcept = default;
-  DeviceVector &operator=(DeviceVector &&) noexcept = default;
-  ~DeviceVector() = default;
+  T *data() noexcept { return data_.get(); }
+  const T *data() const noexcept { return data_.get(); }
+  operator T *() noexcept { return data(); }
+  operator const T *() const noexcept { return data(); }
 
-  T *data()
+  std::size_t size() const noexcept { return size_; }
+  bool empty() const noexcept { return size_ == 0; }
+
+  // Transitional, for the tests until step 9 replaces them with upload helpers: host staging, then an upload.
+  DeviceVector(std::size_t n, const T &value) : DeviceVector(n) { assign(n, value); }
+
+  template <std::input_iterator InputIt> DeviceVector(InputIt first, InputIt last)
+      : DeviceVector(static_cast<std::size_t>(std::distance(first, last)))
   {
-    return reinterpret_cast<T *>(thrust::raw_pointer_cast(data_.data()));
-  }
-  const T *data() const
-  {
-    return reinterpret_cast<const T *>(thrust::raw_pointer_cast(data_.data()));
-  }
-  operator T *()
-  {
-    return data();
-  }
-  operator const T *() const
-  {
-    return data();
+    const auto staging = std::make_unique<T[]>(size_);
+    std::copy(first, last, staging.get());
+    upload(staging.get(), size_);
   }
 
-  auto begin()
-  {
-    return data_.begin();
-  }
-  auto end()
-  {
-    return data_.end();
-  }
-  auto begin() const
-  {
-    return data_.begin();
-  }
-  auto end() const
-  {
-    return data_.end();
-  }
-
-  std::size_t size() const
-  {
-    return data_.size();
-  }
-  bool empty() const
-  {
-    return data_.empty();
-  }
-  void resize(std::size_t n)
-  {
-    data_.resize(n);
-  }
   void assign(std::size_t n, const T &value)
   {
-    data_.assign(n, static_cast<Storage>(value));
+    ensure(n);
+    const auto staging = std::make_unique<T[]>(n);
+    std::fill_n(staging.get(), n, value);
+    upload(staging.get(), n);
   }
 
 private:
-  thrust::device_vector<Storage> data_;
+  struct Free
+  {
+    void operator()(T *pointer) const noexcept { (void)cudaFree(pointer); }
+  };
+  using Pointer = std::unique_ptr<T[], Free>;
+
+  static Pointer allocate(std::size_t n)
+  {
+    if (n == 0)
+    {
+      return nullptr;
+    }
+    void *raw = nullptr;
+    CHECK_GPU(cudaMalloc(&raw, n * sizeof(T)));
+    Pointer pointer{static_cast<T *>(raw)};
+#ifndef NDEBUG
+    CHECK_GPU(cudaMemset(pointer.get(), 0xFF, n * sizeof(T)));
+    CHECK_GPU(cudaStreamSynchronize(cudaStreamLegacy));
+#endif
+    return pointer;
+  }
+
+  /// A pageable host-to-device cudaMemcpy can return before its last DMA lands, so wait for the legacy stream.
+  void upload(const T *host, std::size_t n)
+  {
+    if (n > 0)
+    {
+      CHECK_GPU(cudaMemcpy(data(), host, n * sizeof(T), cudaMemcpyHostToDevice));
+      CHECK_GPU(cudaStreamSynchronize(cudaStreamLegacy));
+    }
+  }
+
+  Pointer data_;
+  std::size_t size_ = 0;
 };
 } // namespace breifast::gpu
