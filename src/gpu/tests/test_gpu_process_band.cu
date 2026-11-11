@@ -10,9 +10,8 @@
 #include <vector>
 
 #include "gpu_band_workspace.cuh"
-#include "device_vector.hpp"
 #include "gpu_process_band.cuh"
-#include "gpu_runtime.hpp"
+#include "gpu_test_utils.hpp"
 
 using breifast::gpu::DeviceVector;
 using breifast::gpu::GpuBandInput;
@@ -21,8 +20,11 @@ using breifast::gpu::GpuBandInputSizes;
 using breifast::gpu::GpuBandStatus;
 using breifast::gpu::GpuBandWorkspace;
 using breifast::gpu::GpuBandWorkspaceSizes;
-using breifast::gpu::GpuStream;
 using breifast::gpu::gpu_process_band;
+using breifast::gpu::Stream;
+using breifast::gpu::test::download;
+using breifast::gpu::test::download_scalar;
+using breifast::gpu::test::upload;
 using Catch::Matchers::ContainsSubstring;
 using Catch::Matchers::WithinRel;
 
@@ -41,13 +43,14 @@ struct Fixture
   DeviceVector<float> selfnoise_offset;
   DeviceVector<float> selfnoise_raw;
   DeviceVector<float> dde_noise;
-  DeviceVector<uint8_t> accept_mask;
-  DeviceVector<uint8_t> nonzero_channels;
+  DeviceVector<bool> accept_mask;
+  DeviceVector<bool> nonzero_channels;
 
   GpuBandWorkspace workspace;
   GpuBandResult result;
   GpuBandInput input;
-  cudaStream_t stream{};
+  // Declared after the buffers: destroyed first, it waits for their work.
+  Stream stream;
 
   static GpuBandWorkspaceSizes workspace_sizes()
   {
@@ -63,15 +66,13 @@ struct Fixture
   Fixture(bool nonzero_value, bool accept_value, bool use_rms)
       : workspace(workspace_sizes()), result(n_pixels, histogram_bins)
   {
-    gpuStreamCreate(&stream);
-
-    cube.assign(n_pixels * n_channels, 1.F);
-    weights.assign(n_channels, 1.F);
-    selfnoise_offset.assign(n_pixels, 0.F);
-    selfnoise_raw.assign(n_pixels, 1.F);
-    dde_noise.assign(n_pixels, 0.F);
-    accept_mask.assign(n_pixels * n_channels, accept_value ? 1U : 0U);
-    nonzero_channels.assign(n_channels, nonzero_value ? 1U : 0U);
+    cube = upload(std::vector<float>(n_pixels * n_channels, 1.F));
+    weights = upload(std::vector<float>(n_channels, 1.F));
+    selfnoise_offset = upload(std::vector<float>(n_pixels, 0.F));
+    selfnoise_raw = upload(std::vector<float>(n_pixels, 1.F));
+    dde_noise = upload(std::vector<float>(n_pixels, 0.F));
+    accept_mask = upload(std::vector<bool>(n_pixels * n_channels, accept_value));
+    nonzero_channels = upload(std::vector<bool>(n_channels, nonzero_value));
 
     input = GpuBandInput{
         .sizes = GpuBandInputSizes{
@@ -85,8 +86,8 @@ struct Fixture
         },
         .cube = cube.data(),
         .weights = weights.data(),
-        .nonzero_channels = reinterpret_cast<const bool *>(nonzero_channels.data()),
-        .accept_mask = reinterpret_cast<const bool *>(accept_mask.data()),
+        .nonzero_channels = nonzero_channels.data(),
+        .accept_mask = accept_mask.data(),
         .selfnoise_offset = selfnoise_offset.data(),
         .selfnoise_raw = selfnoise_raw.data(),
         .dde_noise = dde_noise.data(),
@@ -111,59 +112,42 @@ struct Fixture
         .subtract_mean = false,
     };
   }
-
-  ~Fixture()
-  {
-    gpuStreamSynchronize(stream);
-    gpuStreamDestroy(stream);
-  }
 };
 
-float copy_scalar(const float *value, GpuStream stream)
+// Replaces the accept mask, and points the band input at the new buffer.
+void set_accept_mask(Fixture &fixture, const std::vector<bool> &mask)
 {
-  float host_value = 0.F;
-  gpuMemcpyDeviceToHostAsync(&host_value, value, sizeof(float), stream);
-  gpuStreamSynchronize(stream);
-  return host_value;
-}
-
-void set_accept_mask(Fixture &fixture, const std::vector<uint8_t> &mask)
-{
-  std::vector<uint8_t> host_mask(mask.begin(), mask.end());
-  gpuMemcpyHostToDeviceAsync(fixture.accept_mask.data(),
-                             host_mask.data(), mask.size(), fixture.stream);
-  gpuStreamSynchronize(fixture.stream);
+  fixture.accept_mask = upload(mask);
+  fixture.input.accept_mask = fixture.accept_mask.data();
 }
 } // namespace
 
 TEST_CASE("gpu_process_band skips a band with no nonzero channel", "[gpu][process_band]")
 {
   Fixture fixture(false, true, true);
-  CHECK(gpu_process_band(fixture.input, fixture.workspace, fixture.result, fixture.stream) ==
+  CHECK(gpu_process_band(fixture.input, fixture.workspace, fixture.result, fixture.stream.get()) ==
         GpuBandStatus::skipped);
 }
 
 TEST_CASE("gpu_process_band skips a band whose accept mask is empty", "[gpu][process_band]")
 {
   Fixture fixture(true, false, true);
-  CHECK(gpu_process_band(fixture.input, fixture.workspace, fixture.result, fixture.stream) ==
+  CHECK(gpu_process_band(fixture.input, fixture.workspace, fixture.result, fixture.stream.get()) ==
         GpuBandStatus::skipped);
 }
 
 TEST_CASE("gpu_process_band runs the RMS noise stage and reports no detections", "[gpu][process_band]")
 {
   Fixture fixture(true, true, true);
-  const auto status = gpu_process_band(fixture.input, fixture.workspace, fixture.result, fixture.stream);
+  const auto status = gpu_process_band(fixture.input, fixture.workspace, fixture.result, fixture.stream.get());
   CHECK(status == GpuBandStatus::no_detections);
 
-  CHECK_THAT(copy_scalar(fixture.result.rms_floor, fixture.stream), WithinRel(1.F, 1e-6));
-  CHECK_THAT(copy_scalar(fixture.result.median_noise, fixture.stream), WithinRel(1.F, 1e-6));
-  CHECK_THAT(copy_scalar(fixture.result.global_mad, fixture.stream), WithinRel(1.4826F, 1e-6));
+  CHECK_THAT(download_scalar(fixture.result.rms_floor.data(), fixture.stream), WithinRel(1.F, 1e-6));
+  CHECK_THAT(download_scalar(fixture.result.median_noise.data(), fixture.stream), WithinRel(1.F, 1e-6));
+  CHECK_THAT(download_scalar(fixture.result.global_mad.data(), fixture.stream), WithinRel(1.4826F, 1e-6));
 
-  std::vector<unsigned long long> histogram(Fixture::histogram_bins, 1ULL);
-  gpuMemcpyDeviceToHostAsync(histogram.data(), fixture.result.histogram0,
-                             Fixture::histogram_bins * sizeof(unsigned long long), fixture.stream);
-  gpuStreamSynchronize(fixture.stream);
+  const auto histogram = download(fixture.result.histogram0, fixture.stream);
+  REQUIRE(histogram.size() == Fixture::histogram_bins);
   for (const auto bin : histogram)
   {
     CHECK(bin == 0ULL);
@@ -173,11 +157,11 @@ TEST_CASE("gpu_process_band runs the RMS noise stage and reports no detections",
 TEST_CASE("gpu_process_band runs the MAD noise stage and reports no detections", "[gpu][process_band]")
 {
   Fixture fixture(true, true, false);
-  const auto status = gpu_process_band(fixture.input, fixture.workspace, fixture.result, fixture.stream);
+  const auto status = gpu_process_band(fixture.input, fixture.workspace, fixture.result, fixture.stream.get());
   CHECK(status == GpuBandStatus::no_detections);
 
-  CHECK_THAT(copy_scalar(fixture.result.global_mad, fixture.stream), WithinRel(1.4826F, 1e-6));
-  CHECK_THAT(copy_scalar(fixture.result.median_noise, fixture.stream), WithinRel(1.4826F, 1e-6));
+  CHECK_THAT(download_scalar(fixture.result.global_mad.data(), fixture.stream), WithinRel(1.4826F, 1e-6));
+  CHECK_THAT(download_scalar(fixture.result.median_noise.data(), fixture.stream), WithinRel(1.4826F, 1e-6));
 }
 
 TEST_CASE("gpu_process_band rejects invalid input", "[gpu][process_band]")
@@ -186,33 +170,33 @@ TEST_CASE("gpu_process_band rejects invalid input", "[gpu][process_band]")
 
   auto bad = fixture.input;
   bad.band_stop = 3;
-  CHECK_THROWS_WITH(gpu_process_band(bad, fixture.workspace, fixture.result, fixture.stream),
+  CHECK_THROWS_WITH(gpu_process_band(bad, fixture.workspace, fixture.result, fixture.stream.get()),
                     ContainsSubstring("invalid band range"));
 
   bad = fixture.input;
   bad.max_sigma_bin = 0;
-  CHECK_THROWS_WITH(gpu_process_band(bad, fixture.workspace, fixture.result, fixture.stream),
+  CHECK_THROWS_WITH(gpu_process_band(bad, fixture.workspace, fixture.result, fixture.stream.get()),
                     ContainsSubstring("max_sigma_bin"));
 
   bad = fixture.input;
   bad.cube = nullptr;
-  CHECK_THROWS_WITH(gpu_process_band(bad, fixture.workspace, fixture.result, fixture.stream),
+  CHECK_THROWS_WITH(gpu_process_band(bad, fixture.workspace, fixture.result, fixture.stream.get()),
                     ContainsSubstring("required input pointer"));
 
   bad = fixture.input;
   bad.sizes.cube = 1;
-  CHECK_THROWS_WITH(gpu_process_band(bad, fixture.workspace, fixture.result, fixture.stream),
+  CHECK_THROWS_WITH(gpu_process_band(bad, fixture.workspace, fixture.result, fixture.stream.get()),
                     ContainsSubstring("cube is too small"));
 
   bad = fixture.input;
   bad.sizes.accept_mask = 1;
-  CHECK_THROWS_WITH(gpu_process_band(bad, fixture.workspace, fixture.result, fixture.stream),
+  CHECK_THROWS_WITH(gpu_process_band(bad, fixture.workspace, fixture.result, fixture.stream.get()),
                     ContainsSubstring("accept_mask is too small"));
 
   bad = fixture.input;
   bad.n_y = std::numeric_limits<std::size_t>::max();
   bad.n_x = 2;
-  CHECK_THROWS_WITH(gpu_process_band(bad, fixture.workspace, fixture.result, fixture.stream),
+  CHECK_THROWS_WITH(gpu_process_band(bad, fixture.workspace, fixture.result, fixture.stream.get()),
                     ContainsSubstring("overflows"));
 }
 
@@ -221,12 +205,12 @@ TEST_CASE("gpu_process_band errors when island count exceeds stamp_capacity", "[
   Fixture fixture(true, true, true);
   fixture.input.threshold = 0.5F;
 
-  std::vector<uint8_t> mask(Fixture::n_pixels * Fixture::n_channels, 0);
-  mask[0] = 1;
-  mask[Fixture::n_pixels - 1] = 1;
+  std::vector<bool> mask(Fixture::n_pixels * Fixture::n_channels, false);
+  mask[0] = true;
+  mask[Fixture::n_pixels - 1] = true;
   set_accept_mask(fixture, mask);
 
-  CHECK_THROWS_WITH(gpu_process_band(fixture.input, fixture.workspace, fixture.result, fixture.stream),
+  CHECK_THROWS_WITH(gpu_process_band(fixture.input, fixture.workspace, fixture.result, fixture.stream.get()),
                     ContainsSubstring("exceeds island capacity"));
 }
 
@@ -235,10 +219,10 @@ TEST_CASE("gpu_process_band reaches the detection stage when capacity is suffici
   Fixture fixture(true, true, true);
   fixture.input.threshold = 0.5F;
 
-  std::vector<uint8_t> mask(Fixture::n_pixels * Fixture::n_channels, 0);
-  mask[0] = 1;
+  std::vector<bool> mask(Fixture::n_pixels * Fixture::n_channels, false);
+  mask[0] = true;
   set_accept_mask(fixture, mask);
 
-  CHECK(gpu_process_band(fixture.input, fixture.workspace, fixture.result, fixture.stream) ==
+  CHECK(gpu_process_band(fixture.input, fixture.workspace, fixture.result, fixture.stream.get()) ==
         GpuBandStatus::detections);
 }

@@ -8,50 +8,34 @@
 #include <limits>
 #include <vector>
 
-#include "device_vector.hpp"
 #include "gpu_kernels.hpp"
-#include "gpu_runtime.hpp"
+#include "gpu_test_utils.hpp"
 
 using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_median;
 using breifast::gpu::gpu_median_abs;
+using breifast::gpu::Stream;
+using breifast::gpu::test::download_scalar;
+using breifast::gpu::test::upload;
 using Catch::Matchers::WithinRel;
 
 namespace
 {
 float run_median(const std::vector<float> &values, bool abs_mode, float abs_scale = 1.F)
 {
-  const size_t n = values.size();
-  const size_t n_alloc = n == 0 ? 1 : n;
-
-  std::vector<float> host_values(values.begin(), values.end());
-  DeviceVector<float> device_values(n_alloc);
+  const auto device_values = upload(values);
   DeviceVector<float> device_median(1);
 
-  cudaStream_t stream{};
-  gpuStreamCreate(&stream);
-
-  if (n > 0)
-  {
-    gpuMemcpyHostToDeviceAsync(device_values.data(), host_values.data(),
-                               n * sizeof(float), stream);
-  }
-
+  const Stream stream;
   if (abs_mode)
   {
-    gpu_median_abs(device_values.data(), n, device_median.data(),
-                   abs_scale, stream);
+    gpu_median_abs(device_values, values.size(), device_median, abs_scale, stream.get());
   }
   else
   {
-    gpu_median(device_values.data(), n, device_median.data(), stream);
+    gpu_median(device_values, values.size(), device_median, stream.get());
   }
-
-  float result = 0.F;
-  gpuMemcpyDeviceToHostAsync(&result, device_median.data(), sizeof(float), stream);
-  gpuStreamSynchronize(stream);
-  gpuStreamDestroy(stream);
-  return result;
+  return download_scalar(device_median.data(), stream);
 }
 
 // Same LCG as the Python reference and the CPU test, so both sides build bit-identical float32 inputs. Every value is an

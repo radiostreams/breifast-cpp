@@ -7,12 +7,15 @@
 #include <string>
 #include <vector>
 
-#include "device_vector.hpp"
 #include "gpu_kernels.hpp"
-#include "gpu_runtime.hpp"
+#include "gpu_test_utils.hpp"
 
 using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_mask_or;
+using breifast::gpu::Stream;
+using breifast::gpu::test::download;
+using breifast::gpu::test::download_scalar;
+using breifast::gpu::test::upload;
 using Catch::Matchers::Equals;
 
 namespace
@@ -30,47 +33,31 @@ Result run_gpu_mask_or(const std::vector<std::string> &channels, int band_start,
   const size_t n_pixels = channels.front().size();
   const size_t n_channels = channels.size();
 
-  std::vector<uint8_t> host_mask(n_channels * n_pixels);
+  std::vector<bool> host_mask(n_channels * n_pixels);
   for (size_t i_channel = 0; i_channel < n_channels; ++i_channel)
   {
     for (size_t i_pixel = 0; i_pixel < n_pixels; ++i_pixel)
     {
-      host_mask[i_channel * n_pixels + i_pixel] = channels[i_channel][i_pixel] == '1' ? uint8_t{1} : uint8_t{0};
+      host_mask[i_channel * n_pixels + i_pixel] = channels[i_channel][i_pixel] == '1';
     }
   }
 
-  std::vector<uint8_t> host_out(n_pixels);
-  std::vector<int> host_any(1);
+  const auto device_mask = upload(host_mask);
+  DeviceVector<bool> device_out(n_pixels);
+  auto device_any = upload(std::vector<int>{-1}); // nonzero sentinel: the call must zero it itself
 
-  DeviceVector<uint8_t> device_mask(n_channels * n_pixels);
-  DeviceVector<uint8_t> device_out(n_pixels);
-  DeviceVector<int> device_any(1);
-
-  cudaStream_t stream{};
-  gpuStreamCreate(&stream);
-
-  gpuMemcpyHostToDeviceAsync(device_mask.data(),
-                             host_mask.data(), n_channels * n_pixels, stream);
-  gpuMemsetAsync(device_any.data(), 0xFF, sizeof(int), stream);
-
-  gpu_mask_or(reinterpret_cast<const bool *>(device_mask.data()), n_pixels, band_start,
-              band_stop, reinterpret_cast<bool *>(device_out.data()),
-              device_any.data(), stream);
-
-  gpuMemcpyDeviceToHostAsync(host_out.data(),
-                             device_out.data(), n_pixels, stream);
-  gpuMemcpyDeviceToHostAsync(host_any.data(),
-                             device_any.data(), sizeof(int), stream);
-  gpuStreamSynchronize(stream);
-  gpuStreamDestroy(stream);
+  const Stream stream;
+  gpu_mask_or(device_mask, n_pixels, band_start, band_stop, device_out, device_any, stream.get());
+  const auto out = download(device_out, stream);
+  const int any = download_scalar(device_any.data(), stream);
 
   std::string mask;
   mask.reserve(n_pixels);
-  for (size_t i_pixel = 0; i_pixel < n_pixels; ++i_pixel)
+  for (const bool value : out)
   {
-    mask += host_out[i_pixel] ? '1' : '0';
+    mask += value ? '1' : '0';
   }
-  return {host_any[0] != 0, mask};
+  return {any != 0, mask};
 }
 } // namespace
 

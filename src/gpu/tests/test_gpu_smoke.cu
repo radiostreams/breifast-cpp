@@ -3,56 +3,43 @@
 #include <cuda_runtime.h>
 
 #include <cstddef>
-#include <vector>
-#include <cstring>
 #include <utility>
+#include <vector>
 
-#include "device_vector.hpp"
-#include "gpu_runtime.hpp"
+#include "gpu_test_utils.hpp"
 
 using breifast::gpu::DeviceVector;
+using breifast::gpu::Stream;
+using breifast::gpu::test::download;
+using breifast::gpu::test::upload;
 
-TEST_CASE("pinned and device vectors round trip a float array", "[gpu][smoke]")
+TEST_CASE("device vectors round trip a float array", "[gpu][smoke]")
 {
   // Odd size, so nothing can assume a multiple of the block or vector width.
   constexpr size_t n = 1'000'003;
-  constexpr size_t bytes = n * sizeof(float);
-  std::vector<float> host_in(n);
-  std::vector<float> host_out(n);
-  DeviceVector<float> device(n);
-
-  REQUIRE(host_in.size() == n);
-  REQUIRE(host_out.size() == n);
-  REQUIRE(device.size() == n);
-
-  float *const in = host_in.data();
-  float *const out = host_out.data();
-  float *const device_ptr = device.data();
-
-  // The device allocation comes from device memory.
-  cudaPointerAttributes attributes{};
-  REQUIRE(cudaPointerGetAttributes(&attributes, device_ptr) == cudaSuccess);
-  REQUIRE(attributes.type == cudaMemoryTypeDevice);
-
+  std::vector<float> host(n);
   for (size_t i = 0; i < n; ++i)
   {
-    in[i] = 0.5F * static_cast<float>(i);
-    out[i] = -1.F;
+    host[i] = 0.5F * static_cast<float>(i);
   }
 
-  // Round trip through the runtime header on an explicit stream.
-  cudaStream_t stream{};
-  gpuStreamCreate(&stream);
-  gpuMemcpyHostToDeviceAsync(device_ptr, in, bytes, stream);
-  gpuMemcpyDeviceToHostAsync(out, device_ptr, bytes, stream);
-  gpuStreamSynchronize(stream);
-  gpuStreamDestroy(stream);
-  REQUIRE(std::memcmp(in, out, bytes) == 0);
+  auto device = upload(host);
+  REQUIRE(device.size() == n);
 
-  // A moved-to vector owns the data of the moved-from one.
-  std::vector<float> moved = std::move(host_out);
-  REQUIRE(moved.size() == n);
-  REQUIRE(std::memcmp(in, moved.data(), bytes) == 0);
+  // The allocation comes from device memory.
+  cudaPointerAttributes attributes{};
+  REQUIRE(cudaPointerGetAttributes(&attributes, device.data()) == cudaSuccess);
+  REQUIRE(attributes.type == cudaMemoryTypeDevice);
+
+  const Stream stream;
+  const bool round_trip = download(device, stream) == host; // not decomposed: Catch would print a million floats
+  CHECK(round_trip);
+
+  // A moved-to vector owns the moved-from one's allocation.
+  const float *const allocation = device.data();
+  const DeviceVector<float> moved = std::move(device);
+  CHECK(moved.data() == allocation);
+  CHECK(moved.size() == n);
 }
 
 TEST_CASE("CHECK_GPU throws a GpuError that carries the CUDA error", "[gpu][smoke]")

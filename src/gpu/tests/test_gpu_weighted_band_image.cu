@@ -8,12 +8,13 @@
 #include <limits>
 #include <vector>
 
-#include "device_vector.hpp"
 #include "gpu_kernels.hpp"
-#include "gpu_runtime.hpp"
+#include "gpu_test_utils.hpp"
 
-using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_weighted_band_image;
+using breifast::gpu::Stream;
+using breifast::gpu::test::download;
+using breifast::gpu::test::upload;
 using Catch::Approx;
 using Catch::Matchers::Equals;
 
@@ -78,59 +79,24 @@ const std::vector<float> expected_without_mean = {
     0.0422355334F, 0.397091592F,
 };
 
-// Runs gpu_weighted_band_image with the scalars a caller derives from the band: the inverse of the weights sum over the
-// band, and the inverse of the band size. `mean_values` empty means no subtraction (a null pointer). `out_plane` starts
-// filled with `prefill` on the device, like per-thread scratch that still holds the previous band.
+// Runs gpu_weighted_band_image with the inverse band size a caller derives from the band. `mean_values` empty means no
+// subtraction (a null pointer). `out_plane` starts filled with `prefill` on the device, like per-thread scratch that
+// still holds the previous band.
 std::vector<float> run_gpu_weighted_band_image(const std::vector<float> &cube_values,
                                                const std::vector<float> &weights_values,
                                                const std::vector<float> &mean_values, size_t n_plane_pixels,
                                                int band_start, int band_stop, float prefill = 0.F)
 {
-  const bool subtract_mean = !mean_values.empty();
+  const auto device_cube = upload(cube_values);
+  const auto device_weights = upload(weights_values);
+  const auto device_mean = upload(mean_values);
+  auto device_out = upload(std::vector<float>(n_plane_pixels, prefill));
 
-  std::vector<float> host_cube(cube_values.begin(), cube_values.end());
-  std::vector<float> host_weights(weights_values.begin(), weights_values.end());
-  std::vector<float> host_out(n_plane_pixels, prefill);
-  std::vector<float> host_mean;
-  if (subtract_mean)
-  {
-    host_mean.assign(mean_values.begin(), mean_values.end());
-  }
-
-  DeviceVector<float> device_cube(cube_values.size());
-  DeviceVector<float> device_weights(weights_values.size());
-  DeviceVector<float> device_out(n_plane_pixels);
-  DeviceVector<float> device_mean(subtract_mean ? mean_values.size() : 0);
-
-  float *const cube_ptr = device_cube.data();
-  float *const weights_ptr = device_weights.data();
-  float *const out_ptr = device_out.data();
-  float *const mean_ptr = subtract_mean ? device_mean.data() : nullptr;
-
-  cudaStream_t stream{};
-  gpuStreamCreate(&stream);
-
-  gpuMemcpyHostToDeviceAsync(cube_ptr, host_cube.data(),
-                             cube_values.size() * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(weights_ptr, host_weights.data(),
-                             weights_values.size() * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(out_ptr, host_out.data(), n_plane_pixels * sizeof(float),
-                             stream);
-  if (subtract_mean)
-  {
-    gpuMemcpyHostToDeviceAsync(mean_ptr, host_mean.data(),
-                               mean_values.size() * sizeof(float), stream);
-  }
-
-  gpu_weighted_band_image(cube_ptr, weights_ptr, mean_ptr, out_ptr, n_plane_pixels, band_start, band_stop,
-                          1.F / static_cast<float>(band_stop - band_start), stream);
-
-  gpuMemcpyDeviceToHostAsync(host_out.data(), out_ptr, n_plane_pixels * sizeof(float),
-                             stream);
-  gpuStreamSynchronize(stream);
-  gpuStreamDestroy(stream);
-
-  return std::vector<float>(host_out.begin(), host_out.end());
+  const Stream stream;
+  gpu_weighted_band_image(device_cube, device_weights, mean_values.empty() ? nullptr : device_mean.data(), device_out,
+                          n_plane_pixels, band_start, band_stop, 1.F / static_cast<float>(band_stop - band_start),
+                          stream.get());
+  return download(device_out, stream);
 }
 
 // A deterministic three-channel plane and its 0.1x mean image, for the coverage cases where a hand-written expected

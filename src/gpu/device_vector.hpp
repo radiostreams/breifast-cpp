@@ -12,8 +12,9 @@
 namespace breifast::gpu
 {
 /// Owning device array: plain cudaMalloc/cudaFree, move-only. The implicit pointer conversion keeps kernel call sites
-/// short. Uploads go through the legacy default stream and wait for it, so their data is in place before any other
-/// stream, blocking or not, can read it.
+/// short. Its copies and memsets run on the default stream, which the non-blocking work streams do not wait for, and
+/// neither is complete when it returns: each is followed by a sync of the default stream, so the data is in place
+/// before any stream can read it.
 template <typename T> class DeviceVector
 {
 public:
@@ -28,7 +29,7 @@ public:
     if (n > 0)
     {
       CHECK_GPU(cudaMemset(vector.data(), 0, n * sizeof(T)));
-      CHECK_GPU(cudaStreamSynchronize(cudaStreamLegacy));
+      CHECK_GPU(cudaStreamSynchronize(nullptr)); // the default stream, which the call above ran on
     }
     return vector;
   }
@@ -97,18 +98,18 @@ private:
     Pointer pointer{static_cast<T *>(raw)};
 #ifndef NDEBUG
     CHECK_GPU(cudaMemset(pointer.get(), 0xFF, n * sizeof(T)));
-    CHECK_GPU(cudaStreamSynchronize(cudaStreamLegacy));
+    CHECK_GPU(cudaStreamSynchronize(nullptr)); // the default stream, which the call above ran on
 #endif
     return pointer;
   }
 
-  /// A pageable host-to-device cudaMemcpy can return before its last DMA lands, so wait for the legacy stream.
+  /// A pageable host-to-device cudaMemcpy can return before its last DMA lands.
   void upload(const T *host, std::size_t n)
   {
     if (n > 0)
     {
       CHECK_GPU(cudaMemcpy(data(), host, n * sizeof(T), cudaMemcpyHostToDevice));
-      CHECK_GPU(cudaStreamSynchronize(cudaStreamLegacy));
+      CHECK_GPU(cudaStreamSynchronize(nullptr)); // the default stream, which the call above ran on
     }
   }
 

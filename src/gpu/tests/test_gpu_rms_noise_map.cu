@@ -12,12 +12,14 @@
 #include <stdexcept>
 #include <vector>
 
-#include "device_vector.hpp"
 #include "gpu_kernels.hpp"
-#include "gpu_runtime.hpp"
+#include "gpu_test_utils.hpp"
 
 using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_rms_noise_map;
+using breifast::gpu::Stream;
+using breifast::gpu::test::download;
+using breifast::gpu::test::upload;
 using Catch::Approx;
 
 namespace
@@ -57,33 +59,13 @@ std::vector<float> run_gpu_rms_noise_map(const std::vector<float> &plane_values,
 {
   const size_t n_plane_pixels = n_rows * n_cols;
 
-  std::vector<float> host_plane(plane_values.begin(), plane_values.end());
-  std::vector<float> host_rows(n_plane_pixels, prefill);
-  std::vector<float> host_out(n_plane_pixels, prefill);
+  const auto device_plane = upload(plane_values);
+  auto device_rows = upload(std::vector<float>(n_plane_pixels, prefill));
+  auto device_out = upload(std::vector<float>(n_plane_pixels, prefill));
 
-  DeviceVector<float> device_plane(n_plane_pixels);
-  DeviceVector<float> device_rows(n_plane_pixels);
-  DeviceVector<float> device_out(n_plane_pixels);
-
-  cudaStream_t stream{};
-  gpuStreamCreate(&stream);
-
-  gpuMemcpyHostToDeviceAsync(device_plane.data(), host_plane.data(),
-                             n_plane_pixels * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(device_rows.data(), host_rows.data(),
-                             n_plane_pixels * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(device_out.data(), host_out.data(),
-                             n_plane_pixels * sizeof(float), stream);
-
-  gpu_rms_noise_map(device_plane.data(), n_rows, n_cols, box,
-                    device_rows.data(), device_out.data(), stream);
-
-  gpuMemcpyDeviceToHostAsync(host_out.data(), device_out.data(),
-                             n_plane_pixels * sizeof(float), stream);
-  gpuStreamSynchronize(stream);
-  gpuStreamDestroy(stream);
-
-  return std::vector<float>(host_out.begin(), host_out.end());
+  const Stream stream;
+  gpu_rms_noise_map(device_plane, n_rows, n_cols, box, device_rows, device_out, stream.get());
+  return download(device_out, stream);
 }
 
 std::vector<float> make_plane(size_t n_pixels, unsigned long long seed)
@@ -195,19 +177,11 @@ TEST_CASE("gpu_rms_noise_map rejects a zero dimension", "[gpu][rms_noise_map]")
   DeviceVector<float> device_rows(1);
   DeviceVector<float> device_out(1);
 
-  cudaStream_t stream{};
-  gpuStreamCreate(&stream);
-
-  REQUIRE_THROWS_AS(gpu_rms_noise_map(device_plane.data(), 0, n_x, boxsize,
-                                      device_rows.data(),
-                                      device_out.data(), stream),
+  const Stream stream;
+  REQUIRE_THROWS_AS(gpu_rms_noise_map(device_plane, 0, n_x, boxsize, device_rows, device_out, stream.get()),
                     std::runtime_error);
-  REQUIRE_THROWS_AS(gpu_rms_noise_map(device_plane.data(), n_y, 0, boxsize,
-                                      device_rows.data(),
-                                      device_out.data(), stream),
+  REQUIRE_THROWS_AS(gpu_rms_noise_map(device_plane, n_y, 0, boxsize, device_rows, device_out, stream.get()),
                     std::runtime_error);
-
-  gpuStreamDestroy(stream);
 }
 
 TEST_CASE("gpu_rms_noise_map covers blocks in both dimensions on a large plane", "[gpu][rms_noise_map]")

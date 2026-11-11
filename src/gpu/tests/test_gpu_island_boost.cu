@@ -10,12 +10,14 @@
 #include <stdexcept>
 #include <vector>
 
-#include "device_vector.hpp"
 #include "gpu_kernels.hpp"
-#include "gpu_runtime.hpp"
+#include "gpu_test_utils.hpp"
 
 using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_island_boost;
+using breifast::gpu::Stream;
+using breifast::gpu::test::download_scalar;
+using breifast::gpu::test::upload;
 
 namespace
 {
@@ -28,50 +30,22 @@ float run_boost(const std::vector<unsigned int> &labels, const std::vector<float
   const unsigned int active_count = labels.empty() ? 0U : *std::max_element(labels.begin(), labels.end());
   const unsigned int capacity = std::max(active_count, label);
 
-  std::vector<unsigned int> host_labels(labels.begin(), labels.end());
-  std::vector<float> host_baseline(baseline_flux.begin(), baseline_flux.end());
-  std::vector<unsigned int> host_count(1, active_count);
   std::vector<float> host_flux(capacity, 0.F);
   host_flux[label - 1U] = flux;
-  DeviceVector<unsigned int> device_labels(labels.size());
-  DeviceVector<float> device_baseline(baseline_flux.size());
-  DeviceVector<unsigned int> device_count(1);
-  DeviceVector<float> device_flux(capacity);
+  const auto device_labels = upload(labels);
+  const auto device_baseline = upload(baseline_flux);
+  const auto device_count = upload(std::vector<unsigned int>{active_count});
+  const auto device_flux = upload(host_flux);
   DeviceVector<float> device_boost(capacity);
-  DeviceVector<unsigned char> device_found(capacity);
+  DeviceVector<bool> device_found(capacity);
 
-  cudaStream_t stream{};
-  gpuStreamCreate(&stream);
+  const Stream stream;
+  gpu_island_boost(device_labels, device_baseline, labels.size(), device_count, capacity, device_flux, device_boost,
+                   device_found, stream.get());
+  const float boost = download_scalar(device_boost.data() + (label - 1U), stream);
+  const bool found = download_scalar(device_found.data() + (label - 1U), stream);
 
-  if (!labels.empty())
-  {
-    gpuMemcpyHostToDeviceAsync(device_labels.data(),
-                               host_labels.data(), labels.size() * sizeof(unsigned int),
-                               stream);
-    gpuMemcpyHostToDeviceAsync(device_baseline.data(),
-                               host_baseline.data(), baseline_flux.size() * sizeof(float),
-                               stream);
-  }
-  gpuMemcpyHostToDeviceAsync(device_count.data(),
-                             host_count.data(), sizeof(unsigned int), stream);
-  gpuMemcpyHostToDeviceAsync(device_flux.data(),
-                             host_flux.data(), capacity * sizeof(float), stream);
-
-  gpu_island_boost(device_labels.data(), device_baseline.data(),
-                   labels.size(), device_count.data(), capacity,
-                   device_flux.data(), device_boost.data(),
-                   reinterpret_cast<bool *>(device_found.data()), stream);
-
-  float boost = 0.F;
-  unsigned char found = 0;
-  gpuMemcpyDeviceToHostAsync(&boost, device_boost.data() + (label - 1U), sizeof(float),
-                             stream);
-  gpuMemcpyDeviceToHostAsync(&found, device_found.data() + (label - 1U), sizeof(unsigned char),
-                             stream);
-  gpuStreamSynchronize(stream);
-  gpuStreamDestroy(stream);
-
-  if (found == 0)
+  if (!found)
   {
     throw std::runtime_error("no pixel carries the label");
   }

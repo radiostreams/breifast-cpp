@@ -5,42 +5,26 @@
 #include <stdexcept>
 #include <vector>
 
-#include "device_vector.hpp"
 #include "gpu_kernels.hpp"
-#include "gpu_runtime.hpp"
+#include "gpu_test_utils.hpp"
 
 using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_any_true;
+using breifast::gpu::Stream;
+using breifast::gpu::test::download_scalar;
+using breifast::gpu::test::upload;
 
 namespace
 {
-// A mask is a byte per value (0 or 1), reinterpreted as bool in the wrapper.
+// A mask is a byte per value, reinterpreted as bool in the wrapper, so a byte other than 0 or 1 can be tested too.
 int run_any_true(const std::vector<unsigned char> &values)
 {
-  const size_t n = values.size();
-  const size_t n_alloc = n == 0 ? 1 : n;
-
-  std::vector<unsigned char> host_values(values.begin(), values.end());
-  DeviceVector<unsigned char> device_values(n_alloc);
+  const auto device_values = upload(values);
   DeviceVector<int> device_out(1);
 
-  cudaStream_t stream{};
-  gpuStreamCreate(&stream);
-
-  if (n > 0)
-  {
-    gpuMemcpyHostToDeviceAsync(device_values.data(), host_values.data(),
-                               n * sizeof(unsigned char), stream);
-  }
-
-  const bool *mask = reinterpret_cast<const bool *>(device_values.data());
-  gpu_any_true(mask, n, device_out.data(), stream);
-
-  int result = -1;
-  gpuMemcpyDeviceToHostAsync(&result, device_out.data(), sizeof(int), stream);
-  gpuStreamSynchronize(stream);
-  gpuStreamDestroy(stream);
-  return result;
+  const Stream stream;
+  gpu_any_true(reinterpret_cast<const bool *>(device_values.data()), values.size(), device_out, stream.get());
+  return download_scalar(device_out.data(), stream);
 }
 } // namespace
 
@@ -87,13 +71,7 @@ TEST_CASE("gpu_any_true distinguishes an all-false mask from any single true", "
 
 TEST_CASE("gpu_any_true rejects an empty array", "[gpu][scalar_reductions]")
 {
-  cudaStream_t stream{};
-  gpuStreamCreate(&stream);
-
+  const Stream stream;
   DeviceVector<int> out(1);
-  int *out_ptr = out.data();
-
-  REQUIRE_THROWS_AS(gpu_any_true(nullptr, 0, out_ptr, stream), std::runtime_error);
-
-  gpuStreamDestroy(stream);
+  REQUIRE_THROWS_AS(gpu_any_true(nullptr, 0, out, stream.get()), std::runtime_error);
 }
