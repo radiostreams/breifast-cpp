@@ -110,13 +110,18 @@ void gpu_spectral_variance_stats_host(const float *cube, const bool *nonzero_cha
                                       size_t n_channels, GpuSpectralVarianceHostResult &result,
                                       GpuStream stream = nullptr);
 
-void gpu_combine_noise_map_rms(const float *rms, const float *rms_floor, const float *selfnoise_offset,
-                               const float *dde_noise, float selfnoise_scale, float dde_scale, float *out_noise_map,
-                               size_t n_pixels, GpuStream stream = nullptr);
-
-void gpu_combine_noise_map_constant(const float *base_noise, const float *selfnoise_offset, const float *dde_noise,
-                                    float selfnoise_scale, float dde_scale, float *out_noise_map, size_t n_pixels,
-                                    GpuStream stream = nullptr);
+/**
+ * @brief Noise map: `out[p] = sqrt(base[p]^2 + selfnoise_scale * selfnoise_offset[p] + dde_scale * dde_noise[p])`.
+ *
+ * `base[p] = max(rms[p], *base_noise)` with an RMS map, where `base_noise` is the RMS floor; `rms == nullptr` gives
+ * `base[p] = *base_noise` for every pixel. Device pointers; the work is enqueued on `stream`.
+ * @param rms `[n_pixels]` floats, or `nullptr`.
+ * @param base_noise One device float.
+ * @param out_noise_map `[n_pixels]` floats, written completely.
+ */
+void gpu_combine_noise_map(const float *rms, const float *base_noise, const float *selfnoise_offset,
+                           const float *dde_noise, float selfnoise_scale, float dde_scale, float *out_noise_map,
+                           size_t n_pixels, GpuStream stream = nullptr);
 
 /**
  * @brief SNR and mask cascade of one band, fused: `snr`, the four cumulative masks, the histogram counts and the SNR

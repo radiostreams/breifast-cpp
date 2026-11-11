@@ -16,8 +16,7 @@
 #include "gpu_runtime.hpp"
 
 using breifast::gpu::DeviceVector;
-using breifast::gpu::gpu_combine_noise_map_constant;
-using breifast::gpu::gpu_combine_noise_map_rms;
+using breifast::gpu::gpu_combine_noise_map;
 using Catch::Approx;
 using Catch::Matchers::Equals;
 
@@ -50,7 +49,7 @@ const std::vector<float> dde_noise = {
     0.0142245321F, 0.0158669446F,  0.00697450154F, 0.00924703572F, 0.0171595179F,
 };
 
-// Runs gpu_combine_noise_map_rms on the given maps. `out_noise_map` starts filled with `prefill` on the device, like
+// Runs gpu_combine_noise_map with an RMS map. `out_noise_map` starts filled with `prefill` on the device, like
 // per-thread scratch that still holds the previous band.
 std::vector<float> run_gpu_combine_noise_map_rms(const std::vector<float> &rms_values, float floor,
                                                  const std::vector<float> &selfnoise_values,
@@ -82,10 +81,10 @@ std::vector<float> run_gpu_combine_noise_map_rms(const std::vector<float> &rms_v
                              n_plane_pixels * sizeof(float), stream);
   gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_floor.data()), &floor, sizeof(float), stream);
 
-  gpu_combine_noise_map_rms(thrust::raw_pointer_cast(device_rms.data()), thrust::raw_pointer_cast(device_floor.data()),
-                            thrust::raw_pointer_cast(device_selfnoise.data()),
-                            thrust::raw_pointer_cast(device_dde.data()), selfnoise_scale, dde_scale,
-                            thrust::raw_pointer_cast(device_out.data()), n_plane_pixels, stream);
+  gpu_combine_noise_map(thrust::raw_pointer_cast(device_rms.data()), thrust::raw_pointer_cast(device_floor.data()),
+                        thrust::raw_pointer_cast(device_selfnoise.data()), thrust::raw_pointer_cast(device_dde.data()),
+                        selfnoise_scale, dde_scale, thrust::raw_pointer_cast(device_out.data()), n_plane_pixels,
+                        stream);
 
   gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_out.data()), thrust::raw_pointer_cast(device_out.data()),
                              n_plane_pixels * sizeof(float), stream);
@@ -95,7 +94,7 @@ std::vector<float> run_gpu_combine_noise_map_rms(const std::vector<float> &rms_v
   return std::vector<float>(host_out.begin(), host_out.end());
 }
 
-// Runs gpu_combine_noise_map_constant on the given maps.
+// Runs gpu_combine_noise_map without an RMS map, so with the constant base noise.
 std::vector<float> run_gpu_combine_noise_map_constant(const std::vector<float> &selfnoise_values,
                                                       const std::vector<float> &dde_values, float prefill = 0.F)
 {
@@ -121,10 +120,10 @@ std::vector<float> run_gpu_combine_noise_map_constant(const std::vector<float> &
                              n_plane_pixels * sizeof(float), stream);
   gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_base_noise.data()), &base_noise, sizeof(float), stream);
 
-  gpu_combine_noise_map_constant(thrust::raw_pointer_cast(device_base_noise.data()),
-                                 thrust::raw_pointer_cast(device_selfnoise.data()),
-                                 thrust::raw_pointer_cast(device_dde.data()), selfnoise_scale, dde_scale,
-                                 thrust::raw_pointer_cast(device_out.data()), n_plane_pixels, stream);
+  gpu_combine_noise_map(nullptr, thrust::raw_pointer_cast(device_base_noise.data()),
+                        thrust::raw_pointer_cast(device_selfnoise.data()), thrust::raw_pointer_cast(device_dde.data()),
+                        selfnoise_scale, dde_scale, thrust::raw_pointer_cast(device_out.data()), n_plane_pixels,
+                        stream);
 
   gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_out.data()), thrust::raw_pointer_cast(device_out.data()),
                              n_plane_pixels * sizeof(float), stream);
@@ -257,12 +256,8 @@ TEST_CASE("gpu_combine_noise_map overwrites the stale values of out_noise_map", 
 TEST_CASE("gpu_combine_noise_map rejects an empty plane", "[gpu][combine_noise_map]")
 {
   using Catch::Matchers::ContainsSubstring;
-  CHECK_THROWS_WITH(
-      gpu_combine_noise_map_rms(nullptr, nullptr, nullptr, nullptr, selfnoise_scale, dde_scale, nullptr, 0),
-      ContainsSubstring("zero pixels"));
-  CHECK_THROWS_WITH(
-      gpu_combine_noise_map_constant(nullptr, nullptr, nullptr, selfnoise_scale, dde_scale, nullptr, 0),
-      ContainsSubstring("zero pixels"));
+  CHECK_THROWS_WITH(gpu_combine_noise_map(nullptr, nullptr, nullptr, nullptr, selfnoise_scale, dde_scale, nullptr, 0),
+                    ContainsSubstring("zero pixels"));
 }
 
 TEST_CASE("gpu_combine_noise_map covers the partial last block of a 1000-pixel plane", "[gpu][combine_noise_map]")
