@@ -1,5 +1,4 @@
-#include <thrust/execution_policy.h>
-#include <thrust/scan.h>
+#include <stdexcept>
 
 #include "gpu_pipeline.hpp"
 
@@ -93,23 +92,6 @@ __global__ void window_cols_kernel(const float *row_window_sums, const size_t n_
     }
   }
 }
-
-__global__ void compact_mask_kernel(const bool *const mask, const size_t n, size_t *const out_indices,
-                                    size_t *const out_count, unsigned int *const scratch)
-{
-  if (blockIdx.x == 0 && threadIdx.x == 0)
-  {
-    *out_count = scratch[n - 1] + (mask[n - 1] ? 1U : 0U);
-  }
-
-  for (size_t i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += blockDim.x * gridDim.x)
-  {
-    if (mask[i])
-    {
-      out_indices[scratch[i]] = i;
-    }
-  }
-}
 } // namespace
 
 void gpu_rms_noise_map(const float *plane, size_t n_y, size_t n_x, long boxsize, float *row_window_sums, float *out_rms,
@@ -123,22 +105,5 @@ void gpu_rms_noise_map(const float *plane, size_t n_y, size_t n_x, long boxsize,
   // One thread per row for the horizontal pass, then one thread per column for the vertical pass.
   launch_per_element(window_rows_kernel, n_y, stream, plane, n_y, n_x, boxsize, row_window_sums);
   launch_per_element(window_cols_kernel, n_x, stream, row_window_sums, n_y, n_x, boxsize, out_rms);
-}
-
-void gpu_compact_mask(const bool *const mask, const size_t n, size_t *const out_indices, size_t *const out_count,
-                      unsigned int *const scratch, GpuStream stream)
-{
-  if (n == 0)
-  {
-    throw std::runtime_error("gpu_compact_mask: zero pixels");
-  }
-
-  thrust::exclusive_scan(thrust::cuda::par.on(stream), mask, mask + n, scratch, 0U);
-
-  constexpr size_t threads = 256;
-  const dim3 block_size = {threads};
-  const dim3 grid_size = {static_cast<unsigned int>((n + threads - 1) / threads)};
-  compact_mask_kernel<<<grid_size, block_size, 0, stream>>>(mask, n, out_indices, out_count, scratch);
-  CHECK_GPU(cudaGetLastError());
 }
 } // namespace breifast::gpu

@@ -289,19 +289,6 @@ void gpu_stamp_beam_chi2(const float *stamps, const float *kernel, const unsigne
                          float inv_max_to_std_ratio, float *out_chi2, GpuStream stream = nullptr);
 
 /**
- * @brief Indices of the true pixels of `mask`, in raster order, into `out_indices`, with the count in `out_count`.
- *
- * An exclusive scan of the predicate into `scratch`, then a scatter: each true pixel writes its index to its rank slot.
- * Device pointers; the work is enqueued on `stream`. `n == 0` throws.
- * @param mask `[n]` bools.
- * @param out_indices `[n]` indices, the first `*out_count` written.
- * @param out_count One `size_t`, written by this call.
- * @param scratch `[n]` `unsigned int` exclusive-scan workspace.
- */
-void gpu_compact_mask(const bool *mask, size_t n, size_t *out_indices, size_t *out_count, unsigned int *scratch,
-                      GpuStream stream = nullptr);
-
-/**
  * @brief 4-connected component labels of `mask`, numbered `1..count` in raster order of each island's first pixel.
  *
  * A dense min-label propagation: every true pixel starts at its flat index, then repeatedly takes the smallest of its

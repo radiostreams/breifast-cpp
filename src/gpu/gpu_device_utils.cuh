@@ -15,8 +15,7 @@
 
 namespace breifast::gpu
 {
-/// Threads per block of every kernel launched through the helpers below, and the size of every __shared__ array
-/// indexed by threadIdx.x.
+/// Threads per block of every kernel launched through the helpers below; block_reduce is specialised for it.
 inline constexpr unsigned int block_size = 256;
 
 /// Index of the calling thread in a one-dimensional grid, computed in size_t so that it cannot overflow.
