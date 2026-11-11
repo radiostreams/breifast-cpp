@@ -64,6 +64,11 @@ contains GPU support.
   raises `ImportError` when no device is available.
 - A CPU-only build leaves `has_gpu` false and raises `RuntimeError` if
   `process_lot(..., use_gpu=True)` is called.
+- `process_lot` checks every plane before processing any: an inconsistent
+  shape or an invalid config raises `ValueError` naming the plane and the
+  field, e.g. `plane 1: accept_mask has shape (2, 4, 5), expected (2, 4, 6)`.
+  If a plane fails during the run, the planes not started yet are skipped and
+  its error is raised; no partial results are returned.
 - The CUDA driver library is looked up through the normal loader first, then
   `/usr/lib64`, `/usr/lib/x86_64-linux-gnu`, and `/run/opengl-driver/lib`. If
   the driver lives elsewhere, add its directory to `LD_LIBRARY_PATH`.
