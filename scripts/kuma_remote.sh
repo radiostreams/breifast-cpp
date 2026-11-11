@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# Runs on a kuma compute node, started by scripts/kuma.sh through srun; not meant to be called by hand.
+# Runs on a kuma compute node, queued by scripts/kuma.sh through sbatch (srun for the shell); not meant to be called
+# by hand.
 #
 #   kuma_remote.sh build <release|asserts|all>                     (build QOS: configures and compiles)
 #   kuma_remote.sh test <release|asserts|all> [<meson test args>]  (debug QOS: runs tests, never compiles)
 #   kuma_remote.sh bench <gpu_bench.py args>                       (normal QOS: needs a built builddir-gpu)
 #   kuma_remote.sh shell                                           (debug QOS)
+#
+# KUMA_RUN_DIR, set by kuma.sh, is the run's directory: test copies each build directory's testlog.txt there.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -62,6 +65,11 @@ case "$mode" in
       require_built "$dir"
       echo ">> testing $dir"
       meson test -C "$dir" --no-rebuild --print-errorlogs "$@" </dev/null || status=1
+      # The next run overwrites the build directory's log: keep this run's.
+      if [[ -n "${KUMA_RUN_DIR:-}" && -f "$dir/meson-logs/testlog.txt" ]]; then
+        mkdir -p "$KUMA_RUN_DIR/$dir"
+        cp "$dir/meson-logs/testlog.txt" "$KUMA_RUN_DIR/$dir/"
+      fi
     done <<<"$entries"
     exit "$status"
     ;;
