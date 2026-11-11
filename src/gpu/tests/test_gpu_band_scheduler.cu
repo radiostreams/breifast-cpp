@@ -5,7 +5,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
-#include <stdexcept>
 #include <vector>
 
 #include "gpu_band_result.cuh"
@@ -127,24 +126,6 @@ TEST_CASE("gpu_process_bands runs one job per stream", "[gpu][band_scheduler]")
 
 }
 
-TEST_CASE("gpu_process_bands records per-job failures", "[gpu][band_scheduler]")
-{
-  JobFixture good;
-  JobFixture bad;
-  bad.job->input.sizes.cube = 0;
-
-  std::vector<GpuBandJob> jobs;
-  jobs.push_back(std::move(*good.job));
-  jobs.push_back(std::move(*bad.job));
-
-  gpu_process_bands(jobs);
-
-  CHECK(jobs[0].error == nullptr);
-  CHECK(jobs[0].status == GpuBandStatus::no_detections);
-  CHECK(jobs[1].error != nullptr);
-
-}
-
 TEST_CASE("copy_band_jobs copies completed band results", "[gpu][band_scheduler]")
 {
   JobFixture first;
@@ -201,20 +182,5 @@ TEST_CASE("gpu_process_plane assembles completed band jobs", "[gpu][plane]")
   REQUIRE(result.max_sigma.has_value() == true);
   CHECK_THAT(*result.min_sigma, WithinRel(1.F, 1e-6));
   CHECK_THAT(*result.max_sigma, WithinRel(1.F, 1e-6));
-
-}
-
-TEST_CASE("gpu_process_plane rethrows band failures", "[gpu][plane]")
-{
-  JobFixture good;
-  JobFixture bad;
-  bad.job->input.sizes.cube = 0;
-
-  std::vector<GpuBandJob> jobs;
-  jobs.push_back(std::move(*good.job));
-  jobs.push_back(std::move(*bad.job));
-
-  GpuPlaneHostResult result;
-  CHECK_THROWS_AS(gpu_process_plane(jobs, result), std::runtime_error);
 
 }

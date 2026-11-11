@@ -1,76 +1,25 @@
 #include "gpu_plane_jobs.hpp"
 
 #include <algorithm>
-#include <limits>
+#include <cassert>
 #include <numeric>
 #include <stdexcept>
-#include <string>
 #include <utility>
 
 
 namespace breifast::gpu
 {
-namespace
-{
-std::size_t checked_pixels(const std::size_t n_y, const std::size_t n_x)
-{
-  if (n_y == 0 || n_x == 0)
-  {
-    throw std::runtime_error("GpuPlaneJobs: zero plane dimension");
-  }
-  if (n_y > std::numeric_limits<std::size_t>::max() / n_x)
-  {
-    throw std::runtime_error("GpuPlaneJobs: pixel count overflow");
-  }
-  return n_y * n_x;
-}
-
-std::size_t checked_channels(const std::size_t n_channels, const std::size_t n_pixels)
-{
-  if (n_channels == 0)
-  {
-    throw std::runtime_error("GpuPlaneJobs: zero channel count");
-  }
-  if (n_pixels > std::numeric_limits<std::size_t>::max() / n_channels)
-  {
-    throw std::runtime_error("GpuPlaneJobs: channel/pixel count overflow");
-  }
-  return n_channels * n_pixels;
-}
-
-void require_pointer(const void *pointer, const char *name)
-{
-  if (pointer == nullptr)
-  {
-    throw std::runtime_error(std::string("GpuPlaneJobs: missing ") + name);
-  }
-}
-
-} // namespace
-
 GpuPlaneJobs::GpuPlaneJobs(const GpuPlaneJobSpec &spec) : GpuPlaneJobs(spec, [&spec]() {
+  assert(spec.n_y > 0 && spec.n_x > 0 && spec.n_channels > 0);
+  assert(spec.max_sigma_bin > 0);
+  assert(spec.boxsize >= 0 && spec.inner_boxsize >= 0);
+  assert(!spec.beam_size_enabled || spec.max_to_std_ratio_value > 0.F);
+  assert(spec.cube != nullptr && spec.weights != nullptr && spec.nonzero_channels != nullptr &&
+         spec.accept_mask != nullptr);
+  assert(spec.selfnoise_offset != nullptr && spec.selfnoise_raw != nullptr && spec.dde_noise != nullptr);
   GpuPlaneSizes sizes;
-  sizes.n_pixels = checked_pixels(spec.n_y, spec.n_x);
-  sizes.channel_pixels = checked_channels(spec.n_channels, sizes.n_pixels);
-  if (spec.max_sigma_bin <= 0)
-  {
-    throw std::runtime_error("GpuPlaneJobs: max_sigma_bin must be positive");
-  }
-  if (spec.boxsize < 0 || spec.inner_boxsize < 0)
-  {
-    throw std::runtime_error("GpuPlaneJobs: boxsize and inner_boxsize must be non-negative");
-  }
-  if (spec.beam_size_enabled && !(spec.max_to_std_ratio_value > 0.F))
-  {
-    throw std::runtime_error("GpuPlaneJobs: max_to_std_ratio_value must be positive");
-  }
-  require_pointer(spec.cube, "cube");
-  require_pointer(spec.weights, "weights");
-  require_pointer(spec.nonzero_channels, "nonzero_channels");
-  require_pointer(spec.accept_mask, "accept_mask");
-  require_pointer(spec.selfnoise_offset, "selfnoise_offset");
-  require_pointer(spec.selfnoise_raw, "selfnoise_raw");
-  require_pointer(spec.dde_noise, "dde_noise");
+  sizes.n_pixels = spec.n_y * spec.n_x;
+  sizes.channel_pixels = spec.n_channels * sizes.n_pixels;
   return sizes;
 }())
 {
@@ -116,10 +65,7 @@ GpuPlaneJobs::GpuPlaneJobs(const GpuPlaneJobSpec &spec, const GpuPlaneSizes &siz
   const bool use_fixed_beam = spec.beam_size_enabled && spec.fixed_beam_kernel != nullptr;
   if (use_fixed_beam)
   {
-    if (spec.fixed_beam_halfsize < 0)
-    {
-      throw std::runtime_error("GpuPlaneJobs: fixed_beam_halfsize must be non-negative");
-    }
+    assert(spec.fixed_beam_halfsize >= 0);
     const std::size_t beam_side = static_cast<std::size_t>(2 * spec.fixed_beam_halfsize + 1);
     fixed_beam_kernel = DeviceVector<float>::from_host(spec.fixed_beam_kernel, beam_side * beam_side);
   }
@@ -131,10 +77,7 @@ GpuPlaneJobs::GpuPlaneJobs(const GpuPlaneJobSpec &spec, const GpuPlaneSizes &siz
 
   for (const auto &band : spec.bands)
   {
-    if (band.start < 0 || band.stop <= band.start || static_cast<std::size_t>(band.stop) > spec.n_channels)
-    {
-      throw std::runtime_error("GpuPlaneJobs: invalid band range");
-    }
+    assert(band.start >= 0 && band.start < band.stop && static_cast<std::size_t>(band.stop) <= spec.n_channels);
 
     const std::size_t band_size = static_cast<std::size_t>(band.stop - band.start);
     const float weights_sum = std::accumulate(spec.weights + band.start, spec.weights + band.stop, 0.F);
@@ -154,9 +97,8 @@ GpuPlaneJobs::GpuPlaneJobs(const GpuPlaneJobSpec &spec, const GpuPlaneSizes &siz
       }
       else
       {
-        require_pointer(spec.beam_major_axis, "beam_major_axis");
-        require_pointer(spec.beam_minor_axis, "beam_minor_axis");
-        require_pointer(spec.beam_position_angle, "beam_position_angle");
+        assert(spec.beam_major_axis != nullptr && spec.beam_minor_axis != nullptr &&
+               spec.beam_position_angle != nullptr);
 
         float halfsize_accumulator = 0.F;
         for (long i_channel = band.start; i_channel < band.stop; ++i_channel)

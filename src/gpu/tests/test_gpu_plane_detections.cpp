@@ -2,7 +2,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_vector.hpp>
 
-#include <stdexcept>
 #include <optional>
 #include <vector>
 
@@ -146,20 +145,6 @@ TEST_CASE("assemble_plane_detections ignores skipped bands", "[gpu][plane_detect
   assemble_plane_detections(plane, labels, 2.F, true, detections);
 
   CHECK(detections.size() == 0);
-}
-
-TEST_CASE("assemble_plane_detections validates its inputs", "[gpu][plane_detections]")
-{
-  GpuPlaneHostResult plane;
-  plane.statuses = {GpuBandStatus::skipped, GpuBandStatus::skipped};
-  plane.bands.resize(plane.statuses.size());
-
-  const std::vector<GpuBandLabels> one_label = {{"I", "first"}};
-  DetectionArrays detections;
-  CHECK_THROWS_AS(assemble_plane_detections(plane, one_label, 2.F, true, detections), std::runtime_error);
-
-  const std::vector<GpuBandLabels> labels = {{"I", "first"}, {"I", "second"}};
-  CHECK_THROWS_AS(assemble_plane_detections(plane, labels, -1.F, true, detections), std::runtime_error);
 }
 
 TEST_CASE("assemble_plane_result builds the final ProcessPlaneResult", "[gpu][plane_detections]")

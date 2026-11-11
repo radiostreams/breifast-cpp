@@ -1,5 +1,4 @@
 #include <catch2/catch_test_macros.hpp>
-#include <catch2/matchers/catch_matchers_string.hpp>
 
 #include "gpu_band_workspace.cuh"
 
@@ -7,7 +6,6 @@ using breifast::gpu::GpuBandResult;
 using breifast::gpu::GpuBandWorkspace;
 using breifast::gpu::GpuBandWorkspaceSizes;
 using breifast::gpu::max_stamp_capacity;
-using Catch::Matchers::ContainsSubstring;
 
 namespace
 {
@@ -58,27 +56,6 @@ TEST_CASE("GpuBandWorkspace skips beam stamps when beam is disabled", "[gpu][ban
   CHECK(workspace.beam_stamps.empty() == true);
 }
 
-TEST_CASE("GpuBandWorkspace rejects invalid sizes and the stamp cap", "[gpu][band_workspace]")
-{
-  const auto sizes = make_sizes();
-
-  auto bad = sizes;
-  bad.n_pixels = 0;
-  CHECK_THROWS_WITH(GpuBandWorkspace(bad), ContainsSubstring("n_pixels"));
-
-  bad = sizes;
-  bad.stamp_pixels = 0;
-  CHECK_THROWS_WITH(GpuBandWorkspace(bad), ContainsSubstring("stamp_pixels"));
-
-  bad = sizes;
-  bad.stamp_capacity = 0;
-  CHECK_THROWS_WITH(GpuBandWorkspace(bad), ContainsSubstring("stamp_capacity"));
-
-  bad = sizes;
-  bad.stamp_capacity = max_stamp_capacity + 1;
-  CHECK_THROWS_WITH(GpuBandWorkspace(bad), ContainsSubstring("exceeds the maximum"));
-}
-
 TEST_CASE("GpuBandResult allocates every output buffer", "[gpu][band_workspace]")
 {
   constexpr std::size_t n_pixels = 64;
@@ -111,10 +88,4 @@ TEST_CASE("GpuBandResult allocates every output buffer", "[gpu][band_workspace]"
   CHECK(result.median_noise.size() == 1);
   CHECK(result.rms_floor.size() == 1);
   CHECK(result.global_mad.size() == 1);
-}
-
-TEST_CASE("GpuBandResult rejects empty sizes", "[gpu][band_workspace]")
-{
-  CHECK_THROWS_WITH(GpuBandResult(0, 10), ContainsSubstring("n_pixels"));
-  CHECK_THROWS_WITH(GpuBandResult(10, 0), ContainsSubstring("histogram_bins"));
 }

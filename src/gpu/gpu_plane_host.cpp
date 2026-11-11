@@ -1,8 +1,7 @@
 #include <algorithm>
 #include <array>
-#include <limits>
+#include <cassert>
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -22,14 +21,8 @@ void assemble_plane_detections(const GpuPlaneHostResult &plane, const std::vecto
                                float max_to_std_ratio, bool use_rms_noise_estimator,
                                breifast::DetectionArrays &detections)
 {
-  if (labels.size() != plane.statuses.size() || labels.size() != plane.bands.size())
-  {
-    throw std::runtime_error("assemble_plane_detections: labels, statuses and bands size mismatch");
-  }
-  if (max_to_std_ratio < 0.F)
-  {
-    throw std::runtime_error("assemble_plane_detections: max_to_std_ratio must be non-negative");
-  }
+  assert(labels.size() == plane.statuses.size() && labels.size() == plane.bands.size());
+  assert(max_to_std_ratio >= 0.F);
 
   for (size_t i = plane.statuses.size(); i > 0; --i)
   {
@@ -41,27 +34,12 @@ void assemble_plane_detections(const GpuPlaneHostResult &plane, const std::vecto
 
     const auto &band = plane.bands[band_index];
     const size_t count = band.label_count;
-    const auto require_size = [count](const auto &values, const char *name)
-    {
-      if (values.size() < count)
-      {
-        throw std::runtime_error(std::string("assemble_plane_detections: truncated ") + name);
-      }
-    };
-    require_size(band.peak_value, "peak_value");
-    require_size(band.peak_local_noise, "peak_local_noise");
-    require_size(band.peak_y, "peak_y");
-    require_size(band.peak_x, "peak_x");
-    require_size(band.island_size, "island_size");
-    require_size(band.stamp_extreme, "stamp_extreme");
-    require_size(band.donut_std, "donut_std");
-    require_size(band.donut_lmad, "donut_lmad");
-    require_size(band.beam_chi2, "beam_chi2");
-    require_size(band.flux, "flux");
-    require_size(band.boost, "boost");
-    require_size(band.noise_at_peak, "noise_at_peak");
-    require_size(band.rms_at_peak, "rms_at_peak");
-    require_size(band.selfnoise_at_peak, "selfnoise_at_peak");
+    [[maybe_unused]] const auto has_count = [count](const auto &values) { return values.size() >= count; };
+    assert(has_count(band.peak_value) && has_count(band.peak_local_noise) && has_count(band.peak_y) &&
+           has_count(band.peak_x) && has_count(band.island_size) && has_count(band.stamp_extreme) &&
+           has_count(band.donut_std) && has_count(band.donut_lmad) && has_count(band.beam_chi2) &&
+           has_count(band.flux) && has_count(band.boost) && has_count(band.noise_at_peak) &&
+           has_count(band.rms_at_peak) && has_count(band.selfnoise_at_peak));
 
     detections.reserve(detections.size() + count);
     for (size_t j = 0; j < count; ++j)
@@ -116,24 +94,10 @@ breifast::ProcessPlaneResult gpu_process_plane_result(
 breifast::SpectralVarianceStats assemble_spectral_variance_stats(const GpuSpectralVarianceHostResult &host, size_t n_y,
                                                                  size_t n_x, size_t n_channels)
 {
-  if (n_y == 0 || n_x == 0 || n_channels == 0)
-  {
-    throw std::runtime_error("assemble_spectral_variance_stats: zero dimension");
-  }
-  if (n_y > std::numeric_limits<size_t>::max() / n_x)
-  {
-    throw std::runtime_error("assemble_spectral_variance_stats: pixel count overflow");
-  }
-
-  const size_t n_pixels = n_y * n_x;
-  if (host.sum_pow2.size() != n_pixels || host.sum_pow3.size() != n_pixels || host.sum_pow4.size() != n_pixels)
-  {
-    throw std::runtime_error("assemble_spectral_variance_stats: moment size mismatch");
-  }
-  if (host.nonzero_channels_mask.size() != n_channels)
-  {
-    throw std::runtime_error("assemble_spectral_variance_stats: nonzero mask size mismatch");
-  }
+  assert(n_y > 0 && n_x > 0 && n_channels > 0);
+  [[maybe_unused]] const size_t n_pixels = n_y * n_x;
+  assert(host.sum_pow2.size() == n_pixels && host.sum_pow3.size() == n_pixels && host.sum_pow4.size() == n_pixels);
+  assert(host.nonzero_channels_mask.size() == n_channels);
 
   breifast::SpectralVarianceStats stats;
   stats.sum_pow2.resize({n_y, n_x});

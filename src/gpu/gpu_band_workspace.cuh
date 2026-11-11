@@ -2,8 +2,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <stdexcept>
-#include <string>
 
 #include "device_vector.hpp"
 #include "gpu_kernels.hpp"
@@ -77,27 +75,6 @@ struct GpuBandWorkspaceSizes
   std::size_t beam_stamp_pixels = 0;
   std::size_t histogram_bins = 0;
 };
-
-inline void validate_band_workspace_sizes(const GpuBandWorkspaceSizes &sizes)
-{
-  if (sizes.n_pixels == 0)
-  {
-    throw std::runtime_error("GpuBandWorkspace: n_pixels must be greater than 0");
-  }
-  if (sizes.stamp_pixels == 0)
-  {
-    throw std::runtime_error("GpuBandWorkspace: stamp_pixels must be greater than 0");
-  }
-  if (sizes.stamp_capacity == 0)
-  {
-    throw std::runtime_error("GpuBandWorkspace: stamp_capacity must be greater than 0");
-  }
-  if (sizes.stamp_capacity > max_stamp_capacity)
-  {
-    throw std::runtime_error("GpuBandWorkspace: stamp_capacity exceeds the maximum of " +
-                             std::to_string(max_stamp_capacity));
-  }
-}
 
 /// Device scratch of gpu_median and gpu_median_abs: the 256-bin digit histogram, then the radix-select state (count
 /// below the prefix, prefix, coverage) and the largest key below the median.

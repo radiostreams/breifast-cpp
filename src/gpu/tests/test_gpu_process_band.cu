@@ -5,8 +5,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <limits>
-#include <stdexcept>
 #include <vector>
 
 #include "gpu_band_workspace.cuh"
@@ -162,42 +160,6 @@ TEST_CASE("gpu_process_band runs the MAD noise stage and reports no detections",
 
   CHECK_THAT(download_scalar(fixture.result.global_mad.data(), fixture.stream), WithinRel(1.4826F, 1e-6));
   CHECK_THAT(download_scalar(fixture.result.median_noise.data(), fixture.stream), WithinRel(1.4826F, 1e-6));
-}
-
-TEST_CASE("gpu_process_band rejects invalid input", "[gpu][process_band]")
-{
-  Fixture fixture(true, true, true);
-
-  auto bad = fixture.input;
-  bad.band_stop = 3;
-  CHECK_THROWS_WITH(gpu_process_band(bad, fixture.workspace, fixture.result, fixture.stream.get()),
-                    ContainsSubstring("invalid band range"));
-
-  bad = fixture.input;
-  bad.max_sigma_bin = 0;
-  CHECK_THROWS_WITH(gpu_process_band(bad, fixture.workspace, fixture.result, fixture.stream.get()),
-                    ContainsSubstring("max_sigma_bin"));
-
-  bad = fixture.input;
-  bad.cube = nullptr;
-  CHECK_THROWS_WITH(gpu_process_band(bad, fixture.workspace, fixture.result, fixture.stream.get()),
-                    ContainsSubstring("required input pointer"));
-
-  bad = fixture.input;
-  bad.sizes.cube = 1;
-  CHECK_THROWS_WITH(gpu_process_band(bad, fixture.workspace, fixture.result, fixture.stream.get()),
-                    ContainsSubstring("cube is too small"));
-
-  bad = fixture.input;
-  bad.sizes.accept_mask = 1;
-  CHECK_THROWS_WITH(gpu_process_band(bad, fixture.workspace, fixture.result, fixture.stream.get()),
-                    ContainsSubstring("accept_mask is too small"));
-
-  bad = fixture.input;
-  bad.n_y = std::numeric_limits<std::size_t>::max();
-  bad.n_x = 2;
-  CHECK_THROWS_WITH(gpu_process_band(bad, fixture.workspace, fixture.result, fixture.stream.get()),
-                    ContainsSubstring("overflows"));
 }
 
 TEST_CASE("gpu_process_band errors when island count exceeds stamp_capacity", "[gpu][process_band]")

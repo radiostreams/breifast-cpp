@@ -1,7 +1,7 @@
 #include "gpu_process_band.cuh"
 
 #include <algorithm>
-#include <limits>
+#include <cassert>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -29,129 +29,52 @@ unsigned int read_count(const unsigned int *count, GpuStream stream)
   return host_count;
 }
 
-void require_size(const char *name, const std::size_t actual, const std::size_t required)
-{
-  if (actual < required)
-  {
-    throw std::runtime_error(std::string("gpu_process_band: ") + name + " is too small");
-  }
-}
-
 } // namespace
 
 GpuBandStatus gpu_process_band(const GpuBandInput &input, GpuBandWorkspace &workspace, GpuBandResult &result,
                                GpuStream stream)
 {
-  if (input.n_y == 0 || input.n_x == 0)
-  {
-    throw std::runtime_error("gpu_process_band: n_y and n_x must be greater than 0");
-  }
-  if (input.n_y > std::numeric_limits<std::size_t>::max() / input.n_x)
-  {
-    throw std::runtime_error("gpu_process_band: n_y * n_x overflows");
-  }
-  if (input.n_y * input.n_x != input.n_pixels)
-  {
-    throw std::runtime_error("gpu_process_band: n_y * n_x must equal n_pixels");
-  }
-  if (input.n_channels > std::numeric_limits<std::size_t>::max() / input.n_pixels)
-  {
-    throw std::runtime_error("gpu_process_band: n_channels * n_pixels overflows");
-  }
-  const std::size_t channel_pixels = input.n_channels * input.n_pixels;
-  if (input.n_channels == 0)
-  {
-    throw std::runtime_error("gpu_process_band: n_channels must be greater than 0");
-  }
-  if (input.band_start < 0 || input.band_stop <= input.band_start ||
-      static_cast<std::size_t>(input.band_stop) > input.n_channels)
-  {
-    throw std::runtime_error("gpu_process_band: invalid band range");
-  }
-  if (input.max_sigma_bin <= 0)
-  {
-    throw std::runtime_error("gpu_process_band: max_sigma_bin must be positive");
-  }
-  if (input.cube == nullptr || input.weights == nullptr || input.nonzero_channels == nullptr ||
-      input.accept_mask == nullptr || input.selfnoise_offset == nullptr || input.selfnoise_raw == nullptr ||
-      input.dde_noise == nullptr)
-  {
-    throw std::runtime_error("gpu_process_band: required input pointer is null");
-  }
+  assert(input.n_y > 0 && input.n_x > 0 && input.n_channels > 0);
+  assert(input.n_y * input.n_x == input.n_pixels);
+  assert(input.band_start >= 0 && input.band_start < input.band_stop &&
+         static_cast<std::size_t>(input.band_stop) <= input.n_channels);
+  assert(input.max_sigma_bin > 0);
+  assert(input.boxsize >= 0 && input.inner_boxsize >= 0);
+  assert(input.cube != nullptr && input.weights != nullptr && input.nonzero_channels != nullptr &&
+         input.accept_mask != nullptr && input.selfnoise_offset != nullptr && input.selfnoise_raw != nullptr &&
+         input.dde_noise != nullptr);
 
-  require_size("cube", input.sizes.cube, channel_pixels);
-  require_size("weights", input.sizes.weights, input.n_channels);
-  require_size("nonzero_channels", input.sizes.nonzero_channels, input.n_channels);
-  require_size("accept_mask", input.sizes.accept_mask, channel_pixels);
-  require_size("selfnoise_offset", input.sizes.selfnoise_offset, input.n_pixels);
-  require_size("selfnoise_raw", input.sizes.selfnoise_raw, input.n_pixels);
-  require_size("dde_noise", input.sizes.dde_noise, input.n_pixels);
-  if (input.mean_image != nullptr)
-  {
-    require_size("mean_image", input.sizes.mean_image, channel_pixels);
-  }
-  if (input.snr_cutoff != nullptr)
-  {
-    require_size("snr_cutoff", input.sizes.snr_cutoff, channel_pixels);
-  }
-  if (input.flux_cutoff != nullptr)
-  {
-    require_size("flux_cutoff", input.sizes.flux_cutoff, channel_pixels);
-  }
-  if (input.baseline_flux != nullptr)
-  {
-    require_size("baseline_flux", input.sizes.baseline_flux, input.n_pixels);
-  }
-  if (input.beam_kernel != nullptr)
-  {
-    require_size("beam_kernel", input.sizes.beam_kernel, workspace.sizes.beam_stamp_pixels);
-  }
-  if (workspace.sizes.n_pixels != input.n_pixels || result.n_pixels != input.n_pixels)
-  {
-    throw std::runtime_error("gpu_process_band: workspace/result pixel count mismatch");
-  }
-  if (result.histogram_bins != static_cast<std::size_t>(2 * input.max_sigma_bin))
-  {
-    throw std::runtime_error("gpu_process_band: histogram_bins must equal 2 * max_sigma_bin");
-  }
-  if (input.boxsize < 0 || input.inner_boxsize < 0)
-  {
-    throw std::runtime_error("gpu_process_band: boxsize and inner_boxsize must be non-negative");
-  }
+  [[maybe_unused]] const std::size_t channel_pixels = input.n_channels * input.n_pixels;
+  assert(input.sizes.cube >= channel_pixels && input.sizes.accept_mask >= channel_pixels);
+  assert(input.sizes.weights >= input.n_channels && input.sizes.nonzero_channels >= input.n_channels);
+  assert(input.sizes.selfnoise_offset >= input.n_pixels && input.sizes.selfnoise_raw >= input.n_pixels &&
+         input.sizes.dde_noise >= input.n_pixels);
+  assert(input.mean_image == nullptr || input.sizes.mean_image >= channel_pixels);
+  assert(input.snr_cutoff == nullptr || input.sizes.snr_cutoff >= channel_pixels);
+  assert(input.flux_cutoff == nullptr || input.sizes.flux_cutoff >= channel_pixels);
+  assert(input.baseline_flux == nullptr || input.sizes.baseline_flux >= input.n_pixels);
+  assert(input.beam_kernel == nullptr || input.sizes.beam_kernel >= workspace.sizes.beam_stamp_pixels);
+  assert(workspace.sizes.n_pixels == input.n_pixels && result.n_pixels == input.n_pixels);
+  assert(result.histogram_bins == static_cast<std::size_t>(2 * input.max_sigma_bin));
 
   const long radius = input.boxsize / 2;
   const std::size_t stamp_side = static_cast<std::size_t>(2 * radius + 1);
   const std::size_t stamp_pixels = stamp_side * stamp_side;
-  if (stamp_pixels != workspace.sizes.stamp_pixels)
-  {
-    throw std::runtime_error("gpu_process_band: stamp_pixels mismatch with boxsize");
-  }
+  assert(stamp_pixels == workspace.sizes.stamp_pixels);
 
   std::size_t beam_stamp_pixels = 0;
   if (input.beam_kernel != nullptr)
   {
-    if (input.beam_halfsize < 0)
-    {
-      throw std::runtime_error("gpu_process_band: beam_halfsize must be non-negative");
-    }
+    assert(input.beam_halfsize >= 0);
     const std::size_t beam_side = static_cast<std::size_t>(2 * input.beam_halfsize + 1);
     beam_stamp_pixels = beam_side * beam_side;
-    if (beam_stamp_pixels != workspace.sizes.beam_stamp_pixels)
-    {
-      throw std::runtime_error("gpu_process_band: beam_stamp_pixels mismatch with beam_halfsize");
-    }
-    if (!(input.max_to_std_ratio_value > 0.F))
-    {
-      throw std::runtime_error("gpu_process_band: max_to_std_ratio_value must be positive");
-    }
+    assert(beam_stamp_pixels == workspace.sizes.beam_stamp_pixels);
+    assert(input.max_to_std_ratio_value > 0.F);
   }
 
   const unsigned int island_capacity =
       static_cast<unsigned int>(std::min(workspace.sizes.stamp_capacity, result.n_pixels));
-  if (island_capacity == 0)
-  {
-    throw std::runtime_error("gpu_process_band: island capacity must be greater than 0");
-  }
+  assert(island_capacity > 0);
 
   const std::size_t band_size = static_cast<std::size_t>(input.band_stop - input.band_start);
   gpu_any_true(input.nonzero_channels + input.band_start, band_size, workspace.any_flag, stream);

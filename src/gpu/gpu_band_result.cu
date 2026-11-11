@@ -1,9 +1,9 @@
 #include "gpu_band_result.cuh"
 
 #include <algorithm>
+#include <cassert>
+#include <exception>
 #include <limits>
-#include <stdexcept>
-#include <string>
 
 #include "gpu_runtime.hpp"
 
@@ -11,7 +11,9 @@ namespace breifast::gpu
 {
 GpuBandWorkspace::GpuBandWorkspace(const GpuBandWorkspaceSizes &sizes) : sizes(sizes)
 {
-  validate_band_workspace_sizes(this->sizes);
+  assert(this->sizes.n_pixels > 0);
+  assert(this->sizes.stamp_pixels > 0);
+  assert(this->sizes.stamp_capacity > 0 && this->sizes.stamp_capacity <= max_stamp_capacity);
 
   plane.ensure(this->sizes.n_pixels);
   noise_map.ensure(this->sizes.n_pixels);
@@ -41,14 +43,8 @@ GpuBandWorkspace::~GpuBandWorkspace() = default;
 GpuBandResult::GpuBandResult(std::size_t n_pixels, std::size_t histogram_bins)
     : n_pixels(n_pixels), histogram_bins(histogram_bins)
 {
-  if (n_pixels == 0)
-  {
-    throw std::runtime_error("GpuBandResult: n_pixels must be greater than 0");
-  }
-  if (histogram_bins == 0)
-  {
-    throw std::runtime_error("GpuBandResult: histogram_bins must be greater than 0");
-  }
+  assert(n_pixels > 0);
+  assert(histogram_bins > 0);
 
   peak_value.ensure(n_pixels);
   peak_local_noise.ensure(n_pixels);
@@ -85,14 +81,8 @@ GpuBandResult::~GpuBandResult() = default;
 
 void copy_band_result(const GpuBandResult &source, GpuBandHostResult &destination, GpuStream stream)
 {
-  if (source.label_count > source.n_pixels)
-  {
-    throw std::runtime_error("copy_band_result: label_count exceeds n_pixels");
-  }
-  if (source.histogram_bins == 0)
-  {
-    throw std::runtime_error("copy_band_result: histogram_bins must be greater than 0");
-  }
+  assert(source.label_count <= source.n_pixels);
+  assert(source.histogram_bins > 0);
 
   destination.label_count = source.label_count;
   const std::size_t count = source.label_count;
@@ -187,10 +177,7 @@ void copy_band_jobs(std::vector<GpuBandJob> &jobs, std::vector<GpuBandHostResult
 void assemble_plane_bands(const std::vector<GpuBandStatus> &statuses,
                           const std::vector<GpuBandHostResult> &bands, GpuPlaneHostResult &result)
 {
-  if (statuses.size() != bands.size())
-  {
-    throw std::runtime_error("assemble_plane_bands: statuses and bands size mismatch");
-  }
+  assert(statuses.size() == bands.size());
 
   result.statuses = statuses;
   result.bands = bands;

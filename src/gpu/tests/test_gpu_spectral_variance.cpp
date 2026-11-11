@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <optional>
-#include <stdexcept>
 #include <vector>
 
 #include "gpu_spectral_variance.hpp"
@@ -33,16 +32,4 @@ TEST_CASE("assemble_spectral_variance_stats copies moments and mask", "[gpu][spe
   CHECK(stats.nonzero_channels_mask(1) == false);
   CHECK(stats.nonzero_channels_mask(2) == true);
   CHECK(stats.per_channels_squared.has_value() == false);
-}
-
-TEST_CASE("assemble_spectral_variance_stats validates sizes", "[gpu][spectral_variance]")
-{
-  GpuSpectralVarianceHostResult host;
-  host.sum_pow2 = {1.F};
-  host.sum_pow3 = {1.F};
-  host.sum_pow4 = {1.F};
-  host.nonzero_channels_mask = {1};
-
-  CHECK_THROWS_AS(assemble_spectral_variance_stats(host, 2, 2, 1), std::runtime_error);
-  CHECK_THROWS_AS(assemble_spectral_variance_stats(host, 0, 2, 1), std::runtime_error);
 }
