@@ -8,3 +8,4 @@ profiling
 manual_bench_deps
 optimization/*/results
 tracy
+kuma-logs
