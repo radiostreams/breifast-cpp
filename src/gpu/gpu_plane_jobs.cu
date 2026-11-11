@@ -135,7 +135,6 @@ GpuPlaneJobs::GpuPlaneJobs(const GpuPlaneJobSpec &spec, const GpuPlaneSizes &siz
 
     const std::size_t band_size = static_cast<std::size_t>(band.stop - band.start);
     const float weights_sum = std::accumulate(spec.weights + band.start, spec.weights + band.stop, 0.F);
-    const float inv_weights_sum = 1.F / weights_sum;
     const float inv_band_size = 1.F / static_cast<float>(band_size);
 
     const float *beam_device = nullptr;
@@ -240,7 +239,6 @@ GpuPlaneJobs::GpuPlaneJobs(const GpuPlaneJobSpec &spec, const GpuPlaneSizes &siz
         .max_sigma_bin = spec.max_sigma_bin,
         .selfnoise_scale_factor = band.selfnoise_scale_factor,
         .inv_band_size = inv_band_size,
-        .inv_weights_sum = inv_weights_sum,
         .ddenoise_scaling_factor = spec.ddenoise_scaling_factor,
         .reject_noise_threshold = spec.reject_noise_threshold,
         .threshold = spec.threshold,

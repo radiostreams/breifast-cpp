@@ -168,8 +168,7 @@ GpuBandStatus gpu_process_band(const GpuBandInput &input, GpuBandWorkspace &work
   }
 
   gpu_weighted_band_image(input.cube, input.weights, input.subtract_mean ? input.mean_image : nullptr, workspace.plane,
-                          input.n_pixels, input.band_start, input.band_stop, input.inv_weights_sum,
-                          input.inv_band_size, stream);
+                          input.n_pixels, input.band_start, input.band_stop, input.inv_band_size, stream);
 
   if (input.use_rms_noise_estimator)
   {

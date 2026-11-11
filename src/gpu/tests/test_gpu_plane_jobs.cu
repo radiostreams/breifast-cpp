@@ -93,7 +93,6 @@ TEST_CASE("build_plane_jobs creates runnable jobs", "[gpu][plane_jobs]")
   CHECK(plane_jobs.jobs[0].workspace_sizes.histogram_bins == 10);
   CHECK(plane_jobs.jobs[0].result_n_pixels == PlaneInputs::n_pixels);
   CHECK(plane_jobs.jobs[0].input.inv_band_size == Approx(0.5F));
-  CHECK(plane_jobs.jobs[0].input.inv_weights_sum == Approx(0.5F));
 
   GpuPlaneHostResult plane;
   gpu_process_plane(plane_jobs.jobs, plane);

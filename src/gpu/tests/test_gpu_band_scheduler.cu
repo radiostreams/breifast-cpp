@@ -86,7 +86,6 @@ struct JobFixture
         .max_sigma_bin = 2,
         .selfnoise_scale_factor = 1.F,
         .inv_band_size = 1.F,
-        .inv_weights_sum = 1.F,
         .ddenoise_scaling_factor = 1.F,
         .reject_noise_threshold = 0.F,
         .threshold = 2.F,

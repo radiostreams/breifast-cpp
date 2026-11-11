@@ -58,7 +58,6 @@ struct GpuBandInput
 
   float selfnoise_scale_factor = 1.F;
   float inv_band_size = 1.F;
-  float inv_weights_sum = 1.F;
   float ddenoise_scaling_factor = 1.F;
   float reject_noise_threshold = 0.F;
   float threshold = 0.F;

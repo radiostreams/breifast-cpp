@@ -103,7 +103,6 @@ struct Fixture
         .max_sigma_bin = 5,
         .selfnoise_scale_factor = 1.F,
         .inv_band_size = 0.5F,
-        .inv_weights_sum = 0.5F,
         .ddenoise_scaling_factor = 1.F,
         .reject_noise_threshold = 0.F,
         .threshold = 2.F,

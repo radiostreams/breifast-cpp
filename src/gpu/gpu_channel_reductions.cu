@@ -33,11 +33,20 @@ __global__ void mask_or_kernel(const bool *accept_mask, size_t n_pixels, long ba
 
 __global__ void weighted_band_image_kernel(const float *cube, const float *weights, const float *mean_image,
                                            float *out_plane, size_t n_pixels, long band_start, long band_stop,
-                                           float inv_weights_sum, float inv_band_size)
+                                           float inv_band_size)
 {
   const auto i_pixel = global_index();
   if (i_pixel < n_pixels)
   {
+    // Summed here rather than passed in, so that a captured CUDA graph replays for another plane's weights. Same
+    // sequential order as the host std::accumulate, so the same float.
+    float weights_sum = 0.F;
+    for (long i_channel = band_start; i_channel < band_stop; ++i_channel)
+    {
+      weights_sum += weights[i_channel];
+    }
+    const float inv_weights_sum = 1.F / weights_sum;
+
     float result = 0.0f;
     for (long i_channel = band_start; i_channel < band_stop; ++i_channel)
     {
@@ -100,8 +109,7 @@ void gpu_mask_or(const bool *accept_mask, size_t n_pixels, long band_start, long
 }
 
 void gpu_weighted_band_image(const float *cube, const float *weights, const float *mean_image, float *out_plane,
-                             size_t n_pixels, long band_start, long band_stop, float inv_weights_sum, float inv_band_size,
-                             GpuStream stream)
+                             size_t n_pixels, long band_start, long band_stop, float inv_band_size, GpuStream stream)
 {
   if (band_start < 0 || band_start >= band_stop)
   {
@@ -112,7 +120,7 @@ void gpu_weighted_band_image(const float *cube, const float *weights, const floa
     throw std::runtime_error("gpu_weighted_band_image: zero pixels");
   }
   launch_per_element(weighted_band_image_kernel, n_pixels, stream, cube, weights, mean_image, out_plane, n_pixels,
-                     band_start, band_stop, inv_weights_sum, inv_band_size);
+                     band_start, band_stop, inv_band_size);
 }
 
 void gpu_spectral_variance_moments(const float *cube, const bool *nonzero_channels, float *out_sum2, float *out_sum3,

@@ -73,14 +73,16 @@ void gpu_mask_or(const bool *accept_mask, size_t n_pixels, long band_start, long
 /**
  * @brief Weighted band image: `out[p] = Σ_c cube[c,p]*weights[c]*inv_weights_sum - Σ_c mean[c,p]*inv_band_size`.
  *
- * Device pointers. `mean_image` may be `nullptr`, then the second sum is skipped. Work is enqueued on `stream`.
+ * `inv_weights_sum = 1 / Σ_c weights[c]` over the band, summed by the kernel in channel order like the host
+ * std::accumulate. Device pointers. `mean_image` may be `nullptr`, then the second sum is skipped. Work is enqueued on
+ * `stream`.
  * @param cube `[n_channels, n_pixels]` floats, channel major.
  * @param weights One weight per channel, indexed by the absolute channel.
  * @param mean_image `[n_channels, n_pixels]` floats, or `nullptr`.
  * @param out_plane `[n_pixels]` floats, written completely.
  */
 void gpu_weighted_band_image(const float *cube, const float *weights, const float *mean_image, float *out_plane,
-                             size_t n_pixels, long band_start, long band_stop, float inv_weights_sum, float inv_band_size,
+                             size_t n_pixels, long band_start, long band_stop, float inv_band_size,
                              GpuStream stream = nullptr);
 
 /**

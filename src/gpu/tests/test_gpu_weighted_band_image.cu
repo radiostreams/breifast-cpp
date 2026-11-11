@@ -107,12 +107,6 @@ std::vector<float> run_gpu_weighted_band_image(const std::vector<float> &cube_va
   float *const out_ptr = thrust::raw_pointer_cast(device_out.data());
   float *const mean_ptr = subtract_mean ? thrust::raw_pointer_cast(device_mean.data()) : nullptr;
 
-  float weights_sum = 0.F;
-  for (int i_channel = band_start; i_channel < band_stop; ++i_channel)
-  {
-    weights_sum += weights_values[i_channel];
-  }
-
   cudaStream_t stream{};
   gpuStreamCreate(&stream);
 
@@ -129,7 +123,7 @@ std::vector<float> run_gpu_weighted_band_image(const std::vector<float> &cube_va
   }
 
   gpu_weighted_band_image(cube_ptr, weights_ptr, mean_ptr, out_ptr, n_plane_pixels, band_start, band_stop,
-                          1.F / weights_sum, 1.F / static_cast<float>(band_stop - band_start), stream);
+                          1.F / static_cast<float>(band_stop - band_start), stream);
 
   gpuMemcpyDeviceToHostAsync(thrust::raw_pointer_cast(host_out.data()), out_ptr, n_plane_pixels * sizeof(float),
                              stream);
@@ -292,12 +286,12 @@ TEST_CASE("gpu_weighted_band_image covers a plane spanning many blocks", "[gpu][
 TEST_CASE("gpu_weighted_band_image rejects an invalid band or an empty plane", "[gpu][weighted_band_image]")
 {
   using Catch::Matchers::ContainsSubstring;
-  CHECK_THROWS_WITH(gpu_weighted_band_image(nullptr, nullptr, nullptr, nullptr, 4, -1, 1, 1.F, 0.5F),
+  CHECK_THROWS_WITH(gpu_weighted_band_image(nullptr, nullptr, nullptr, nullptr, 4, -1, 1, 0.5F),
                     ContainsSubstring("invalid band"));
-  CHECK_THROWS_WITH(gpu_weighted_band_image(nullptr, nullptr, nullptr, nullptr, 4, 1, 1, 1.F, 0.5F),
+  CHECK_THROWS_WITH(gpu_weighted_band_image(nullptr, nullptr, nullptr, nullptr, 4, 1, 1, 0.5F),
                     ContainsSubstring("invalid band"));
-  CHECK_THROWS_WITH(gpu_weighted_band_image(nullptr, nullptr, nullptr, nullptr, 4, 2, 1, 1.F, 0.5F),
+  CHECK_THROWS_WITH(gpu_weighted_band_image(nullptr, nullptr, nullptr, nullptr, 4, 2, 1, 0.5F),
                     ContainsSubstring("invalid band"));
-  CHECK_THROWS_WITH(gpu_weighted_band_image(nullptr, nullptr, nullptr, nullptr, 0, 0, 1, 1.F, 0.5F),
+  CHECK_THROWS_WITH(gpu_weighted_band_image(nullptr, nullptr, nullptr, nullptr, 0, 0, 1, 0.5F),
                     ContainsSubstring("zero pixels"));
 }
