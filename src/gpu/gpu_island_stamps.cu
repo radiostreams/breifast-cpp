@@ -6,7 +6,7 @@
 #include "gpu_pipeline.hpp"
 
 #include "gpu_block_reduce.cuh"
-#include "gpu_runtime.hpp"
+#include "gpu_device_utils.cuh"
 #include "radix_keys.cuh"
 
 namespace breifast::gpu
@@ -146,8 +146,6 @@ __global__ void donut_median_abs_kernel(const unsigned int *active_count, const 
   }
 }
 
-constexpr size_t stamp_block_threads = 256;
-
 __global__ void stamp_abs_extreme_kernel(const unsigned int *active_count, const float *stamps, size_t stamp_pixels,
                                          float *out_extreme)
 {
@@ -167,7 +165,7 @@ __global__ void stamp_abs_extreme_kernel(const unsigned int *active_count, const
     max_value = fmaxf(max_value, value);
   }
 
-  __shared__ float shared[stamp_block_threads];
+  __shared__ float shared[block_size];
   min_value = block_min(min_value, shared);
   max_value = block_max(max_value, shared);
 
@@ -208,8 +206,6 @@ template <bool skip_inner> __global__ void stamp_extract_kernel(const unsigned i
   }
 }
 
-constexpr size_t BlockDim = 256;
-
 __global__ void donut_std_kernel(const unsigned int *active_count, const float *stamps, const size_t stamps_pixels,
                                  float *out_std)
 {
@@ -217,9 +213,9 @@ __global__ void donut_std_kernel(const unsigned int *active_count, const float *
   {
     return;
   }
-  __shared__ double sum_shared[BlockDim];
-  __shared__ double sumsq_shared[BlockDim];
-  __shared__ uint32_t count_shared[BlockDim];
+  __shared__ double sum_shared[block_size];
+  __shared__ double sumsq_shared[block_size];
+  __shared__ uint32_t count_shared[block_size];
   const float *stamp = stamps + blockIdx.x * stamps_pixels;
 
   double sum = 0.0;
@@ -256,7 +252,7 @@ __global__ void donut_std_kernel(const unsigned int *active_count, const float *
 
 __global__ void kernel_sum_kernel(const float *kernel, size_t n, float *out_sum)
 {
-  __shared__ float shared[BlockDim];
+  __shared__ float shared[block_size];
   float sum = 0.F;
   for (size_t i = threadIdx.x; i < n; i += blockDim.x)
   {
@@ -282,8 +278,8 @@ __global__ void stamp_beam_chi2_kernel(const unsigned int *active_count, const f
 
   const float *stamp = stamps + i_stamp * stamp_pixels;
 
-  __shared__ float shared[BlockDim];
-  __shared__ uint32_t shared_counts[BlockDim];
+  __shared__ float shared[block_size];
+  __shared__ uint32_t shared_counts[block_size];
   float stamp_sum = 0.F;
   for (size_t i = threadIdx.x; i < stamp_pixels; i += blockDim.x)
   {
@@ -342,12 +338,7 @@ void gpu_donut_median_abs(const float *stamps, const unsigned int *active_count,
     throw std::runtime_error{"gpu_donut_median_abs: empty stamps"};
   }
 
-  const size_t threads = 256;
-  const dim3 block_size = {threads};
-  const dim3 grid_size = {capacity};
-
-  donut_median_abs_kernel<<<grid_size, block_size, 0, stream>>>(active_count, stamps, stamp_pixels, scale, out_lmad);
-  CHECK_LAST_GPU_ERROR();
+  launch_per_island(donut_median_abs_kernel, capacity, stream, active_count, stamps, stamp_pixels, scale, out_lmad);
 }
 
 void gpu_donut_std(const float *stamps, const unsigned int *active_count, unsigned int capacity, size_t stamp_pixels,
@@ -366,10 +357,7 @@ void gpu_donut_std(const float *stamps, const unsigned int *active_count, unsign
     throw std::runtime_error{"gpu_donut_std: empty stamps"};
   }
 
-  const dim3 block_size = {BlockDim};
-  const dim3 grid_size = {capacity};
-  donut_std_kernel<<<grid_size, block_size, 0, stream>>>(active_count, stamps, stamp_pixels, out_std);
-  CHECK_LAST_GPU_ERROR();
+  launch_per_island(donut_std_kernel, capacity, stream, active_count, stamps, stamp_pixels, out_std);
 }
 
 void gpu_stamp_abs_extreme(const float *stamps, const unsigned int *active_count, unsigned int capacity,
@@ -388,10 +376,7 @@ void gpu_stamp_abs_extreme(const float *stamps, const unsigned int *active_count
     throw std::runtime_error{"gpu_stamp_abs_extreme: empty stamps"};
   }
 
-  const dim3 block_size = {stamp_block_threads};
-  const dim3 grid_size = {capacity};
-  stamp_abs_extreme_kernel<<<grid_size, block_size, 0, stream>>>(active_count, stamps, stamp_pixels, out_extreme);
-  CHECK_LAST_GPU_ERROR();
+  launch_per_island(stamp_abs_extreme_kernel, capacity, stream, active_count, stamps, stamp_pixels, out_extreme);
 }
 
 void gpu_stamp_extract(const float *plane, size_t n_y, size_t n_x, const long *centre_y, const long *centre_x,
@@ -421,11 +406,8 @@ void gpu_stamp_extract(const float *plane, size_t n_y, size_t n_x, const long *c
 
   const size_t side = static_cast<size_t>(2 * radius + 1);
   const size_t stamp_pixels = side * side;
-  const dim3 block_size = {stamp_block_threads};
-  const dim3 grid_size = {capacity};
-  stamp_extract_kernel<true><<<grid_size, block_size, 0, stream>>>(active_count, plane, n_y, n_x, centre_y, centre_x,
-                                                                  radius, inner_boxsize, stamp_pixels, stamps);
-  CHECK_LAST_GPU_ERROR();
+  launch_per_island(stamp_extract_kernel<true>, capacity, stream, active_count, plane, n_y, n_x, centre_y, centre_x,
+                    radius, inner_boxsize, stamp_pixels, stamps);
 }
 
 void gpu_stamp_extract_no_zero(const float *plane, size_t n_y, size_t n_x, const long *centre_y, const long *centre_x,
@@ -451,11 +433,8 @@ void gpu_stamp_extract_no_zero(const float *plane, size_t n_y, size_t n_x, const
 
   const size_t side = static_cast<size_t>(2 * radius + 1);
   const size_t stamp_pixels = side * side;
-  const dim3 block_size = {stamp_block_threads};
-  const dim3 grid_size = {capacity};
-  stamp_extract_kernel<false><<<grid_size, block_size, 0, stream>>>(active_count, plane, n_y, n_x, centre_y,
-                                                                   centre_x, radius, 0, stamp_pixels, stamps);
-  CHECK_LAST_GPU_ERROR();
+  launch_per_island(stamp_extract_kernel<false>, capacity, stream, active_count, plane, n_y, n_x, centre_y, centre_x,
+                    radius, 0, stamp_pixels, stamps);
 }
 
 void gpu_stamp_beam_chi2(const float *stamps, const float *kernel, const unsigned int *active_count,
@@ -476,14 +455,9 @@ void gpu_stamp_beam_chi2(const float *stamps, const float *kernel, const unsigne
   }
 
   thrust::device_vector<float> kernel_sum(1);
-  kernel_sum_kernel<<<1, BlockDim, 0, stream>>>(kernel, stamp_pixels, thrust::raw_pointer_cast(kernel_sum.data()));
-  CHECK_LAST_GPU_ERROR();
-
-  const dim3 block_size = {BlockDim};
-  const dim3 grid_size = {capacity};
-  stamp_beam_chi2_kernel<<<grid_size, block_size, 0, stream>>>(
-      active_count, stamps, kernel, thrust::raw_pointer_cast(kernel_sum.data()), stamp_extreme, inv_max_to_std_ratio,
-      stamp_pixels, out_chi2);
-  CHECK_LAST_GPU_ERROR();
+  float *const kernel_sum_ptr = thrust::raw_pointer_cast(kernel_sum.data());
+  launch(kernel_sum_kernel, 1, block_size, stream, kernel, stamp_pixels, kernel_sum_ptr);
+  launch_per_island(stamp_beam_chi2_kernel, capacity, stream, active_count, stamps, kernel, kernel_sum_ptr,
+                    stamp_extreme, inv_max_to_std_ratio, stamp_pixels, out_chi2);
 }
 } // namespace breifast::gpu

@@ -3,7 +3,7 @@
 
 #include "gpu_pipeline.hpp"
 
-#include "gpu_runtime.hpp"
+#include "gpu_device_utils.cuh"
 
 namespace breifast::gpu
 {
@@ -25,7 +25,7 @@ __device__ inline long max_of(long i, long window_size, long radius, long n)
 __global__ void window_rows_kernel(const float *plane, const size_t n_y, const size_t n_x, long box_size,
                                    float *row_window_sums)
 {
-  const auto i_y = blockIdx.x * blockDim.x + threadIdx.x;
+  const auto i_y = global_index();
   const auto radius = box_size / 2;
   const auto window_size = box_size > 0 ? box_size : 1;
   if (i_y < n_y)
@@ -60,7 +60,7 @@ __global__ void window_rows_kernel(const float *plane, const size_t n_y, const s
 __global__ void window_cols_kernel(const float *row_window_sums, const size_t n_y, const size_t n_x, long box_size,
                                    float *out)
 {
-  const auto i_x = blockIdx.x * blockDim.x + threadIdx.x;
+  const auto i_x = global_index();
   const auto radius = box_size / 2;
   const auto window_size = box_size > 0 ? box_size : 1;
   if (i_x < n_x)
@@ -120,14 +120,9 @@ void gpu_rms_noise_map(const float *plane, size_t n_y, size_t n_x, long boxsize,
     throw std::runtime_error("gpu_rms_noise_map: n_y and n_x must be greater than 0");
   }
 
-  const size_t threads = 256;
-  const dim3 block_size = {threads};
-  const dim3 row_grid = {static_cast<unsigned int>((n_y + threads - 1) / threads)};
-  window_rows_kernel<<<row_grid, block_size, 0, stream>>>(plane, n_y, n_x, boxsize, row_window_sums);
-  CHECK_LAST_GPU_ERROR();
-  const dim3 col_grid = {static_cast<unsigned int>((n_x + threads - 1) / threads)};
-  window_cols_kernel<<<col_grid, block_size, 0, stream>>>(row_window_sums, n_y, n_x, boxsize, out_rms);
-  CHECK_LAST_GPU_ERROR();
+  // One thread per row for the horizontal pass, then one thread per column for the vertical pass.
+  launch_per_element(window_rows_kernel, n_y, stream, plane, n_y, n_x, boxsize, row_window_sums);
+  launch_per_element(window_cols_kernel, n_x, stream, row_window_sums, n_y, n_x, boxsize, out_rms);
 }
 
 void gpu_compact_mask(const bool *const mask, const size_t n, size_t *const out_indices, size_t *const out_count,

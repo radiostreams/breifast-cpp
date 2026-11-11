@@ -7,19 +7,17 @@
 #include <thrust/device_vector.h>
 #include <thrust/device_ptr.h>
 
-#include "gpu_runtime.hpp"
+#include "gpu_device_utils.cuh"
 #include "gpu_minmax.cuh"
 
 namespace breifast::gpu
 {
 namespace
 {
-constexpr size_t label_stats_block_size = 256;
-
 __global__ void label_stats_init_kernel(const unsigned int capacity, unsigned long long *const value_keys,
                                         float *const local_noise_max, unsigned int *const island_size)
 {
-  const auto label_id = threadIdx.x + blockIdx.x * blockDim.x;
+  const auto label_id = global_index();
   if (label_id < capacity)
   {
     island_size[label_id] = 0;
@@ -33,30 +31,31 @@ __global__ void label_stats_scan_kernel(const unsigned int *const labels, const 
                                         const unsigned int capacity, unsigned long long *const value_keys,
                                         float *const local_noise_max, unsigned int *const island_size)
 {
-  for (size_t pixel_id = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x; pixel_id < n_pixels;
-       pixel_id += static_cast<size_t>(blockDim.x) * gridDim.x)
+  const size_t pixel_id = global_index();
+  if (pixel_id >= n_pixels)
   {
-    const auto label = labels[pixel_id];
-    if (label == 0)
-    {
-      continue;
-    }
+    return;
+  }
+  const auto label = labels[pixel_id];
+  if (label == 0)
+  {
+    return;
+  }
 
-    const auto slot = label - 1;
-    atomicAdd(&island_size[slot], 1);
+  const auto slot = label - 1;
+  atomicAdd(&island_size[slot], 1);
 
-    const auto noise = local_noise[pixel_id];
-    if (!isnan(noise))
-    {
-      atomic_max_float(&local_noise_max[slot], noise);
-    }
+  const auto noise = local_noise[pixel_id];
+  if (!isnan(noise))
+  {
+    atomic_max_float(&local_noise_max[slot], noise);
+  }
 
-    const auto abs_value = fabsf(image[pixel_id]);
-    if (!isnan(abs_value))
-    {
-      const auto key = (uint64_t(__float_as_uint(abs_value)) << 32) | (0xFFFFFFFFu - uint32_t(pixel_id));
-      atomicMax(&value_keys[slot], key);
-    }
+  const auto abs_value = fabsf(image[pixel_id]);
+  if (!isnan(abs_value))
+  {
+    const auto key = (uint64_t(__float_as_uint(abs_value)) << 32) | (0xFFFFFFFFu - uint32_t(pixel_id));
+    atomicMax(&value_keys[slot], key);
   }
 }
 
@@ -67,7 +66,7 @@ __global__ void label_stats_finalize_kernel(const unsigned int *const active_cou
                                             long *const peak_x, unsigned int *const out_island_size)
 {
   const unsigned int n_labels = *active_count;
-  const unsigned int label = blockIdx.x * blockDim.x + threadIdx.x;
+  const auto label = global_index();
   if (label >= n_labels)
   {
     return;
@@ -132,26 +131,11 @@ void gpu_label_stats(const unsigned int *const labels, const float *const image,
   float *local_noise_max_ptr = thrust::raw_pointer_cast(local_noise_max.data());
   unsigned int *sizes_ptr = thrust::raw_pointer_cast(sizes.data());
 
-  const dim3 block_size = {label_stats_block_size};
-  const dim3 label_grid = {static_cast<unsigned int>((capacity + label_stats_block_size - 1) / label_stats_block_size)};
-  label_stats_init_kernel<<<label_grid, block_size, 0, stream>>>(capacity, value_keys_ptr, local_noise_max_ptr,
-                                                                 sizes_ptr);
-  CHECK_LAST_GPU_ERROR();
-
-  constexpr size_t max_blocks = 4096;
-  size_t n_blocks = (n_pixels + label_stats_block_size - 1) / label_stats_block_size;
-  if (n_blocks > max_blocks)
-  {
-    n_blocks = max_blocks;
-  }
-  const dim3 scan_grid = {static_cast<unsigned int>(n_blocks)};
-  label_stats_scan_kernel<<<scan_grid, block_size, 0, stream>>>(labels, image, local_noise, n_pixels, capacity,
-                                                                value_keys_ptr, local_noise_max_ptr, sizes_ptr);
-  CHECK_LAST_GPU_ERROR();
-
-  label_stats_finalize_kernel<<<label_grid, block_size, 0, stream>>>(
-      active_count, capacity, n_x, value_keys_ptr, local_noise_max_ptr, sizes_ptr, value, out_local_noise, peak_y,
-      peak_x, island_size);
-  CHECK_LAST_GPU_ERROR();
+  launch_per_element(label_stats_init_kernel, capacity, stream, capacity, value_keys_ptr, local_noise_max_ptr,
+                     sizes_ptr);
+  launch_per_element(label_stats_scan_kernel, n_pixels, stream, labels, image, local_noise, n_pixels, capacity,
+                     value_keys_ptr, local_noise_max_ptr, sizes_ptr);
+  launch_per_element(label_stats_finalize_kernel, capacity, stream, active_count, capacity, n_x, value_keys_ptr,
+                     local_noise_max_ptr, sizes_ptr, value, out_local_noise, peak_y, peak_x, island_size);
 }
 } // namespace breifast::gpu

@@ -4,7 +4,7 @@
 #include <thrust/device_ptr.h>
 
 #include "gpu_pipeline.hpp"
-#include "gpu_runtime.hpp"
+#include "gpu_device_utils.cuh"
 #include "radix_keys.cuh"
 
 namespace breifast::gpu
@@ -19,7 +19,7 @@ constexpr size_t histogram_bins = 1 << 8;
 __global__ void radix_histogram_kernel(const float *values, size_t n, uint32_t *histogram, int shift, bool abs_mode,
                                        const uint32_t *state)
 {
-  const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  const size_t idx = global_index();
   if (idx < n)
   {
     const uint32_t key = abs_mode ? abs_key(values[idx]) : signed_key(values[idx]);
@@ -56,7 +56,7 @@ __global__ void radix_scan_kernel(const uint32_t *histogram, size_t rank, int sh
 __global__ void radix_refine_kernel(const float *values, size_t n, bool abs_mode, const uint32_t *state,
                                     uint32_t *lower_max)
 {
-  const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  const size_t idx = global_index();
   if (idx < n)
   {
     const uint32_t key = abs_mode ? abs_key(values[idx]) : signed_key(values[idx]);
@@ -96,14 +96,9 @@ void gpu_median_impl(const float *values, size_t n, float *out_median, bool abs_
 {
   if (n == 0)
   {
-    write_nan_kernel<<<1, 1, 0, stream>>>(out_median);
-    CHECK_LAST_GPU_ERROR();
+    launch(write_nan_kernel, 1, 1, stream, out_median);
     return;
   }
-
-  constexpr size_t threads = 256;
-  const dim3 block_size = {threads};
-  const dim3 grid_size = {static_cast<unsigned int>((n + threads - 1) / threads)};
 
   constexpr size_t scratch_words = histogram_bins + 4; // 256 bins, then state[3] and lower_max[1]
   thrust::device_vector<uint32_t> scratch(scratch_words, 0);
@@ -117,20 +112,16 @@ void gpu_median_impl(const float *values, size_t n, float *out_median, bool abs_
   for (int shift : shifts)
   {
     gpuMemsetAsync(histogram, 0, histogram_bins * sizeof(uint32_t), stream);
-    radix_histogram_kernel<<<grid_size, block_size, 0, stream>>>(values, n, histogram, shift, abs_mode, state);
-    CHECK_LAST_GPU_ERROR();
-    radix_scan_kernel<<<1, 1, 0, stream>>>(histogram, n / 2, shift, state);
-    CHECK_LAST_GPU_ERROR();
+    launch_per_element(radix_histogram_kernel, n, stream, values, n, histogram, shift, abs_mode, state);
+    launch(radix_scan_kernel, 1, 1, stream, histogram, n / 2, shift, state);
   }
 
   if (n % 2 == 0)
   {
-    radix_refine_kernel<<<grid_size, block_size, 0, stream>>>(values, n, abs_mode, state, lower_max);
-    CHECK_LAST_GPU_ERROR();
+    launch_per_element(radix_refine_kernel, n, stream, values, n, abs_mode, state, lower_max);
   }
 
-  radix_finalize_kernel<<<1, 1, 0, stream>>>(state, lower_max, abs_mode, n, scale, out_median);
-  CHECK_LAST_GPU_ERROR();
+  launch(radix_finalize_kernel, 1, 1, stream, state, lower_max, abs_mode, n, scale, out_median);
 }
 } // namespace
 

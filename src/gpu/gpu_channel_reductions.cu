@@ -5,7 +5,7 @@
 #include <thrust/device_ptr.h>
 
 #include "gpu_pipeline.hpp"
-#include "gpu_runtime.hpp"
+#include "gpu_device_utils.cuh"
 
 namespace breifast::gpu
 {
@@ -14,7 +14,7 @@ namespace
 __global__ void mask_or_kernel(const bool *accept_mask, size_t n_pixels, long band_start, long band_stop, bool *out_mask,
                                int *out_any)
 {
-  const auto i_pixel = blockIdx.x * blockDim.x + threadIdx.x;
+  const auto i_pixel = global_index();
   bool accept = false;
   if (i_pixel < n_pixels)
   {
@@ -35,7 +35,7 @@ __global__ void weighted_band_image_kernel(const float *cube, const float *weigh
                                            float *out_plane, size_t n_pixels, long band_start, long band_stop,
                                            float inv_weights_sum, float inv_band_size)
 {
-  const auto i_pixel = blockIdx.x * blockDim.x + threadIdx.x;
+  const auto i_pixel = global_index();
   if (i_pixel < n_pixels)
   {
     float result = 0.0f;
@@ -56,7 +56,7 @@ __global__ void weighted_band_image_kernel(const float *cube, const float *weigh
 __global__ void spectral_variance_moments_kernel(const float *cube, const bool *nonzero_channels, float *out_sum2,
                                                  float *out_sum3, float *out_sum4, size_t n_pixels, size_t n_channels)
 {
-  const auto i_pixel = blockIdx.x * blockDim.x + threadIdx.x;
+  const auto i_pixel = global_index();
   if (i_pixel < n_pixels)
   {
     float sum2 = 0.0f;
@@ -95,13 +95,8 @@ void gpu_mask_or(const bool *accept_mask, size_t n_pixels, long band_start, long
   }
 
   gpuMemsetAsync(out_any, 0, sizeof(int), stream);
-
-  constexpr size_t threads = 256;
-  const dim3 block_size = {threads};
-  const dim3 grid_size = {static_cast<unsigned int>((n_pixels + threads - 1) / threads)};
-
-  mask_or_kernel<<<grid_size, block_size, 0, stream>>>(accept_mask, n_pixels, band_start, band_stop, out_mask, out_any);
-  CHECK_LAST_GPU_ERROR();
+  launch_per_element(mask_or_kernel, n_pixels, stream, accept_mask, n_pixels, band_start, band_stop, out_mask,
+                     out_any);
 }
 
 void gpu_weighted_band_image(const float *cube, const float *weights, const float *mean_image, float *out_plane,
@@ -116,14 +111,8 @@ void gpu_weighted_band_image(const float *cube, const float *weights, const floa
   {
     throw std::runtime_error("gpu_weighted_band_image: zero pixels");
   }
-
-  constexpr size_t threads = 256;
-  const dim3 block_size = {threads};
-  const dim3 grid_size = {static_cast<unsigned int>((n_pixels + threads - 1) / threads)};
-
-  weighted_band_image_kernel<<<grid_size, block_size, 0, stream>>>(
-      cube, weights, mean_image, out_plane, n_pixels, band_start, band_stop, inv_weights_sum, inv_band_size);
-  CHECK_LAST_GPU_ERROR();
+  launch_per_element(weighted_band_image_kernel, n_pixels, stream, cube, weights, mean_image, out_plane, n_pixels,
+                     band_start, band_stop, inv_weights_sum, inv_band_size);
 }
 
 void gpu_spectral_variance_moments(const float *cube, const bool *nonzero_channels, float *out_sum2, float *out_sum3,
@@ -133,14 +122,8 @@ void gpu_spectral_variance_moments(const float *cube, const bool *nonzero_channe
   {
     throw std::runtime_error("gpu_spectral_variance_moments: zero pixels");
   }
-
-  constexpr size_t threads = 256;
-  const dim3 block_size = {threads};
-  const dim3 grid_size = {static_cast<unsigned int>((n_pixels + threads - 1) / threads)};
-
-  spectral_variance_moments_kernel<<<grid_size, block_size, 0, stream>>>(cube, nonzero_channels, out_sum2, out_sum3,
-                                                                         out_sum4, n_pixels, n_channels);
-  CHECK_LAST_GPU_ERROR();
+  launch_per_element(spectral_variance_moments_kernel, n_pixels, stream, cube, nonzero_channels, out_sum2, out_sum3,
+                     out_sum4, n_pixels, n_channels);
 }
 
 void gpu_spectral_variance_stats_host(const float *cube, const bool *nonzero_channels, size_t n_y, size_t n_x,

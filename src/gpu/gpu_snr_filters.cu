@@ -1,6 +1,6 @@
 #include "gpu_pipeline.hpp"
 
-#include "gpu_runtime.hpp"
+#include "gpu_device_utils.cuh"
 #include "gpu_minmax.cuh"
 #include "common/snr_filter_params.hpp"
 
@@ -21,7 +21,7 @@ __global__ void snr_and_filters(const float *plane, const float *noise_map, cons
                                 unsigned long long *histogram1, unsigned long long *histogram2, float *out_min_sigma,
                                 float *out_max_sigma)
 {
-  const auto i_pixel = blockIdx.x * blockDim.x + threadIdx.x;
+  const auto i_pixel = global_index();
   if (i_pixel < n_pixels)
   {
     const auto noise = noise_map[i_pixel];
@@ -115,9 +115,6 @@ void gpu_snr_and_filters(const float *plane, const float *noise_map, const float
     throw std::runtime_error("gpu_snr_and_filters: median_noise must be non-null");
   }
 
-  const size_t threads = 256;
-  const dim3 block_size = {threads};
-  const dim3 grid_size = {static_cast<unsigned int>((n_pixels + threads - 1) / threads)};
   if (params.histogram_detail > 1)
   {
     if (histogram0 == nullptr || histogram1 == nullptr)
@@ -145,13 +142,10 @@ void gpu_snr_and_filters(const float *plane, const float *noise_map, const float
   {
     gpuMemsetAsync(histogram2, 0, sizeof(unsigned long long) * 2 * params.max_sigma_bin, stream);
   }
-  CHECK_LAST_GPU_ERROR();
-  min_max_init<<<1, 1, 0, stream>>>(out_min_sigma, out_max_sigma);
-  CHECK_LAST_GPU_ERROR();
-  snr_and_filters<<<grid_size, block_size, 0, stream>>>(plane, noise_map, snr_cutoff, flux_cutoff, median_noise,
-                                                        n_pixels, params, out_snr, image_mask, histogram0, histogram1,
-                                                        histogram2, out_min_sigma, out_max_sigma);
-  CHECK_LAST_GPU_ERROR();
+  launch(min_max_init, 1, 1, stream, out_min_sigma, out_max_sigma);
+  launch_per_element(snr_and_filters, n_pixels, stream, plane, noise_map, snr_cutoff, flux_cutoff, median_noise,
+                     n_pixels, params, out_snr, image_mask, histogram0, histogram1, histogram2, out_min_sigma,
+                     out_max_sigma);
 }
 
 } // namespace breifast::gpu
