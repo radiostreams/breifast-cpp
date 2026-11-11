@@ -319,8 +319,8 @@ void gpu_label_stats(const unsigned int *const labels, const float *const image,
   }
 
   unsigned int host_count = 0;
-  gpuMemcpyDeviceToHostAsync(&host_count, active_count, sizeof(unsigned int), stream);
-  gpuStreamSynchronize(stream);
+  CHECK_GPU(cudaMemcpyAsync(&host_count, active_count, sizeof(unsigned int), cudaMemcpyDeviceToHost, stream));
+  CHECK_GPU(cudaStreamSynchronize(stream));
   if (host_count > capacity)
   {
     throw std::runtime_error("gpu_label_stats: active_count " + std::to_string(host_count) +

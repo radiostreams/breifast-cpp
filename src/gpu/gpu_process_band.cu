@@ -16,16 +16,16 @@ namespace
 int read_flag(int *flag, GpuStream stream)
 {
   int host_flag = 0;
-  gpuMemcpyDeviceToHostAsync(&host_flag, flag, sizeof(int), stream);
-  gpuStreamSynchronize(stream);
+  CHECK_GPU(cudaMemcpyAsync(&host_flag, flag, sizeof(int), cudaMemcpyDeviceToHost, stream));
+  CHECK_GPU(cudaStreamSynchronize(stream));
   return host_flag;
 }
 
 unsigned int read_count(const unsigned int *count, GpuStream stream)
 {
   unsigned int host_count = 0;
-  gpuMemcpyDeviceToHostAsync(&host_count, count, sizeof(unsigned int), stream);
-  gpuStreamSynchronize(stream);
+  CHECK_GPU(cudaMemcpyAsync(&host_count, count, sizeof(unsigned int), cudaMemcpyDeviceToHost, stream));
+  CHECK_GPU(cudaStreamSynchronize(stream));
   return host_count;
 }
 
@@ -184,7 +184,7 @@ GpuBandStatus gpu_process_band(const GpuBandInput &input, GpuBandWorkspace &work
   }
   else
   {
-    gpuMemsetAsync(result.rms_floor, 0, sizeof(float), stream); // 0 in the global MAD mode, as on the CPU
+    CHECK_GPU(cudaMemsetAsync(result.rms_floor, 0, sizeof(float), stream)); // 0 in the global MAD mode, as on the CPU
   }
   gpu_combine_noise_map(rms, base_noise, input.selfnoise_offset, input.dde_noise, input.selfnoise_scale_factor,
                         input.ddenoise_scaling_factor, workspace.noise_map, input.n_pixels, stream);
@@ -244,7 +244,7 @@ GpuBandStatus gpu_process_band(const GpuBandInput &input, GpuBandWorkspace &work
   }
   else
   {
-    gpuMemsetAsync(result.beam_chi2, 0, island_capacity * sizeof(float), stream);
+    CHECK_GPU(cudaMemsetAsync(result.beam_chi2, 0, island_capacity * sizeof(float), stream));
   }
 
   gpu_stamp_extract_no_zero(workspace.plane, input.n_y, input.n_x, result.peak_y, result.peak_x,
@@ -258,7 +258,7 @@ GpuBandStatus gpu_process_band(const GpuBandInput &input, GpuBandWorkspace &work
   }
   else
   {
-    gpuMemsetAsync(result.rms_at_peak, 0, island_capacity * sizeof(float), stream);
+    CHECK_GPU(cudaMemsetAsync(result.rms_at_peak, 0, island_capacity * sizeof(float), stream));
   }
   gpu_stamp_extract_no_zero(input.selfnoise_raw, input.n_y, input.n_x, result.peak_y, result.peak_x,
                             workspace.label_count, island_capacity, 0, result.selfnoise_at_peak, stream);
@@ -270,8 +270,8 @@ GpuBandStatus gpu_process_band(const GpuBandInput &input, GpuBandWorkspace &work
   }
   else
   {
-    gpuMemsetAsync(result.boost, 0, island_capacity * sizeof(float), stream);
-    gpuMemsetAsync(result.boost_found, 0, island_capacity * sizeof(bool), stream);
+    CHECK_GPU(cudaMemsetAsync(result.boost, 0, island_capacity * sizeof(float), stream));
+    CHECK_GPU(cudaMemsetAsync(result.boost_found, 0, island_capacity * sizeof(bool), stream));
   }
 
   return GpuBandStatus::detections;

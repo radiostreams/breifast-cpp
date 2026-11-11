@@ -131,15 +131,15 @@ void gpu_snr_and_filters(const float *plane, const float *noise_map, const float
   }
   if (histogram0 != nullptr)
   {
-    gpuMemsetAsync(histogram0, 0, sizeof(unsigned long long) * 2 * params.max_sigma_bin, stream);
+    CHECK_GPU(cudaMemsetAsync(histogram0, 0, sizeof(unsigned long long) * 2 * params.max_sigma_bin, stream));
   }
   if (histogram1 != nullptr)
   {
-    gpuMemsetAsync(histogram1, 0, sizeof(unsigned long long) * 2 * params.max_sigma_bin, stream);
+    CHECK_GPU(cudaMemsetAsync(histogram1, 0, sizeof(unsigned long long) * 2 * params.max_sigma_bin, stream));
   }
   if (histogram2 != nullptr)
   {
-    gpuMemsetAsync(histogram2, 0, sizeof(unsigned long long) * 2 * params.max_sigma_bin, stream);
+    CHECK_GPU(cudaMemsetAsync(histogram2, 0, sizeof(unsigned long long) * 2 * params.max_sigma_bin, stream));
   }
   launch(min_max_init, 1, 1, stream, out_min_sigma, out_max_sigma);
   launch_per_element(snr_and_filters, n_pixels, stream, plane, noise_map, snr_cutoff, flux_cutoff, median_noise,

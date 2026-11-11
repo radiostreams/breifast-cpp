@@ -103,7 +103,7 @@ void gpu_mask_or(const bool *accept_mask, size_t n_pixels, long band_start, long
     throw std::runtime_error("gpu_mask_or: zero pixels");
   }
 
-  gpuMemsetAsync(out_any, 0, sizeof(int), stream);
+  CHECK_GPU(cudaMemsetAsync(out_any, 0, sizeof(int), stream));
   launch_per_element(mask_or_kernel, n_pixels, stream, accept_mask, n_pixels, band_start, band_stop, out_mask,
                      out_any);
 }
@@ -168,13 +168,14 @@ void gpu_spectral_variance_stats_host(const float *cube, const bool *nonzero_cha
   result.sum_pow4.resize(n_pixels);
   result.nonzero_channels_mask.resize(n_channels);
 
-  gpuMemcpyDeviceToHostAsync(result.sum_pow2.data(), thrust::raw_pointer_cast(sum_pow2.data()),
-                             n_pixels * sizeof(float), stream);
-  gpuMemcpyDeviceToHostAsync(result.sum_pow3.data(), thrust::raw_pointer_cast(sum_pow3.data()),
-                             n_pixels * sizeof(float), stream);
-  gpuMemcpyDeviceToHostAsync(result.sum_pow4.data(), thrust::raw_pointer_cast(sum_pow4.data()),
-                             n_pixels * sizeof(float), stream);
-  gpuMemcpyDeviceToHostAsync(result.nonzero_channels_mask.data(), nonzero_channels, n_channels * sizeof(bool), stream);
-  gpuStreamSynchronize(stream);
+  CHECK_GPU(cudaMemcpyAsync(result.sum_pow2.data(), thrust::raw_pointer_cast(sum_pow2.data()), n_pixels * sizeof(float),
+                            cudaMemcpyDeviceToHost, stream));
+  CHECK_GPU(cudaMemcpyAsync(result.sum_pow3.data(), thrust::raw_pointer_cast(sum_pow3.data()), n_pixels * sizeof(float),
+                            cudaMemcpyDeviceToHost, stream));
+  CHECK_GPU(cudaMemcpyAsync(result.sum_pow4.data(), thrust::raw_pointer_cast(sum_pow4.data()), n_pixels * sizeof(float),
+                            cudaMemcpyDeviceToHost, stream));
+  CHECK_GPU(cudaMemcpyAsync(result.nonzero_channels_mask.data(), nonzero_channels, n_channels * sizeof(bool),
+                            cudaMemcpyDeviceToHost, stream));
+  CHECK_GPU(cudaStreamSynchronize(stream));
 }
 } // namespace breifast::gpu

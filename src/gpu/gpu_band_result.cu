@@ -119,40 +119,53 @@ void copy_band_result(const GpuBandResult &source, GpuBandHostResult &destinatio
 
   if (count > 0)
   {
-    gpuMemcpyDeviceToHostAsync(destination.peak_value.data(), source.peak_value, count * sizeof(float), stream);
-    gpuMemcpyDeviceToHostAsync(destination.peak_local_noise.data(), source.peak_local_noise, count * sizeof(float),
-                               stream);
-    gpuMemcpyDeviceToHostAsync(destination.peak_y.data(), source.peak_y, count * sizeof(long), stream);
-    gpuMemcpyDeviceToHostAsync(destination.peak_x.data(), source.peak_x, count * sizeof(long), stream);
-    gpuMemcpyDeviceToHostAsync(destination.island_size.data(), source.island_size, count * sizeof(unsigned int),
-                               stream);
-    gpuMemcpyDeviceToHostAsync(destination.stamp_extreme.data(), source.stamp_extreme, count * sizeof(float), stream);
-    gpuMemcpyDeviceToHostAsync(destination.donut_std.data(), source.donut_std, count * sizeof(float), stream);
-    gpuMemcpyDeviceToHostAsync(destination.donut_lmad.data(), source.donut_lmad, count * sizeof(float), stream);
-    gpuMemcpyDeviceToHostAsync(destination.beam_chi2.data(), source.beam_chi2, count * sizeof(float), stream);
-    gpuMemcpyDeviceToHostAsync(destination.flux.data(), source.flux, count * sizeof(float), stream);
-    gpuMemcpyDeviceToHostAsync(destination.boost.data(), source.boost, count * sizeof(float), stream);
-    gpuMemcpyDeviceToHostAsync(destination.boost_found.data(), source.boost_found, count * sizeof(bool), stream);
-    gpuMemcpyDeviceToHostAsync(destination.noise_at_peak.data(), source.noise_at_peak, count * sizeof(float), stream);
-    gpuMemcpyDeviceToHostAsync(destination.rms_at_peak.data(), source.rms_at_peak, count * sizeof(float), stream);
-    gpuMemcpyDeviceToHostAsync(destination.selfnoise_at_peak.data(), source.selfnoise_at_peak, count * sizeof(float),
-                               stream);
+    CHECK_GPU(cudaMemcpyAsync(destination.peak_value.data(), source.peak_value, count * sizeof(float),
+                              cudaMemcpyDeviceToHost, stream));
+    CHECK_GPU(cudaMemcpyAsync(destination.peak_local_noise.data(), source.peak_local_noise, count * sizeof(float),
+                              cudaMemcpyDeviceToHost, stream));
+    CHECK_GPU(cudaMemcpyAsync(destination.peak_y.data(), source.peak_y, count * sizeof(long), cudaMemcpyDeviceToHost,
+                              stream));
+    CHECK_GPU(cudaMemcpyAsync(destination.peak_x.data(), source.peak_x, count * sizeof(long), cudaMemcpyDeviceToHost,
+                              stream));
+    CHECK_GPU(cudaMemcpyAsync(destination.island_size.data(), source.island_size, count * sizeof(unsigned int),
+                              cudaMemcpyDeviceToHost, stream));
+    CHECK_GPU(cudaMemcpyAsync(destination.stamp_extreme.data(), source.stamp_extreme, count * sizeof(float),
+                              cudaMemcpyDeviceToHost, stream));
+    CHECK_GPU(cudaMemcpyAsync(destination.donut_std.data(), source.donut_std, count * sizeof(float),
+                              cudaMemcpyDeviceToHost, stream));
+    CHECK_GPU(cudaMemcpyAsync(destination.donut_lmad.data(), source.donut_lmad, count * sizeof(float),
+                              cudaMemcpyDeviceToHost, stream));
+    CHECK_GPU(cudaMemcpyAsync(destination.beam_chi2.data(), source.beam_chi2, count * sizeof(float),
+                              cudaMemcpyDeviceToHost, stream));
+    CHECK_GPU(
+        cudaMemcpyAsync(destination.flux.data(), source.flux, count * sizeof(float), cudaMemcpyDeviceToHost, stream));
+    CHECK_GPU(
+        cudaMemcpyAsync(destination.boost.data(), source.boost, count * sizeof(float), cudaMemcpyDeviceToHost, stream));
+    CHECK_GPU(cudaMemcpyAsync(destination.boost_found.data(), source.boost_found, count * sizeof(bool),
+                              cudaMemcpyDeviceToHost, stream));
+    CHECK_GPU(cudaMemcpyAsync(destination.noise_at_peak.data(), source.noise_at_peak, count * sizeof(float),
+                              cudaMemcpyDeviceToHost, stream));
+    CHECK_GPU(cudaMemcpyAsync(destination.rms_at_peak.data(), source.rms_at_peak, count * sizeof(float),
+                              cudaMemcpyDeviceToHost, stream));
+    CHECK_GPU(cudaMemcpyAsync(destination.selfnoise_at_peak.data(), source.selfnoise_at_peak, count * sizeof(float),
+                              cudaMemcpyDeviceToHost, stream));
   }
 
-  gpuMemcpyDeviceToHostAsync(destination.histogram0.data(), source.histogram0, bins * sizeof(unsigned long long),
-                             stream);
-  gpuMemcpyDeviceToHostAsync(destination.histogram1.data(), source.histogram1, bins * sizeof(unsigned long long),
-                             stream);
-  gpuMemcpyDeviceToHostAsync(destination.histogram2.data(), source.histogram2, bins * sizeof(unsigned long long),
-                             stream);
+  CHECK_GPU(cudaMemcpyAsync(destination.histogram0.data(), source.histogram0, bins * sizeof(unsigned long long),
+                            cudaMemcpyDeviceToHost, stream));
+  CHECK_GPU(cudaMemcpyAsync(destination.histogram1.data(), source.histogram1, bins * sizeof(unsigned long long),
+                            cudaMemcpyDeviceToHost, stream));
+  CHECK_GPU(cudaMemcpyAsync(destination.histogram2.data(), source.histogram2, bins * sizeof(unsigned long long),
+                            cudaMemcpyDeviceToHost, stream));
 
-  gpuMemcpyDeviceToHostAsync(&destination.min_sigma, source.min_sigma, sizeof(float), stream);
-  gpuMemcpyDeviceToHostAsync(&destination.max_sigma, source.max_sigma, sizeof(float), stream);
-  gpuMemcpyDeviceToHostAsync(&destination.median_noise, source.median_noise, sizeof(float), stream);
-  gpuMemcpyDeviceToHostAsync(&destination.rms_floor, source.rms_floor, sizeof(float), stream);
-  gpuMemcpyDeviceToHostAsync(&destination.global_mad, source.global_mad, sizeof(float), stream);
+  CHECK_GPU(cudaMemcpyAsync(&destination.min_sigma, source.min_sigma, sizeof(float), cudaMemcpyDeviceToHost, stream));
+  CHECK_GPU(cudaMemcpyAsync(&destination.max_sigma, source.max_sigma, sizeof(float), cudaMemcpyDeviceToHost, stream));
+  CHECK_GPU(
+      cudaMemcpyAsync(&destination.median_noise, source.median_noise, sizeof(float), cudaMemcpyDeviceToHost, stream));
+  CHECK_GPU(cudaMemcpyAsync(&destination.rms_floor, source.rms_floor, sizeof(float), cudaMemcpyDeviceToHost, stream));
+  CHECK_GPU(cudaMemcpyAsync(&destination.global_mad, source.global_mad, sizeof(float), cudaMemcpyDeviceToHost, stream));
 
-  gpuStreamSynchronize(stream);
+  CHECK_GPU(cudaStreamSynchronize(stream));
 }
 
 void copy_band_jobs(std::vector<GpuBandJob> &jobs, std::vector<GpuBandHostResult> &results)

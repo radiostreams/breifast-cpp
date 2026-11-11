@@ -70,7 +70,7 @@ void gpu_median_impl(const float *values, size_t n, float *out_median, bool abs_
 
   for (int shift = 24; shift >= 0; shift -= 8)
   {
-    gpuMemsetAsync(histogram, 0, radix_bins * sizeof(uint32_t), stream);
+    CHECK_GPU(cudaMemsetAsync(histogram, 0, radix_bins * sizeof(uint32_t), stream));
     launch_per_element(radix_histogram_kernel, n, stream, values, n, histogram, shift, abs_mode, state);
     launch(radix_scan_kernel, 1, 1, stream, histogram, n / 2, shift, state);
   }

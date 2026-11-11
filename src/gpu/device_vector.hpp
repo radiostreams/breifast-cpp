@@ -1,8 +1,6 @@
 #pragma once
 
-#include <algorithm>
 #include <cstddef>
-#include <iterator>
 #include <memory>
 #include <utility>
 
@@ -73,25 +71,6 @@ public:
 
   std::size_t size() const noexcept { return size_; }
   bool empty() const noexcept { return size_ == 0; }
-
-  // Transitional, for the tests until step 9 replaces them with upload helpers: host staging, then an upload.
-  DeviceVector(std::size_t n, const T &value) : DeviceVector(n) { assign(n, value); }
-
-  template <std::input_iterator InputIt> DeviceVector(InputIt first, InputIt last)
-      : DeviceVector(static_cast<std::size_t>(std::distance(first, last)))
-  {
-    const auto staging = std::make_unique<T[]>(size_);
-    std::copy(first, last, staging.get());
-    upload(staging.get(), size_);
-  }
-
-  void assign(std::size_t n, const T &value)
-  {
-    ensure(n);
-    const auto staging = std::make_unique<T[]>(n);
-    std::fill_n(staging.get(), n, value);
-    upload(staging.get(), n);
-  }
 
 private:
   struct Free

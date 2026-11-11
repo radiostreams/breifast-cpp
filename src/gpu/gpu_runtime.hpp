@@ -109,12 +109,3 @@ private:
   cudaStream_t stream_ = nullptr;
 };
 } // namespace breifast::gpu
-
-#define gpuMemcpyHostToDeviceAsync(dst, src, size, stream)                                                             \
-  CHECK_GPU(cudaMemcpyAsync(dst, src, size, cudaMemcpyHostToDevice, stream))
-#define gpuMemcpyDeviceToHostAsync(dst, src, size, stream)                                                             \
-  CHECK_GPU(cudaMemcpyAsync(dst, src, size, cudaMemcpyDeviceToHost, stream))
-#define gpuMemsetAsync(ptr, value, size, stream) CHECK_GPU(cudaMemsetAsync(ptr, value, size, stream))
-#define gpuStreamCreate(stream) CHECK_GPU(cudaStreamCreate(stream))
-#define gpuStreamDestroy(stream) CHECK_GPU(cudaStreamDestroy(stream))
-#define gpuStreamSynchronize(stream) CHECK_GPU(cudaStreamSynchronize(stream))
