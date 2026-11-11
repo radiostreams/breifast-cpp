@@ -40,7 +40,7 @@ __global__ void converge_labels_kernel(const bool *const mask, const size_t n_y,
     }
     grid.sync();
 
-    for (size_t index = blockIdx.x * blockDim.x + threadIdx.x; index < n; index += blockDim.x * gridDim.x)
+    for (size_t index = global_index(); index < n; index += static_cast<size_t>(blockDim.x) * gridDim.x)
     {
       if (!mask[index])
       {
@@ -183,45 +183,9 @@ void gpu_label_islands(const bool *const mask, const size_t n_y, const size_t n_
   const size_t n = n_y * n_x;
   launch_per_element(init_labels_kernel, n, stream, mask, n, labels);
 
-  int device = 0;
-  CHECK_GPU(cudaGetDevice(&device));
-  int cooperative_launch = 0;
-  CHECK_GPU(cudaDeviceGetAttribute(&cooperative_launch, cudaDevAttrCooperativeLaunch, device));
-  if (cooperative_launch == 0)
-  {
-    throw std::runtime_error("gpu_label_islands: device does not support cooperative launch");
-  }
-
-  int multiprocessor_count = 0;
-  CHECK_GPU(cudaDeviceGetAttribute(&multiprocessor_count, cudaDevAttrMultiProcessorCount, device));
-  int blocks_per_multiprocessor = 0;
-  CHECK_GPU(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
-      &blocks_per_multiprocessor, reinterpret_cast<const void *>(converge_labels_kernel),
-      static_cast<int>(block_size), 0));
-  const size_t max_cooperative_blocks =
-      static_cast<size_t>(blocks_per_multiprocessor) * static_cast<size_t>(multiprocessor_count);
-  if (max_cooperative_blocks == 0)
-  {
-    throw std::runtime_error("gpu_label_islands: no resident blocks available for cooperative launch");
-  }
-
-  size_t cooperative_blocks = (n + block_size - 1) / block_size;
-  if (cooperative_blocks > max_cooperative_blocks)
-  {
-    cooperative_blocks = max_cooperative_blocks;
-  }
-  const dim3 cooperative_grid = {static_cast<unsigned int>(cooperative_blocks)};
-
   thrust::device_vector<unsigned int> changed(1);
-
-  const bool *mask_arg = mask;
-  size_t n_y_arg = n_y;
-  size_t n_x_arg = n_x;
-  unsigned int *labels_arg = labels;
-  unsigned int *changed_arg = thrust::raw_pointer_cast(changed.data());
-  void *converge_args[] = {&mask_arg, &n_y_arg, &n_x_arg, &labels_arg, &changed_arg};
-  CHECK_GPU(cudaLaunchCooperativeKernel(reinterpret_cast<void *>(converge_labels_kernel), cooperative_grid,
-                                              dim3(block_size), converge_args, 0, stream));
+  launch_cooperative(converge_labels_kernel, n, stream, mask, n_y, n_x, labels,
+                     thrust::raw_pointer_cast(changed.data()));
 
   launch_per_element(mark_roots_kernel, n, stream, n, labels, scratch);
   thrust::inclusive_scan(thrust::cuda::par.on(stream), scratch, scratch + n, scratch);
