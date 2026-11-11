@@ -23,7 +23,6 @@
 #include <ittnotify.h>
 #include <nlohmann/json.hpp>
 #include <oneapi/tbb/info.h>
-#include <tracy/Tracy.hpp>
 
 #include "plane_lot_dispatch.hpp"
 
@@ -261,7 +260,6 @@ int main(int argc, char **argv)
     __itt_pause();
     const auto t1 = std::chrono::steady_clock::now();
     const auto counters_after = read_proc_counters();
-    FrameMark;
     const double elapsed = std::chrono::duration<double>(t1 - t0).count();
     total += elapsed;
     size_t n_detections = 0;

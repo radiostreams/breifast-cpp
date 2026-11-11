@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
-#include <tracy/Tracy.hpp>
 
 namespace breifast::plane_lot::detail
 {
@@ -11,7 +10,6 @@ namespace breifast::plane_lot::detail
 void rms_noise_map(std::span<const float> plane, const size_t n_y_size, const size_t n_x_size, const long boxsize,
                    std::span<float> row_window_sums, std::span<double> column_accumulators, std::span<float> out_rms)
 {
-  ZoneScopedN("compute_rms_noise_map");
   const size_t n_pixels = n_y_size * n_x_size;
   if (plane.size() != n_pixels)
   {

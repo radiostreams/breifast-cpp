@@ -11,8 +11,6 @@
 
 #include <ittnotify.h>
 
-#include <tracy/Tracy.hpp>
-
 #include <xsimd/xsimd.hpp>
 #include <xtensor/core/xnoalias.hpp>
 #include <xtensor/core/xtensor_forward.hpp>
@@ -300,7 +298,6 @@ IslandStatistics island_statistics(ProcessBandScratch &scratch, const PlaneConfi
 inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, const PlaneBatchGroup &group,
                          const BandSlice &band, const PlaneConfig &config, ProcessPlaneResult &result)
 {
-  ZoneScoped;
   if (!xt::any(xt::view(item.nonzero_channels, band.xrange())))
   {
     return;
@@ -366,7 +363,6 @@ inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, cons
 
   auto &detection_arrays = result.detections;
   detection_arrays.reserve(result.detections.size() + scratch.islands.peak_per_label.size());
-  ZoneNamedN(detections_zone, "detections", true);
   for (size_t label = 1; label <= islands.peak_per_label.size(); ++label)
   {
     const auto &island = islands.peak_per_label[label - 1];
@@ -414,7 +410,6 @@ SpectralVarianceStats compute_spectral_variance_stats(const PlaneBatchItem &item
 ProcessPlaneResult process_plane(ProcessBandScratch &scratch, const PlaneConfig &config, PlaneBatchItem &item,
                                  const PlaneBatchGroup &group)
 {
-  ZoneScoped;
   ProcessPlaneResult result;
   for (auto it = config.band_slices.rbegin(); it != config.band_slices.rend(); ++it)
   {

@@ -51,7 +51,7 @@ test('gpu', test_gpu)
 test_gpu_parity = executable('test_gpu_parity',
   ['tests/test_gpu_parity.cpp', 'gpu_lot_integration.cpp', cpu_source_files, tbb_build, catch2_build],
   include_directories : gpu_include,
-  dependencies : [catch2_dep, xtl_dep, xtensor_dep, xsimd_dep, tbb_dep, itt_dep, tracy_headers_dep, cuda_headers_dep],
+  dependencies : [catch2_dep, xtl_dep, xtensor_dep, xsimd_dep, tbb_dep, itt_dep, cuda_headers_dep],
   link_with : [gpu_lib, gpu_host_lib],
   link_language : 'cpp',
   link_args : ['-L' + cudart_libdir, '-lcudart_static', '-lrt', '-lpthread', '-ldl',

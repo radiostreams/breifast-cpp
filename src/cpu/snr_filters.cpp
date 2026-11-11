@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
-#include <tracy/Tracy.hpp>
 #include <xsimd/xsimd.hpp>
 
 namespace breifast::plane_lot::detail
@@ -17,7 +16,6 @@ SnrFilterSummary snr_and_filters(std::span<const float> plane, std::span<const f
                                  const SnrFilterParams &params, std::span<float> out_snr, std::span<bool> image_mask,
                                  std::array<std::span<long>, 3> histograms)
 {
-  ZoneScopedN("compute_snr_and_apply_filters");
   const size_t n_pixels = plane.size();
   if (noise_map.size() != n_pixels || out_snr.size() != n_pixels || image_mask.size() != n_pixels)
   {

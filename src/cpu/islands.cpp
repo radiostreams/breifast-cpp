@@ -12,7 +12,6 @@
 #include <cassert>
 #include <numeric>
 #include <stdexcept>
-#include <tracy/Tracy.hpp>
 #include <xtensor/containers/xadapt.hpp>
 #include <xtensor/core/xmath.hpp>
 #include <xtensor/misc/xsort.hpp>
@@ -25,7 +24,6 @@ namespace breifast::islands
 void label_islands(IslandLabels &out, const xt::xtensor<bool, 2> &masks, const xt::xtensor<float, 2> &image,
                    const xt::xtensor<float, 2> &local_noise)
 {
-  ZoneScoped;
   auto &labels = out.labels;
   auto &parents = out.parents;
   labels.resize(masks.shape());

@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <stdexcept>
-#include <tracy/Tracy.hpp>
 #include <type_traits>
 
 #include "scalar_reductions.hpp"
@@ -13,7 +12,6 @@ namespace breifast::plane_lot::detail
 bool or_accept_masks(std::span<const bool> accept_mask, const size_t n_pixels, const long band_start,
                      const long band_stop, std::span<bool> out_mask)
 {
-  ZoneScopedN("mask_accumulate");
   if (band_start < 0 || band_start >= band_stop)
   {
     throw std::runtime_error("or_accept_masks: invalid band");
@@ -44,7 +42,6 @@ void weighted_band_image(std::span<const float> cube, std::span<const float> wei
                          const size_t n_pixels, const long band_start, const long band_stop,
                          const float inv_weights_sum, const float inv_band_size, std::span<float> out_plane)
 {
-  ZoneScopedN("band_accumulate");
   if (band_start < 0 || band_start >= band_stop)
   {
     throw std::runtime_error("weighted_band_image: invalid band");
@@ -115,7 +112,6 @@ void spectral_variance_moments(std::span<const float> cube, std::span<const bool
                                const size_t n_pixels, std::span<float> out_sum2, std::span<float> out_sum3,
                                std::span<float> out_sum4)
 {
-  ZoneScopedN("compute_spectral_variance_stats");
   const size_t n_channels = nonzero_channels.size();
   if (cube.size() != n_channels * n_pixels)
   {

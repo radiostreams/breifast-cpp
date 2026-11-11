@@ -119,34 +119,8 @@ itt_dep = declare_dependency(
   link_args : [itt_root / 'lib64' / 'libittnotify.a', '-ldl'],
 )
 
-tracy_root = meson.project_source_root() / 'tracy'
-
-# Header-only view of Tracy, for every target that compiles an instrumented source file.
-# Without TRACY_ENABLE the zone macros expand to nothing, so this costs the wheel and the
-# test binary an include path and nothing else.
-tracy_headers_dep = declare_dependency(
-  compile_args : ['-isystem', tracy_root / 'public'],
-)
-
-# The client proper: only bench gets it, and only with -Dtracy=true.
-# no_exit makes the process block at exit until tracy-capture has drained the trace, without
-# which a batch run finishes before the capture tool has everything. only_localhost/no_broadcast
-# keep the listening socket and its discovery beacon off the cluster network.
-if get_option('tracy')
-  tracy_dep = declare_dependency(
-    sources : [tracy_root / 'public' / 'TracyClient.cpp'],
-    compile_args : ['-isystem', tracy_root / 'public',
-                    '-DTRACY_ENABLE', '-DTRACY_NO_EXIT',
-                    '-DTRACY_ONLY_LOCALHOST', '-DTRACY_NO_BROADCAST'],
-    dependencies : [dependency('threads')],
-    link_args : ['-ldl'],
-  )
-else
-  tracy_dep = tracy_headers_dep
-endif
-
 # The CPU kernels (src/cpu) and the dispatch. Compiled by every target that uses them, so that each target's
-# own Tracy and compiler arguments apply.
+# own compiler arguments apply.
 cpu_sources = [
   'src/plane_lot_dispatch.cpp',
   'src/cpu/channel_reductions.cpp',
@@ -169,7 +143,7 @@ ext_cpp_args = []
 ext_link_args = ['-static-libstdc++', '-static-libgcc', '-Wl,-z,noexecstack']
 ext_link_with = []
 ext_deps = [py.dependency(), pybind11_dep, xtl_dep, xtensor_dep, xsimd_dep, xtensor_python_dep, numpy_dep,
-            tbb_dep, itt_dep, tracy_headers_dep]
+            tbb_dep, itt_dep]
 if have_gpu
   ext_sources += ['src/gpu/gpu_lot_integration.cpp']
   ext_cpp_args += ['-DBREIFAST_HAVE_GPU']
@@ -201,7 +175,7 @@ bench = executable(
   'bench',
   ['src/bench.cpp'] + cpu_sources + [tbb_build],
   include_directories : include_directories('src'),
-  dependencies : [xtl_dep, xtensor_dep, xsimd_dep, tbb_dep, itt_dep, json_dep, tracy_dep],
+  dependencies : [xtl_dep, xtensor_dep, xsimd_dep, tbb_dep, itt_dep, json_dep],
   cpp_args : get_option('box_version') ? ['-DBOX_VERSION'] : [],
   link_args : ['-static-libstdc++', '-static-libgcc'],
   build_by_default : false,
@@ -240,7 +214,7 @@ test_breifast_core = executable(
   'test_breifast_core',
   test_breifast_core_sources + [tbb_build, catch2_build],
   include_directories : include_directories('src'),
-  dependencies : [xtl_dep, xtensor_dep, xsimd_dep, tbb_dep, catch2_dep, itt_dep, json_dep, tracy_headers_dep],
+  dependencies : [xtl_dep, xtensor_dep, xsimd_dep, tbb_dep, catch2_dep, itt_dep, json_dep],
   cpp_args : ['-DFIXTURES_DIR="' + meson.project_source_root() / 'tests' / 'fixtures' + '"'],
   link_args : ['-static-libstdc++', '-static-libgcc'],
 )
