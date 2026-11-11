@@ -1,7 +1,6 @@
 #include "gpu_pipeline.hpp"
 
 #include "gpu_device_utils.cuh"
-#include "gpu_minmax.cuh"
 #include "common/snr_filter_params.hpp"
 
 namespace breifast::gpu
@@ -85,8 +84,8 @@ __global__ void snr_and_filters(const float *plane, const float *noise_map, cons
 
     if (mask3)
     {
-      atomic_min_float(out_min_sigma, snr);
-      atomic_max_float(out_max_sigma, snr);
+      atomic_update(out_min_sigma, snr, FloatMin{});
+      atomic_update(out_max_sigma, snr, FloatMax{});
     }
 
     const float thresholded_abs_snr = mask3 ? fabsf(snr) : 0.0f;

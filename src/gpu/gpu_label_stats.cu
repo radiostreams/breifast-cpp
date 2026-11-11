@@ -8,7 +8,6 @@
 #include <thrust/device_ptr.h>
 
 #include "gpu_device_utils.cuh"
-#include "gpu_minmax.cuh"
 
 namespace breifast::gpu
 {
@@ -48,7 +47,7 @@ __global__ void label_stats_scan_kernel(const unsigned int *const labels, const 
   const auto noise = local_noise[pixel_id];
   if (!isnan(noise))
   {
-    atomic_max_float(&local_noise_max[slot], noise);
+    atomic_update(&local_noise_max[slot], noise, FloatMax{});
   }
 
   const auto abs_value = fabsf(image[pixel_id]);

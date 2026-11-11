@@ -1,11 +1,11 @@
 #include <cfloat>
 
+#include <cuda/std/functional>
 #include <thrust/device_vector.h>
 #include <thrust/device_ptr.h>
 
 #include "gpu_pipeline.hpp"
 
-#include "gpu_block_reduce.cuh"
 #include "gpu_device_utils.cuh"
 #include "radix_keys.cuh"
 
@@ -165,9 +165,8 @@ __global__ void stamp_abs_extreme_kernel(const unsigned int *active_count, const
     max_value = fmaxf(max_value, value);
   }
 
-  __shared__ float shared[block_size];
-  min_value = block_min(min_value, shared);
-  max_value = block_max(max_value, shared);
+  min_value = block_reduce(min_value, FloatMin{});
+  max_value = block_reduce(max_value, FloatMax{});
 
   if (threadIdx.x == 0)
   {
@@ -206,6 +205,19 @@ template <bool skip_inner> __global__ void stamp_extract_kernel(const unsigned i
   }
 }
 
+/// Sum, sum of squares and count of the nonzero pixels of a stamp.
+struct Moments
+{
+  double sum;
+  double sumsq;
+  uint32_t count;
+};
+
+__host__ __device__ Moments operator+(const Moments &a, const Moments &b)
+{
+  return {a.sum + b.sum, a.sumsq + b.sumsq, a.count + b.count};
+}
+
 __global__ void donut_std_kernel(const unsigned int *active_count, const float *stamps, const size_t stamps_pixels,
                                  float *out_std)
 {
@@ -213,38 +225,31 @@ __global__ void donut_std_kernel(const unsigned int *active_count, const float *
   {
     return;
   }
-  __shared__ double sum_shared[block_size];
-  __shared__ double sumsq_shared[block_size];
-  __shared__ uint32_t count_shared[block_size];
   const float *stamp = stamps + blockIdx.x * stamps_pixels;
 
-  double sum = 0.0;
-  double sumsq = 0.0;
-  uint32_t count = 0;
+  Moments moments{0.0, 0.0, 0U};
   for (size_t i_pixel = threadIdx.x; i_pixel < stamps_pixels; i_pixel += blockDim.x)
   {
     const auto value = stamp[i_pixel];
     if (value != 0.F)
     {
-      sum += value;
-      sumsq += value * value;
-      ++count;
+      moments.sum += value;
+      moments.sumsq += value * value;
+      ++moments.count;
     }
   }
 
-  sum = block_sum(sum, sum_shared);
-  sumsq = block_sum(sumsq, sumsq_shared);
-  count = block_sum(count, count_shared);
+  const Moments total = block_reduce(moments, cuda::std::plus<>{});
 
   if (threadIdx.x == 0)
   {
-    if (count == 0)
+    if (total.count == 0)
     {
       out_std[blockIdx.x] = 0.F;
       return;
     }
-    const auto mean = sum / static_cast<float>(count);
-    const auto meansq = sumsq / static_cast<float>(count);
+    const auto mean = total.sum / static_cast<float>(total.count);
+    const auto meansq = total.sumsq / static_cast<float>(total.count);
     const auto var = meansq - mean * mean;
     out_std[blockIdx.x] = sqrtf(static_cast<float>(var));
   }
@@ -252,13 +257,12 @@ __global__ void donut_std_kernel(const unsigned int *active_count, const float *
 
 __global__ void kernel_sum_kernel(const float *kernel, size_t n, float *out_sum)
 {
-  __shared__ float shared[block_size];
   float sum = 0.F;
   for (size_t i = threadIdx.x; i < n; i += blockDim.x)
   {
     sum += kernel[i];
   }
-  sum = block_sum(sum, shared);
+  sum = block_reduce(sum, cuda::std::plus<>{});
   if (threadIdx.x == 0)
   {
     *out_sum = sum;
@@ -278,14 +282,12 @@ __global__ void stamp_beam_chi2_kernel(const unsigned int *active_count, const f
 
   const float *stamp = stamps + i_stamp * stamp_pixels;
 
-  __shared__ float shared[block_size];
-  __shared__ uint32_t shared_counts[block_size];
   float stamp_sum = 0.F;
   for (size_t i = threadIdx.x; i < stamp_pixels; i += blockDim.x)
   {
     stamp_sum += stamp[i];
   }
-  stamp_sum = block_sum(stamp_sum, shared);
+  stamp_sum = block_reduce(stamp_sum, cuda::std::plus<>{});
   const auto scale = stamp_sum / *kernel_sum;
 
   float resid2 = 0.F;
@@ -300,8 +302,8 @@ __global__ void stamp_beam_chi2_kernel(const unsigned int *active_count, const f
       ++count;
     }
   }
-  resid2 = block_sum(resid2, shared);
-  count = block_sum(count, shared_counts);
+  resid2 = block_reduce(resid2, cuda::std::plus<>{});
+  count = block_reduce(count, cuda::std::plus<>{});
   if (threadIdx.x == 0)
   {
     out_chi2[i_stamp] = (count > 0 && adjacent_noise != 0)
