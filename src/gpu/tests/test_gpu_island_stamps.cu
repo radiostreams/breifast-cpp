@@ -12,9 +12,8 @@
 #include <stdexcept>
 #include <vector>
 
-#include "device_vector.hpp"
 #include "gpu_kernels.hpp"
-#include "gpu_runtime.hpp"
+#include "gpu_test_utils.hpp"
 
 using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_donut_median_abs;
@@ -23,6 +22,9 @@ using breifast::gpu::gpu_stamp_abs_extreme;
 using breifast::gpu::gpu_stamp_beam_chi2;
 using breifast::gpu::gpu_stamp_extract;
 using breifast::gpu::gpu_stamp_extract_no_zero;
+using breifast::gpu::Stream;
+using breifast::gpu::test::download;
+using breifast::gpu::test::upload;
 using Catch::Matchers::Equals;
 using Catch::Matchers::WithinRel;
 
@@ -30,39 +32,28 @@ namespace
 {
 constexpr float lmad_scale = 1.4826F;
 
-std::vector<float> run_donut(const std::vector<std::vector<float>> &stamps, float scale)
+// The stamps one after the other, as the wrappers take them.
+std::vector<float> flatten(const std::vector<std::vector<float>> &stamps)
 {
-  const size_t n_stamps = stamps.size();
-  const size_t stamp_pixels = stamps.front().size();
-
   std::vector<float> flat;
-  flat.reserve(n_stamps * stamp_pixels);
   for (const auto &stamp : stamps)
   {
     flat.insert(flat.end(), stamp.begin(), stamp.end());
   }
+  return flat;
+}
 
-  std::vector<float> host_stamps(flat.begin(), flat.end());
-  DeviceVector<float> device_stamps(flat.size());
+std::vector<float> run_donut(const std::vector<std::vector<float>> &stamps, float scale)
+{
+  const auto n_stamps = static_cast<unsigned int>(stamps.size());
+  const auto device_stamps = upload(flatten(stamps));
+  const auto device_count = upload(std::vector<unsigned int>{n_stamps});
   DeviceVector<float> device_out(n_stamps);
-  DeviceVector<unsigned int> device_count(1, static_cast<unsigned int>(n_stamps));
 
-  cudaStream_t stream{};
-  gpuStreamCreate(&stream);
-
-  gpuMemcpyHostToDeviceAsync(device_stamps.data(), host_stamps.data(),
-                             flat.size() * sizeof(float), stream);
-  gpu_donut_median_abs(device_stamps.data(),
-                       device_count.data(), static_cast<unsigned int>(n_stamps),
-                       stamp_pixels, scale, device_out.data(), stream);
-
-  std::vector<float> host_out(n_stamps);
-  gpuMemcpyDeviceToHostAsync(host_out.data(), device_out.data(),
-                             n_stamps * sizeof(float), stream);
-  gpuStreamSynchronize(stream);
-  gpuStreamDestroy(stream);
-
-  return std::vector<float>(host_out.begin(), host_out.end());
+  const Stream stream;
+  gpu_donut_median_abs(device_stamps, device_count, n_stamps, stamps.front().size(), scale, device_out,
+                       stream.get());
+  return download(device_out, stream.get());
 }
 
 float run_donut(const std::vector<float> &stamp, float scale)
@@ -126,37 +117,14 @@ std::vector<float> lcg_stamp(uint32_t seed, long inner_half)
 
 std::vector<float> run_abs_extreme(const std::vector<std::vector<float>> &stamps)
 {
-  const size_t n_stamps = stamps.size();
-  const size_t stamp_pixels = stamps.front().size();
-
-  std::vector<float> flat;
-  flat.reserve(n_stamps * stamp_pixels);
-  for (const auto &stamp : stamps)
-  {
-    flat.insert(flat.end(), stamp.begin(), stamp.end());
-  }
-
-  std::vector<float> host_stamps(flat.begin(), flat.end());
-  DeviceVector<float> device_stamps(flat.size());
+  const auto n_stamps = static_cast<unsigned int>(stamps.size());
+  const auto device_stamps = upload(flatten(stamps));
+  const auto device_count = upload(std::vector<unsigned int>{n_stamps});
   DeviceVector<float> device_out(n_stamps);
-  DeviceVector<unsigned int> device_count(1, static_cast<unsigned int>(n_stamps));
 
-  cudaStream_t stream{};
-  gpuStreamCreate(&stream);
-
-  gpuMemcpyHostToDeviceAsync(device_stamps.data(), host_stamps.data(),
-                             flat.size() * sizeof(float), stream);
-  gpu_stamp_abs_extreme(device_stamps.data(),
-                        device_count.data(), static_cast<unsigned int>(n_stamps),
-                        stamp_pixels, device_out.data(), stream);
-
-  std::vector<float> host_out(n_stamps);
-  gpuMemcpyDeviceToHostAsync(host_out.data(), device_out.data(),
-                             n_stamps * sizeof(float), stream);
-  gpuStreamSynchronize(stream);
-  gpuStreamDestroy(stream);
-
-  return std::vector<float>(host_out.begin(), host_out.end());
+  const Stream stream;
+  gpu_stamp_abs_extreme(device_stamps, device_count, n_stamps, stamps.front().size(), device_out, stream.get());
+  return download(device_out, stream.get());
 }
 
 float run_abs_extreme(const std::vector<float> &stamp)
@@ -168,117 +136,48 @@ std::vector<float> run_stamp_extract(const std::vector<float> &plane, size_t n_y
                                      const std::vector<long> &centre_y, const std::vector<long> &centre_x, long radius,
                                      long inner_boxsize)
 {
-  const size_t n_stamps = centre_y.size();
+  const auto n_stamps = static_cast<unsigned int>(centre_y.size());
   const size_t side = static_cast<size_t>(2 * radius + 1);
-  const size_t stamp_pixels = side * side;
+  const auto device_plane = upload(plane);
+  const auto device_cy = upload(centre_y);
+  const auto device_cx = upload(centre_x);
+  const auto device_count = upload(std::vector<unsigned int>{n_stamps});
+  DeviceVector<float> device_stamps(n_stamps * side * side);
 
-  std::vector<float> host_plane(plane.begin(), plane.end());
-  DeviceVector<float> device_plane(plane.size());
-  std::vector<long> host_cy(centre_y.begin(), centre_y.end());
-  DeviceVector<long> device_cy(n_stamps);
-  std::vector<long> host_cx(centre_x.begin(), centre_x.end());
-  DeviceVector<long> device_cx(n_stamps);
-  DeviceVector<float> device_stamps(n_stamps * stamp_pixels);
-  DeviceVector<unsigned int> device_count(1, static_cast<unsigned int>(n_stamps));
-
-  cudaStream_t stream{};
-  gpuStreamCreate(&stream);
-
-  gpuMemcpyHostToDeviceAsync(device_plane.data(), host_plane.data(),
-                             plane.size() * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(device_cy.data(), host_cy.data(),
-                             n_stamps * sizeof(long), stream);
-  gpuMemcpyHostToDeviceAsync(device_cx.data(), host_cx.data(),
-                             n_stamps * sizeof(long), stream);
-
-  gpu_stamp_extract(device_plane.data(), n_y, n_x,
-                    device_cy.data(), device_cx.data(),
-                    device_count.data(), static_cast<unsigned int>(n_stamps), radius,
-                    inner_boxsize, device_stamps.data(), stream);
-
-  std::vector<float> host_stamps(n_stamps * stamp_pixels);
-  gpuMemcpyDeviceToHostAsync(host_stamps.data(), device_stamps.data(),
-                             n_stamps * stamp_pixels * sizeof(float), stream);
-  gpuStreamSynchronize(stream);
-  gpuStreamDestroy(stream);
-
-  return std::vector<float>(host_stamps.begin(), host_stamps.end());
+  const Stream stream;
+  gpu_stamp_extract(device_plane, n_y, n_x, device_cy, device_cx, device_count, n_stamps, radius, inner_boxsize,
+                    device_stamps, stream.get());
+  return download(device_stamps, stream.get());
 }
 
 std::vector<float> run_stamp_extract_no_zero(const std::vector<float> &plane, size_t n_y, size_t n_x,
                                              const std::vector<long> &centre_y, const std::vector<long> &centre_x,
                                              long radius)
 {
-  const size_t n_stamps = centre_y.size();
+  const auto n_stamps = static_cast<unsigned int>(centre_y.size());
   const size_t side = static_cast<size_t>(2 * radius + 1);
-  const size_t stamp_pixels = side * side;
+  const auto device_plane = upload(plane);
+  const auto device_cy = upload(centre_y);
+  const auto device_cx = upload(centre_x);
+  const auto device_count = upload(std::vector<unsigned int>{n_stamps});
+  DeviceVector<float> device_stamps(n_stamps * side * side);
 
-  std::vector<float> host_plane(plane.begin(), plane.end());
-  DeviceVector<float> device_plane(plane.size());
-  std::vector<long> host_cy(centre_y.begin(), centre_y.end());
-  DeviceVector<long> device_cy(n_stamps);
-  std::vector<long> host_cx(centre_x.begin(), centre_x.end());
-  DeviceVector<long> device_cx(n_stamps);
-  DeviceVector<float> device_stamps(n_stamps * stamp_pixels);
-  DeviceVector<unsigned int> device_count(1, static_cast<unsigned int>(n_stamps));
-
-  cudaStream_t stream{};
-  gpuStreamCreate(&stream);
-
-  gpuMemcpyHostToDeviceAsync(device_plane.data(), host_plane.data(),
-                             plane.size() * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(device_cy.data(), host_cy.data(),
-                             n_stamps * sizeof(long), stream);
-  gpuMemcpyHostToDeviceAsync(device_cx.data(), host_cx.data(),
-                             n_stamps * sizeof(long), stream);
-
-  gpu_stamp_extract_no_zero(device_plane.data(), n_y, n_x,
-                            device_cy.data(), device_cx.data(),
-                            device_count.data(), static_cast<unsigned int>(n_stamps),
-                            radius, device_stamps.data(), stream);
-
-  std::vector<float> host_stamps(n_stamps * stamp_pixels);
-  gpuMemcpyDeviceToHostAsync(host_stamps.data(), device_stamps.data(),
-                             n_stamps * stamp_pixels * sizeof(float), stream);
-  gpuStreamSynchronize(stream);
-  gpuStreamDestroy(stream);
-
-  return std::vector<float>(host_stamps.begin(), host_stamps.end());
+  const Stream stream;
+  gpu_stamp_extract_no_zero(device_plane, n_y, n_x, device_cy, device_cx, device_count, n_stamps, radius,
+                            device_stamps, stream.get());
+  return download(device_stamps, stream.get());
 }
 
 std::vector<float> run_donut_std(const std::vector<std::vector<float>> &stamps)
 {
-  const size_t n_stamps = stamps.size();
-  const size_t stamp_pixels = stamps.front().size();
-
-  std::vector<float> flat;
-  flat.reserve(n_stamps * stamp_pixels);
-  for (const auto &stamp : stamps)
-  {
-    flat.insert(flat.end(), stamp.begin(), stamp.end());
-  }
-
-  std::vector<float> host_stamps(flat.begin(), flat.end());
-  DeviceVector<float> device_stamps(flat.size());
+  const auto n_stamps = static_cast<unsigned int>(stamps.size());
+  const auto device_stamps = upload(flatten(stamps));
+  const auto device_count = upload(std::vector<unsigned int>{n_stamps});
   DeviceVector<float> device_out(n_stamps);
-  DeviceVector<unsigned int> device_count(1, static_cast<unsigned int>(n_stamps));
 
-  cudaStream_t stream{};
-  gpuStreamCreate(&stream);
-
-  gpuMemcpyHostToDeviceAsync(device_stamps.data(), host_stamps.data(),
-                             flat.size() * sizeof(float), stream);
-  gpu_donut_std(device_stamps.data(),
-                device_count.data(), static_cast<unsigned int>(n_stamps),
-                stamp_pixels, device_out.data(), stream);
-
-  std::vector<float> host_out(n_stamps);
-  gpuMemcpyDeviceToHostAsync(host_out.data(), device_out.data(),
-                             n_stamps * sizeof(float), stream);
-  gpuStreamSynchronize(stream);
-  gpuStreamDestroy(stream);
-
-  return std::vector<float>(host_out.begin(), host_out.end());
+  const Stream stream;
+  gpu_donut_std(device_stamps, device_count, n_stamps, stamps.front().size(), device_out, stream.get());
+  return download(device_out, stream.get());
 }
 
 float run_donut_std(const std::vector<float> &stamp)
@@ -312,54 +211,24 @@ double host_std(const std::vector<float> &stamp)
 std::vector<float> run_beam_chi2(const std::vector<std::vector<float>> &stamps, const std::vector<float> &kernel,
                                  const std::vector<float> &adjacent_noise, float inv_max_to_std_ratio = 1.F)
 {
-  const size_t n_stamps = stamps.size();
-  const size_t stamp_pixels = stamps.front().size();
-
-  std::vector<float> flat;
-  flat.reserve(n_stamps * stamp_pixels);
-  for (const auto &stamp : stamps)
-  {
-    flat.insert(flat.end(), stamp.begin(), stamp.end());
-  }
-
+  const auto n_stamps = static_cast<unsigned int>(stamps.size());
   std::vector<float> extreme(adjacent_noise.size());
   for (size_t i = 0; i < extreme.size(); ++i)
   {
     extreme[i] = adjacent_noise[i] / inv_max_to_std_ratio;
   }
+  const float kernel_sum = std::accumulate(kernel.begin(), kernel.end(), 0.F);
 
-  std::vector<float> host_stamps(flat.begin(), flat.end());
-  DeviceVector<float> device_stamps(flat.size());
-  std::vector<float> host_kernel(kernel.begin(), kernel.end());
-  DeviceVector<float> device_kernel(kernel.size());
-  std::vector<float> host_extreme(extreme.begin(), extreme.end());
-  DeviceVector<float> device_extreme(extreme.size());
-  DeviceVector<unsigned int> device_count(1, static_cast<unsigned int>(n_stamps));
+  const auto device_stamps = upload(flatten(stamps));
+  const auto device_kernel = upload(kernel);
+  const auto device_extreme = upload(extreme);
+  const auto device_count = upload(std::vector<unsigned int>{n_stamps});
   DeviceVector<float> device_out(n_stamps);
 
-  cudaStream_t stream{};
-  gpuStreamCreate(&stream);
-
-  gpuMemcpyHostToDeviceAsync(device_stamps.data(), host_stamps.data(),
-                             flat.size() * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(device_kernel.data(), host_kernel.data(),
-                             kernel.size() * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(device_extreme.data(),
-                             host_extreme.data(), extreme.size() * sizeof(float), stream);
-  const float kernel_sum = std::accumulate(kernel.begin(), kernel.end(), 0.F);
-  gpu_stamp_beam_chi2(device_stamps.data(), device_kernel.data(),
-                      kernel_sum, device_count.data(), static_cast<unsigned int>(n_stamps),
-                      stamp_pixels,
-                      device_extreme.data(), inv_max_to_std_ratio,
-                      device_out.data(), stream);
-
-  std::vector<float> host_out(n_stamps);
-  gpuMemcpyDeviceToHostAsync(host_out.data(), device_out.data(),
-                             n_stamps * sizeof(float), stream);
-  gpuStreamSynchronize(stream);
-  gpuStreamDestroy(stream);
-
-  return std::vector<float>(host_out.begin(), host_out.end());
+  const Stream stream;
+  gpu_stamp_beam_chi2(device_stamps, device_kernel, kernel_sum, device_count, n_stamps, stamps.front().size(),
+                      device_extreme, inv_max_to_std_ratio, device_out, stream.get());
+  return download(device_out, stream.get());
 }
 
 float run_beam_chi2(const std::vector<float> &stamp, const std::vector<float> &kernel, float adjacent_noise,
@@ -448,18 +317,15 @@ TEST_CASE("gpu_donut_median_abs covers a stamp larger than a block against a hos
 
 TEST_CASE("gpu_donut_median_abs rejects zero stamps and zero stamp pixels", "[gpu][island_stamps]")
 {
-  cudaStream_t stream{};
-  gpuStreamCreate(&stream);
+  const Stream stream;
 
   DeviceVector<float> out(1);
-  DeviceVector<unsigned int> count(1, 1);
+  const auto count = upload(std::vector<unsigned int>{1});
   float *out_ptr = out.data();
   const unsigned int *count_ptr = count.data();
 
-  REQUIRE_THROWS_AS(gpu_donut_median_abs(nullptr, nullptr, 0, 9, lmad_scale, out_ptr, stream), std::runtime_error);
-  REQUIRE_THROWS_AS(gpu_donut_median_abs(nullptr, count_ptr, 1, 0, lmad_scale, out_ptr, stream), std::runtime_error);
-
-  gpuStreamDestroy(stream);
+  REQUIRE_THROWS_AS(gpu_donut_median_abs(nullptr, nullptr, 0, 9, lmad_scale, out_ptr, stream.get()), std::runtime_error);
+  REQUIRE_THROWS_AS(gpu_donut_median_abs(nullptr, count_ptr, 1, 0, lmad_scale, out_ptr, stream.get()), std::runtime_error);
 }
 
 TEST_CASE("gpu_stamp_abs_extreme matches numpy's max(abs(min), abs(max)) on a seeded 5x5 stamp",
@@ -533,18 +399,15 @@ TEST_CASE("gpu_stamp_abs_extreme covers a stamp larger than a block against a ho
 
 TEST_CASE("gpu_stamp_abs_extreme rejects zero stamps and zero stamp pixels", "[gpu][island_stamps]")
 {
-  cudaStream_t stream{};
-  gpuStreamCreate(&stream);
+  const Stream stream;
 
   DeviceVector<float> out(1);
-  DeviceVector<unsigned int> count(1, 1);
+  const auto count = upload(std::vector<unsigned int>{1});
   float *out_ptr = out.data();
   const unsigned int *count_ptr = count.data();
 
-  REQUIRE_THROWS_AS(gpu_stamp_abs_extreme(nullptr, nullptr, 0, 9, out_ptr, stream), std::runtime_error);
-  REQUIRE_THROWS_AS(gpu_stamp_abs_extreme(nullptr, count_ptr, 1, 0, out_ptr, stream), std::runtime_error);
-
-  gpuStreamDestroy(stream);
+  REQUIRE_THROWS_AS(gpu_stamp_abs_extreme(nullptr, nullptr, 0, 9, out_ptr, stream.get()), std::runtime_error);
+  REQUIRE_THROWS_AS(gpu_stamp_abs_extreme(nullptr, count_ptr, 1, 0, out_ptr, stream.get()), std::runtime_error);
 }
 
 TEST_CASE("gpu_stamp_extract copies the window and zeros the inner box on a 7x7 plane", "[gpu][island_stamps]")
@@ -646,26 +509,23 @@ TEST_CASE("gpu_stamp_extract extracts each island's stamp independently", "[gpu]
 
 TEST_CASE("gpu_stamp_extract rejects zero stamps, an empty plane and negative sizes", "[gpu][island_stamps]")
 {
-  cudaStream_t stream{};
-  gpuStreamCreate(&stream);
+  const Stream stream;
 
   DeviceVector<long> centres(1);
   DeviceVector<float> stamps(1);
-  DeviceVector<unsigned int> count(1, 1);
+  const auto count = upload(std::vector<unsigned int>{1});
   float *stamps_ptr = stamps.data();
   const long *centres_ptr = centres.data();
   const unsigned int *count_ptr = count.data();
 
-  REQUIRE_THROWS_AS(gpu_stamp_extract(nullptr, 6, 7, centres_ptr, centres_ptr, nullptr, 0, 2, 0, stamps_ptr, stream),
+  REQUIRE_THROWS_AS(gpu_stamp_extract(nullptr, 6, 7, centres_ptr, centres_ptr, nullptr, 0, 2, 0, stamps_ptr, stream.get()),
                     std::runtime_error);
-  REQUIRE_THROWS_AS(gpu_stamp_extract(nullptr, 0, 7, centres_ptr, centres_ptr, count_ptr, 1, 2, 0, stamps_ptr, stream),
+  REQUIRE_THROWS_AS(gpu_stamp_extract(nullptr, 0, 7, centres_ptr, centres_ptr, count_ptr, 1, 2, 0, stamps_ptr, stream.get()),
                     std::runtime_error);
-  REQUIRE_THROWS_AS(gpu_stamp_extract(nullptr, 6, 7, centres_ptr, centres_ptr, count_ptr, 1, -1, 0, stamps_ptr, stream),
+  REQUIRE_THROWS_AS(gpu_stamp_extract(nullptr, 6, 7, centres_ptr, centres_ptr, count_ptr, 1, -1, 0, stamps_ptr, stream.get()),
                     std::runtime_error);
-  REQUIRE_THROWS_AS(gpu_stamp_extract(nullptr, 6, 7, centres_ptr, centres_ptr, count_ptr, 1, 2, -1, stamps_ptr, stream),
+  REQUIRE_THROWS_AS(gpu_stamp_extract(nullptr, 6, 7, centres_ptr, centres_ptr, count_ptr, 1, 2, -1, stamps_ptr, stream.get()),
                     std::runtime_error);
-
-  gpuStreamDestroy(stream);
 }
 
 TEST_CASE("gpu_stamp_extract_no_zero copies the window without zeroing the centre", "[gpu][island_stamps]")
@@ -709,28 +569,25 @@ TEST_CASE("gpu_stamp_extract_no_zero gathers single values at radius zero", "[gp
 TEST_CASE("gpu_stamp_extract_no_zero rejects zero stamps, an empty plane and negative radius",
           "[gpu][island_stamps]")
 {
-  cudaStream_t stream{};
-  gpuStreamCreate(&stream);
+  const Stream stream;
 
   DeviceVector<long> centres(1);
   DeviceVector<float> stamps(1);
   float *stamps_ptr = stamps.data();
   const long *centres_ptr = centres.data();
 
-  DeviceVector<unsigned int> count(1, 1);
+  const auto count = upload(std::vector<unsigned int>{1});
   const unsigned int *count_ptr = count.data();
 
   REQUIRE_THROWS_AS(
-      gpu_stamp_extract_no_zero(nullptr, 6, 7, centres_ptr, centres_ptr, nullptr, 0, 2, stamps_ptr, stream),
+      gpu_stamp_extract_no_zero(nullptr, 6, 7, centres_ptr, centres_ptr, nullptr, 0, 2, stamps_ptr, stream.get()),
       std::runtime_error);
   REQUIRE_THROWS_AS(
-      gpu_stamp_extract_no_zero(nullptr, 0, 7, centres_ptr, centres_ptr, count_ptr, 1, 2, stamps_ptr, stream),
+      gpu_stamp_extract_no_zero(nullptr, 0, 7, centres_ptr, centres_ptr, count_ptr, 1, 2, stamps_ptr, stream.get()),
       std::runtime_error);
   REQUIRE_THROWS_AS(
-      gpu_stamp_extract_no_zero(nullptr, 6, 7, centres_ptr, centres_ptr, count_ptr, 1, -1, stamps_ptr, stream),
+      gpu_stamp_extract_no_zero(nullptr, 6, 7, centres_ptr, centres_ptr, count_ptr, 1, -1, stamps_ptr, stream.get()),
       std::runtime_error);
-
-  gpuStreamDestroy(stream);
 }
 
 TEST_CASE("gpu_donut_std matches numpy's population standard deviation on the seeded 9x9 stamp",
@@ -836,22 +693,19 @@ TEST_CASE("gpu_stamp_beam_chi2 is 0 for a perfect fit, an empty stamp and a zero
 
 TEST_CASE("gpu_stamp_beam_chi2 rejects zero stamps and zero stamp pixels", "[gpu][island_stamps]")
 {
-  cudaStream_t stream{};
-  gpuStreamCreate(&stream);
+  const Stream stream;
 
   DeviceVector<float> out(1);
   DeviceVector<float> kernel(9);
   DeviceVector<float> extreme(1);
-  DeviceVector<unsigned int> count(1, 1);
+  const auto count = upload(std::vector<unsigned int>{1});
   float *out_ptr = out.data();
   const float *kernel_ptr = kernel.data();
   const float *extreme_ptr = extreme.data();
   const unsigned int *count_ptr = count.data();
 
-  REQUIRE_THROWS_AS(gpu_stamp_beam_chi2(nullptr, kernel_ptr, 1.F, nullptr, 0, 9, extreme_ptr, 1.F, out_ptr, stream),
+  REQUIRE_THROWS_AS(gpu_stamp_beam_chi2(nullptr, kernel_ptr, 1.F, nullptr, 0, 9, extreme_ptr, 1.F, out_ptr, stream.get()),
                     std::runtime_error);
-  REQUIRE_THROWS_AS(gpu_stamp_beam_chi2(nullptr, kernel_ptr, 1.F, count_ptr, 1, 0, extreme_ptr, 1.F, out_ptr, stream),
+  REQUIRE_THROWS_AS(gpu_stamp_beam_chi2(nullptr, kernel_ptr, 1.F, count_ptr, 1, 0, extreme_ptr, 1.F, out_ptr, stream.get()),
                     std::runtime_error);
-
-  gpuStreamDestroy(stream);
 }

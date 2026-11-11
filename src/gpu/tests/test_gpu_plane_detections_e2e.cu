@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "gpu_band_result.cuh"
-#include "device_vector.hpp"
+#include "gpu_test_utils.hpp"
 #include "gpu_plane_detections.hpp"
 #include "gpu_process_band.cuh"
 
@@ -26,6 +26,7 @@ using breifast::gpu::GpuBandLabels;
 using breifast::gpu::GpuBandStatus;
 using breifast::gpu::gpu_process_plane;
 using breifast::gpu::GpuPlaneHostResult;
+using breifast::gpu::test::upload;
 using Catch::Approx;
 
 namespace
@@ -43,22 +44,22 @@ struct DetectionFixture
   DeviceVector<float> selfnoise_offset;
   DeviceVector<float> selfnoise_raw;
   DeviceVector<float> dde_noise;
-  DeviceVector<uint8_t> accept_mask;
-  DeviceVector<uint8_t> nonzero_channels;
+  DeviceVector<bool> accept_mask;
+  DeviceVector<bool> nonzero_channels;
 
   std::optional<GpuBandJob> job;
 
   DetectionFixture()
   {
-    cube.assign(n_pixels * n_channels, 1.F);
-    weights.assign(n_channels, 1.F);
-    selfnoise_offset.assign(n_pixels, 0.F);
-    selfnoise_raw.assign(n_pixels, 1.F);
-    dde_noise.assign(n_pixels, 0.F);
-    std::vector<uint8_t> host_accept_mask(n_pixels * n_channels, 0U);
-    host_accept_mask[0] = 1U;
-    accept_mask = DeviceVector<uint8_t>::from_host(host_accept_mask.data(), host_accept_mask.size());
-    nonzero_channels.assign(n_channels, 1U);
+    cube = upload(std::vector<float>(n_pixels * n_channels, 1.F));
+    weights = upload(std::vector<float>(n_channels, 1.F));
+    selfnoise_offset = upload(std::vector<float>(n_pixels, 0.F));
+    selfnoise_raw = upload(std::vector<float>(n_pixels, 1.F));
+    dde_noise = upload(std::vector<float>(n_pixels, 0.F));
+    std::vector<bool> host_accept_mask(n_pixels * n_channels, false);
+    host_accept_mask[0] = true;
+    accept_mask = upload(host_accept_mask);
+    nonzero_channels = upload(std::vector<bool>(n_channels, true));
 
     const GpuBandInput input{
         .sizes = GpuBandInputSizes{
@@ -72,8 +73,8 @@ struct DetectionFixture
         },
         .cube = cube.data(),
         .weights = weights.data(),
-        .nonzero_channels = reinterpret_cast<const bool *>(nonzero_channels.data()),
-        .accept_mask = reinterpret_cast<const bool *>(accept_mask.data()),
+        .nonzero_channels = nonzero_channels.data(),
+        .accept_mask = accept_mask.data(),
         .selfnoise_offset = selfnoise_offset.data(),
         .selfnoise_raw = selfnoise_raw.data(),
         .dde_noise = dde_noise.data(),

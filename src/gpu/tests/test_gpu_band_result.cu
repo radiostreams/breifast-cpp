@@ -8,8 +8,7 @@
 #include <vector>
 
 #include "gpu_band_result.cuh"
-#include "device_vector.hpp"
-#include "gpu_runtime.hpp"
+#include "gpu_test_utils.hpp"
 
 using breifast::gpu::assemble_plane_bands;
 using breifast::gpu::copy_band_result;
@@ -17,6 +16,8 @@ using breifast::gpu::GpuBandHostResult;
 using breifast::gpu::GpuBandStatus;
 using breifast::gpu::GpuPlaneHostResult;
 using breifast::gpu::GpuBandResult;
+using breifast::gpu::Stream;
+using breifast::gpu::test::upload;
 using Catch::Matchers::Equals;
 
 TEST_CASE("copy_band_result copies per-island arrays, histograms and scalars", "[gpu][band_result]")
@@ -24,9 +25,6 @@ TEST_CASE("copy_band_result copies per-island arrays, histograms and scalars", "
   constexpr std::size_t n_pixels = 4;
   constexpr std::size_t histogram_bins = 3;
   constexpr unsigned int label_count = 2;
-
-  cudaStream_t stream{};
-  gpuStreamCreate(&stream);
 
   GpuBandResult source(n_pixels, histogram_bins);
   source.label_count = label_count;
@@ -39,38 +37,39 @@ TEST_CASE("copy_band_result copies per-island arrays, histograms and scalars", "
   const std::vector<unsigned long long> histogram1 = {20ULL, 21ULL, 22ULL};
   const std::vector<unsigned long long> histogram2 = {30ULL, 31ULL, 32ULL};
 
-  gpuMemcpyHostToDeviceAsync(source.peak_value, floats.data(), label_count * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(source.peak_local_noise, floats.data(), label_count * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(source.peak_y, coordinates.data(), label_count * sizeof(long), stream);
-  gpuMemcpyHostToDeviceAsync(source.peak_x, coordinates.data(), label_count * sizeof(long), stream);
-  gpuMemcpyHostToDeviceAsync(source.island_size, sizes.data(), label_count * sizeof(unsigned int), stream);
-  gpuMemcpyHostToDeviceAsync(source.stamp_extreme, floats.data(), label_count * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(source.donut_std, floats.data(), label_count * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(source.donut_lmad, floats.data(), label_count * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(source.beam_chi2, floats.data(), label_count * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(source.flux, floats.data(), label_count * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(source.boost, floats.data(), label_count * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(source.boost_found, found.data(), label_count * sizeof(bool), stream);
-  gpuMemcpyHostToDeviceAsync(source.noise_at_peak, floats.data(), label_count * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(source.rms_at_peak, floats.data(), label_count * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(source.selfnoise_at_peak, floats.data(), label_count * sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(source.histogram0, histogram0.data(), histogram_bins * sizeof(unsigned long long), stream);
-  gpuMemcpyHostToDeviceAsync(source.histogram1, histogram1.data(), histogram_bins * sizeof(unsigned long long), stream);
-  gpuMemcpyHostToDeviceAsync(source.histogram2, histogram2.data(), histogram_bins * sizeof(unsigned long long), stream);
+  source.peak_value = upload(floats);
+  source.peak_local_noise = upload(floats);
+  source.peak_y = upload(coordinates);
+  source.peak_x = upload(coordinates);
+  source.island_size = upload(sizes);
+  source.stamp_extreme = upload(floats);
+  source.donut_std = upload(floats);
+  source.donut_lmad = upload(floats);
+  source.beam_chi2 = upload(floats);
+  source.flux = upload(floats);
+  source.boost = upload(floats);
+  source.boost_found = upload(std::vector<bool>(found.begin(), found.end()));
+  source.noise_at_peak = upload(floats);
+  source.rms_at_peak = upload(floats);
+  source.selfnoise_at_peak = upload(floats);
+  source.histogram0 = upload(histogram0);
+  source.histogram1 = upload(histogram1);
+  source.histogram2 = upload(histogram2);
 
   const float min_sigma = 0.1F;
   const float max_sigma = 0.2F;
   const float median_noise = 0.3F;
   const float rms_floor = 0.4F;
   const float global_mad = 0.5F;
-  gpuMemcpyHostToDeviceAsync(source.min_sigma, &min_sigma, sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(source.max_sigma, &max_sigma, sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(source.median_noise, &median_noise, sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(source.rms_floor, &rms_floor, sizeof(float), stream);
-  gpuMemcpyHostToDeviceAsync(source.global_mad, &global_mad, sizeof(float), stream);
+  source.min_sigma = upload(std::vector<float>{min_sigma});
+  source.max_sigma = upload(std::vector<float>{max_sigma});
+  source.median_noise = upload(std::vector<float>{median_noise});
+  source.rms_floor = upload(std::vector<float>{rms_floor});
+  source.global_mad = upload(std::vector<float>{global_mad});
 
   GpuBandHostResult destination;
-  copy_band_result(source, destination, stream);
+  const Stream stream;
+  copy_band_result(source, destination, stream.get());
 
   CHECK(destination.label_count == label_count);
   CHECK_THAT(destination.peak_value, Equals(floats));
@@ -96,9 +95,6 @@ TEST_CASE("copy_band_result copies per-island arrays, histograms and scalars", "
   CHECK(destination.median_noise == median_noise);
   CHECK(destination.rms_floor == rms_floor);
   CHECK(destination.global_mad == global_mad);
-
-  gpuStreamSynchronize(stream);
-  gpuStreamDestroy(stream);
 }
 
 TEST_CASE("assemble_plane_bands matches CPU histogram, median and sigma ordering", "[gpu][band_result]")

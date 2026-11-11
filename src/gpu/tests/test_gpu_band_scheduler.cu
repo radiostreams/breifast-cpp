@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "gpu_band_result.cuh"
-#include "device_vector.hpp"
+#include "gpu_test_utils.hpp"
 #include "gpu_process_band.cuh"
 #include "gpu_runtime.hpp"
 
@@ -24,6 +24,7 @@ using breifast::gpu::GpuBandStatus;
 using breifast::gpu::gpu_process_bands;
 using breifast::gpu::gpu_process_plane;
 using breifast::gpu::GpuPlaneHostResult;
+using breifast::gpu::test::upload;
 using Catch::Matchers::WithinRel;
 
 namespace
@@ -41,20 +42,20 @@ struct JobFixture
   DeviceVector<float> selfnoise_offset;
   DeviceVector<float> selfnoise_raw;
   DeviceVector<float> dde_noise;
-  DeviceVector<uint8_t> accept_mask;
-  DeviceVector<uint8_t> nonzero_channels;
+  DeviceVector<bool> accept_mask;
+  DeviceVector<bool> nonzero_channels;
 
   std::optional<GpuBandJob> job;
 
   JobFixture()
   {
-    cube.assign(n_pixels * n_channels, 1.F);
-    weights.assign(n_channels, 1.F);
-    selfnoise_offset.assign(n_pixels, 0.F);
-    selfnoise_raw.assign(n_pixels, 1.F);
-    dde_noise.assign(n_pixels, 0.F);
-    accept_mask.assign(n_pixels * n_channels, 1U);
-    nonzero_channels.assign(n_channels, 1U);
+    cube = upload(std::vector<float>(n_pixels * n_channels, 1.F));
+    weights = upload(std::vector<float>(n_channels, 1.F));
+    selfnoise_offset = upload(std::vector<float>(n_pixels, 0.F));
+    selfnoise_raw = upload(std::vector<float>(n_pixels, 1.F));
+    dde_noise = upload(std::vector<float>(n_pixels, 0.F));
+    accept_mask = upload(std::vector<bool>(n_pixels * n_channels, true));
+    nonzero_channels = upload(std::vector<bool>(n_channels, true));
 
     const GpuBandInput input{
         .sizes = GpuBandInputSizes{
@@ -68,8 +69,8 @@ struct JobFixture
         },
         .cube = cube.data(),
         .weights = weights.data(),
-        .nonzero_channels = reinterpret_cast<const bool *>(nonzero_channels.data()),
-        .accept_mask = reinterpret_cast<const bool *>(accept_mask.data()),
+        .nonzero_channels = nonzero_channels.data(),
+        .accept_mask = accept_mask.data(),
         .selfnoise_offset = selfnoise_offset.data(),
         .selfnoise_raw = selfnoise_raw.data(),
         .dde_noise = dde_noise.data(),

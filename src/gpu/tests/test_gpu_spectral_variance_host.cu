@@ -7,12 +7,12 @@
 #include <stdexcept>
 #include <vector>
 
-#include "device_vector.hpp"
 #include "gpu_kernels.hpp"
+#include "gpu_test_utils.hpp"
 
-using breifast::gpu::DeviceVector;
 using breifast::gpu::GpuSpectralVarianceHostResult;
 using breifast::gpu::gpu_spectral_variance_stats_host;
+using breifast::gpu::test::upload;
 using Catch::Approx;
 using Catch::Matchers::Equals;
 
@@ -30,13 +30,11 @@ TEST_CASE("gpu_spectral_variance_stats_host copies moments and mask", "[gpu][spe
   };
   const std::vector<std::uint8_t> mask_host = {1, 0, 1};
 
-  DeviceVector<float> cube(cube_host.begin(), cube_host.end());
-  DeviceVector<std::uint8_t> mask(mask_host.begin(), mask_host.end());
+  const auto cube = upload(cube_host);
+  const auto mask = upload(std::vector<bool>(mask_host.begin(), mask_host.end()));
 
   GpuSpectralVarianceHostResult result;
-  gpu_spectral_variance_stats_host(cube.data(),
-                                   reinterpret_cast<const bool *>(mask.data()), n_y, n_x,
-                                   n_channels, result);
+  gpu_spectral_variance_stats_host(cube, mask, n_y, n_x, n_channels, result);
 
   REQUIRE(result.sum_pow2.size() == n_pixels);
   REQUIRE(result.sum_pow3.size() == n_pixels);
