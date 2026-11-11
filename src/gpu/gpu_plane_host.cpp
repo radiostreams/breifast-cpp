@@ -1,10 +1,14 @@
 #include <algorithm>
+#include <array>
 #include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
+
+#include <xtensor/containers/xadapt.hpp>
+#include <xtensor/core/xmath.hpp>
 
 #include "cpu/beam_kernel.hpp"
 #include "gpu_plane_integration.hpp"
@@ -158,6 +162,12 @@ std::vector<float> build_gaussian_beam_kernel_vector(long halfsize, float sigma_
 {
   const auto kernel = breifast::build_gaussian_beam_kernel(halfsize, sigma_major, sigma_minor, rotate);
   return std::vector<float>(kernel.begin(), kernel.end());
+}
+
+float beam_kernel_sum(const float *kernel, long halfsize)
+{
+  const auto side = static_cast<std::size_t>(2 * halfsize + 1);
+  return xt::sum(xt::adapt(kernel, side * side, xt::no_ownership(), std::array<std::size_t, 2>{side, side}))();
 }
 
 ProcessPlaneResult gpu_process_plane_batch(const PlaneBatchItem &item, const PlaneBatchGroup &group,

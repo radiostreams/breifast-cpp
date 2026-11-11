@@ -238,8 +238,8 @@ GpuBandStatus gpu_process_band(const GpuBandInput &input, GpuBandWorkspace &work
     gpu_stamp_extract_no_zero(workspace.plane, input.n_y, input.n_x, result.peak_y, result.peak_x,
                               workspace.label_count, island_capacity, input.beam_halfsize, workspace.beam_stamps,
                               stream);
-    gpu_stamp_beam_chi2(workspace.beam_stamps, input.beam_kernel, workspace.label_count, island_capacity,
-                        beam_stamp_pixels, result.stamp_extreme, 1.F / input.max_to_std_ratio_value,
+    gpu_stamp_beam_chi2(workspace.beam_stamps, input.beam_kernel, input.beam_kernel_sum, workspace.label_count,
+                        island_capacity, beam_stamp_pixels, result.stamp_extreme, 1.F / input.max_to_std_ratio_value,
                         result.beam_chi2, stream);
   }
   else

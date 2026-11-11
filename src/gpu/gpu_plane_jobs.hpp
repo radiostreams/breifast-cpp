@@ -69,6 +69,10 @@ struct GpuPlaneSizes
 std::vector<float> build_gaussian_beam_kernel_vector(long halfsize, float sigma_major, float sigma_minor,
                                                      float rotate);
 
+/// Sum of a (2 * halfsize + 1)^2 beam kernel, with the same xtensor expression as the CPU stamp_beam_chi2, so that both
+/// backends divide by the same float.
+float beam_kernel_sum(const float *kernel, long halfsize);
+
 struct GpuPlaneJobs
 {
   explicit GpuPlaneJobs(const GpuPlaneJobSpec &spec);

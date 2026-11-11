@@ -1,8 +1,7 @@
 #include <cfloat>
+#include <stdexcept>
 
 #include <cuda/std/functional>
-#include <thrust/device_vector.h>
-#include <thrust/device_ptr.h>
 
 #include "gpu_pipeline.hpp"
 
@@ -214,22 +213,8 @@ __global__ void donut_std_kernel(const unsigned int *active_count, const float *
   }
 }
 
-__global__ void kernel_sum_kernel(const float *kernel, size_t n, float *out_sum)
-{
-  float sum = 0.F;
-  for (size_t i = threadIdx.x; i < n; i += blockDim.x)
-  {
-    sum += kernel[i];
-  }
-  sum = block_reduce(sum, cuda::std::plus<>{});
-  if (threadIdx.x == 0)
-  {
-    *out_sum = sum;
-  }
-}
-
 __global__ void stamp_beam_chi2_kernel(const unsigned int *active_count, const float *stamps, const float *kernel,
-                                       const float *kernel_sum, const float *stamp_extreme,
+                                       const float kernel_sum, const float *stamp_extreme,
                                        float inv_max_to_std_ratio, size_t stamp_pixels, float *out_chi2)
 {
   if (blockIdx.x >= *active_count)
@@ -247,7 +232,7 @@ __global__ void stamp_beam_chi2_kernel(const unsigned int *active_count, const f
     stamp_sum += stamp[i];
   }
   stamp_sum = block_reduce(stamp_sum, cuda::std::plus<>{});
-  const auto scale = stamp_sum / *kernel_sum;
+  const auto scale = stamp_sum / kernel_sum;
 
   float resid2 = 0.F;
   uint32_t count = 0U;
@@ -398,9 +383,9 @@ void gpu_stamp_extract_no_zero(const float *plane, size_t n_y, size_t n_x, const
                     radius, 0, stamp_pixels, stamps);
 }
 
-void gpu_stamp_beam_chi2(const float *stamps, const float *kernel, const unsigned int *active_count,
-                         unsigned int capacity, size_t stamp_pixels, const float *stamp_extreme,
-                         float inv_max_to_std_ratio, float *out_chi2, GpuStream stream)
+void gpu_stamp_beam_chi2(const float *stamps, const float *kernel, const float kernel_sum,
+                         const unsigned int *active_count, unsigned int capacity, size_t stamp_pixels,
+                         const float *stamp_extreme, float inv_max_to_std_ratio, float *out_chi2, GpuStream stream)
 {
   if (capacity == 0)
   {
@@ -415,10 +400,7 @@ void gpu_stamp_beam_chi2(const float *stamps, const float *kernel, const unsigne
     throw std::runtime_error{"gpu_stamp_beam_chi2: empty stamps"};
   }
 
-  thrust::device_vector<float> kernel_sum(1);
-  float *const kernel_sum_ptr = thrust::raw_pointer_cast(kernel_sum.data());
-  launch(kernel_sum_kernel, 1, block_size, stream, kernel, stamp_pixels, kernel_sum_ptr);
-  launch_per_island(stamp_beam_chi2_kernel, capacity, stream, active_count, stamps, kernel, kernel_sum_ptr,
+  launch_per_island(stamp_beam_chi2_kernel, capacity, stream, active_count, stamps, kernel, kernel_sum,
                     stamp_extreme, inv_max_to_std_ratio, stamp_pixels, out_chi2);
 }
 } // namespace breifast::gpu

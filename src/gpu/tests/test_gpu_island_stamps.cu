@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <numeric>
 #include <stdexcept>
 #include <vector>
 
@@ -345,8 +346,10 @@ std::vector<float> run_beam_chi2(const std::vector<std::vector<float>> &stamps, 
                              kernel.size() * sizeof(float), stream);
   gpuMemcpyHostToDeviceAsync(thrust::raw_pointer_cast(device_extreme.data()),
                              thrust::raw_pointer_cast(host_extreme.data()), extreme.size() * sizeof(float), stream);
+  const float kernel_sum = std::accumulate(kernel.begin(), kernel.end(), 0.F);
   gpu_stamp_beam_chi2(thrust::raw_pointer_cast(device_stamps.data()), thrust::raw_pointer_cast(device_kernel.data()),
-                      thrust::raw_pointer_cast(device_count.data()), static_cast<unsigned int>(n_stamps), stamp_pixels,
+                      kernel_sum, thrust::raw_pointer_cast(device_count.data()), static_cast<unsigned int>(n_stamps),
+                      stamp_pixels,
                       thrust::raw_pointer_cast(device_extreme.data()), inv_max_to_std_ratio,
                       thrust::raw_pointer_cast(device_out.data()), stream);
 
@@ -845,10 +848,10 @@ TEST_CASE("gpu_stamp_beam_chi2 rejects zero stamps and zero stamp pixels", "[gpu
   const float *extreme_ptr = thrust::raw_pointer_cast(extreme.data());
   const unsigned int *count_ptr = thrust::raw_pointer_cast(count.data());
 
-  REQUIRE_THROWS_AS(
-      gpu_stamp_beam_chi2(nullptr, kernel_ptr, nullptr, 0, 9, extreme_ptr, 1.F, out_ptr, stream), std::runtime_error);
-  REQUIRE_THROWS_AS(
-      gpu_stamp_beam_chi2(nullptr, kernel_ptr, count_ptr, 1, 0, extreme_ptr, 1.F, out_ptr, stream), std::runtime_error);
+  REQUIRE_THROWS_AS(gpu_stamp_beam_chi2(nullptr, kernel_ptr, 1.F, nullptr, 0, 9, extreme_ptr, 1.F, out_ptr, stream),
+                    std::runtime_error);
+  REQUIRE_THROWS_AS(gpu_stamp_beam_chi2(nullptr, kernel_ptr, 1.F, count_ptr, 1, 0, extreme_ptr, 1.F, out_ptr, stream),
+                    std::runtime_error);
 
   gpuStreamDestroy(stream);
 }

@@ -271,12 +271,13 @@ void gpu_any_true(const bool *values, size_t n, int *out_any, GpuStream stream =
 /**
  * @brief Reduced chi2 of each stamp against the beam kernel, over the nonzero stamp pixels.
  *
- * One block per stamp. The wrapper sums `kernel` once, then `scale = sum(stamp) / sum(kernel)` over the whole stamp,
- * then `sum((stamp[i] - scale * kernel[i])^2) / (adjacent_noise^2 * count)` over the nonzero pixels, and 0 when there
+ * One block per stamp. `scale = sum(stamp) / kernel_sum` over the whole stamp, then
+ * `sum((stamp[i] - scale * kernel[i])^2) / (adjacent_noise^2 * count)` over the nonzero pixels, and 0 when there
  * is no nonzero pixel or `adjacent_noise` is 0. `adjacent_noise` is computed on the fly as
  * `stamp_extreme[i] * inv_max_to_std_ratio`. Device pointers; the work is enqueued on `stream`.
  * @param stamps `[capacity, stamp_pixels]` floats, row major, one beam stamp per row.
  * @param kernel `[stamp_pixels]` floats, the band's beam kernel, shared by every stamp.
+ * @param kernel_sum Sum of `kernel`, computed on the host (beam_kernel_sum).
  * @param active_count One device `unsigned int`, the number of valid stamps.
  * @param capacity Maximum number of stamps the arrays can hold.
  * @param stamp_pixels `(2 * halfsize + 1)^2`.
@@ -284,7 +285,7 @@ void gpu_any_true(const bool *values, size_t n, int *out_any, GpuStream stream =
  * @param inv_max_to_std_ratio `1 / max_to_std_ratio_value`.
  * @param out_chi2 `[capacity]` floats, written for every valid stamp.
  */
-void gpu_stamp_beam_chi2(const float *stamps, const float *kernel, const unsigned int *active_count,
+void gpu_stamp_beam_chi2(const float *stamps, const float *kernel, float kernel_sum, const unsigned int *active_count,
                          unsigned int capacity, size_t stamp_pixels, const float *stamp_extreme,
                          float inv_max_to_std_ratio, float *out_chi2, GpuStream stream = nullptr);
 

@@ -63,6 +63,7 @@ struct GpuBandInput
   float reject_noise_threshold = 0.F;
   float threshold = 0.F;
   float max_to_std_ratio_value = 0.F;
+  float beam_kernel_sum = 0.F;
 
   bool use_rms_noise_estimator = false;
   bool subtract_mean = false;

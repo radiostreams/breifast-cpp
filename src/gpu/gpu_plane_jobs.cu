@@ -120,6 +120,7 @@ GpuPlaneJobs::GpuPlaneJobs(const GpuPlaneJobSpec &spec, const GpuPlaneSizes &siz
     const std::size_t beam_side = static_cast<std::size_t>(2 * spec.fixed_beam_halfsize + 1);
     fixed_beam_kernel.emplace(spec.fixed_beam_kernel, beam_side * beam_side);
   }
+  const float fixed_beam_sum = use_fixed_beam ? beam_kernel_sum(spec.fixed_beam_kernel, spec.fixed_beam_halfsize) : 0.F;
 
   band_beam_kernels.reserve(spec.bands.size());
   jobs.reserve(spec.bands.size());
@@ -139,6 +140,7 @@ GpuPlaneJobs::GpuPlaneJobs(const GpuPlaneJobSpec &spec, const GpuPlaneSizes &siz
 
     const float *beam_device = nullptr;
     long beam_halfsize = 0;
+    float beam_sum = 0.F;
     std::size_t beam_stamp_pixels = 0;
     if (spec.beam_size_enabled)
     {
@@ -146,6 +148,7 @@ GpuPlaneJobs::GpuPlaneJobs(const GpuPlaneJobSpec &spec, const GpuPlaneSizes &siz
       {
         beam_device = fixed_beam_kernel->data();
         beam_halfsize = spec.fixed_beam_halfsize;
+        beam_sum = fixed_beam_sum;
       }
       else
       {
@@ -183,6 +186,7 @@ GpuPlaneJobs::GpuPlaneJobs(const GpuPlaneJobSpec &spec, const GpuPlaneSizes &siz
             build_gaussian_beam_kernel_vector(beam_halfsize, major_weighted, minor_weighted, angle_weighted);
         band_beam_kernels.emplace_back(host_kernel.data(), host_kernel.size());
         beam_device = band_beam_kernels.back().data();
+        beam_sum = beam_kernel_sum(host_kernel.data(), beam_halfsize);
       }
       const std::size_t beam_side = static_cast<std::size_t>(2 * beam_halfsize + 1);
       beam_stamp_pixels = beam_side * beam_side;
@@ -241,6 +245,7 @@ GpuPlaneJobs::GpuPlaneJobs(const GpuPlaneJobSpec &spec, const GpuPlaneSizes &siz
         .reject_noise_threshold = spec.reject_noise_threshold,
         .threshold = spec.threshold,
         .max_to_std_ratio_value = spec.max_to_std_ratio_value,
+        .beam_kernel_sum = beam_sum,
         .use_rms_noise_estimator = spec.use_rms_noise_estimator,
         .subtract_mean = mean_image.has_value(),
     };

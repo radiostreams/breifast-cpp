@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <numeric>
 #include <vector>
 
 #include "gpu_band_result.cuh"
@@ -11,6 +12,7 @@
 
 using breifast::DetectionArrays;
 using breifast::gpu::assemble_plane_detections;
+using breifast::gpu::build_gaussian_beam_kernel_vector;
 using breifast::gpu::gpu_process_plane;
 using breifast::gpu::GpuBandStatus;
 using breifast::gpu::GpuPlaneHostResult;
@@ -122,6 +124,7 @@ TEST_CASE("build_plane_jobs uploads a fixed beam kernel", "[gpu][plane_jobs]")
   CHECK(plane_jobs.jobs[0].input.beam_kernel != nullptr);
   CHECK(plane_jobs.jobs[0].input.beam_halfsize == 0);
   CHECK(plane_jobs.jobs[0].workspace_sizes.beam_stamp_pixels == 1);
+  CHECK(plane_jobs.jobs[0].input.beam_kernel_sum == 1.F);
 }
 
 TEST_CASE("build_plane_jobs builds a per-band Gaussian beam kernel", "[gpu][plane_jobs]")
@@ -141,4 +144,7 @@ TEST_CASE("build_plane_jobs builds a per-band Gaussian beam kernel", "[gpu][plan
   CHECK(plane_jobs.jobs[0].input.beam_kernel != nullptr);
   CHECK(plane_jobs.jobs[0].input.beam_halfsize == 4);
   CHECK(plane_jobs.jobs[0].workspace_sizes.beam_stamp_pixels == 81);
+  // major = minor = 1 and angle 0 after weighting.
+  const auto kernel = build_gaussian_beam_kernel_vector(4, 1.F, 1.F, 0.F);
+  CHECK(plane_jobs.jobs[0].input.beam_kernel_sum == Approx(std::accumulate(kernel.begin(), kernel.end(), 0.F)));
 }
