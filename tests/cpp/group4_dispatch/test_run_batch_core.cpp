@@ -1,6 +1,9 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
+
+#include <stdexcept>
 
 #include "plane_lot_dispatch.hpp"
 
@@ -131,13 +134,10 @@ TEST_CASE("run_batch_core keeps results in items order across many items schedul
   }
 }
 
-TEST_CASE("run_batch_core isolates a per-item exception: one item throwing doesn't abort the batch or corrupt "
-         "other items' results",
-         "[run_batch_core]")
+TEST_CASE("run_batch_core rejects the whole batch when one plane is inconsistent", "[run_batch_core]")
 {
-  // group 1's selfnoise_offset is deliberately the wrong shape (3x3 instead of item1's actual 7x7 plane), so
-  // process_band's noisemap = sqrt(noisemap0^2 + scale*selfnoise_offset + ...) throws xtensor's
-  // "Incompatible dimension of arrays" broadcast error for item 1 only.
+  // group 1's selfnoise_offset is deliberately the wrong shape (3x3 instead of item 1's 7x7 plane): the validation that
+  // runs before any plane names it, and the batch throws instead of returning an empty result for item 1.
   constexpr size_t n = 7;
   auto broken_group = make_group(n, 9.F);
   broken_group.selfnoise_offset.resize({3, 3});
@@ -160,19 +160,9 @@ TEST_CASE("run_batch_core isolates a per-item exception: one item throwing doesn
   config.beam_size_enabled = false;
   config.band_slices = {BandSlice{.start = 0, .stop = 1, .selfnoise_scale_factor = 1.F, .label = "B0"}};
 
-  const auto results = run_batch_core(items, groups, config, 2);
-
-  REQUIRE(results.size() == 3);
-
-  REQUIRE(results[0].detections.peak_y().size() == 1);
-  CHECK(results[0].detections.peak_y()[0] == 2);
-  CHECK(results[0].detections.peak_x()[0] == 2);
-
-  CHECK(results[1].detections.peak_y().empty());
-
-  REQUIRE(results[2].detections.peak_y().size() == 1);
-  CHECK(results[2].detections.peak_y()[0] == 2);
-  CHECK(results[2].detections.peak_x()[0] == 4);
+  CHECK_THROWS_AS(run_batch_core(items, groups, config, 2), std::invalid_argument);
+  CHECK_THROWS_WITH(run_batch_core(items, groups, config, 2),
+                    "plane 1: selfnoise_offset has shape (3, 3), expected (7, 7)");
 }
 
 TEST_CASE("run_lot_core forwards lot.planes/lot.groups to run_batch_core unchanged", "[run_lot_core]")

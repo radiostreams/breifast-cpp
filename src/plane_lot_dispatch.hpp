@@ -337,8 +337,9 @@ void validate_plane_inputs(const std::vector<PlaneBatchItem> &items, const std::
 /**
  * @brief Run process_plane() over every item in `items`, in parallel via TBB.
  *
- * Each item's group is looked up by `group_index` into `groups`. Per-item exceptions are caught and logged rather
- * than aborting the whole batch, so one bad plane doesn't take down the rest.
+ * Each item's group is looked up by `group_index` into `groups`. Every plane is validated first
+ * (validate_plane_inputs()). If a plane throws during the run, the planes not started yet are skipped and its
+ * exception is rethrown once the workers have stopped.
  * @param items Planes to process; not modified, but non-const to match TBB's expected iteration interface.
  * @param groups Shared per-Stokes arrays, indexed by `PlaneBatchItem::group_index`.
  * @param config Run-level configuration shared by every item.

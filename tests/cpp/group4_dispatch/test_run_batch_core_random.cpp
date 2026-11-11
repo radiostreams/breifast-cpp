@@ -83,15 +83,17 @@ TEST_CASE("run_batch_core matches an independent Python reference across a batch
     const auto lot_id = lot_case.at("lot_id").get<int>();
     INFO("lot_id=" << lot_id);
 
+    // Every plane of a lot has the same channel count. The generator always draws 3-channel accept masks, so keep the
+    // first n_channels: no band reaches past them, so the expected detections are unchanged.
+    const auto n_channels = lot_case.at("items").at(0).at("weights").size();
     const auto &groups_json = lot_case.at("groups");
     std::vector<PlaneBatchGroup> groups;
     for (const auto &g : groups_json)
     {
       PlaneBatchGroup group;
-      const auto n_accept_channels = g.at("accept_mask").size();
       const auto n = static_cast<size_t>(g.at("n"));
-      group.accept_mask.resize({n_accept_channels, n, n});
-      for (size_t i_c = 0; i_c < n_accept_channels; ++i_c)
+      group.accept_mask.resize({n_channels, n, n});
+      for (size_t i_c = 0; i_c < n_channels; ++i_c)
       {
         xt::view(group.accept_mask, i_c) = to_2d_bool_from_3d(g.at("accept_mask"), i_c);
       }
@@ -104,7 +106,6 @@ TEST_CASE("run_batch_core matches an independent Python reference across a batch
     std::vector<PlaneBatchItem> items;
     for (const auto &it : lot_case.at("items"))
     {
-      const auto n_channels = it.at("weights").size();
       PlaneBatchItem item;
       item.group_index = it.at("group_index").get<size_t>();
       item.stokes_cube = to_3d(it.at("stokes_cube"));

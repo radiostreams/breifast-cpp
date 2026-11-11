@@ -427,6 +427,7 @@ std::vector<ProcessPlaneResult> run_batch_core(std::vector<PlaneBatchItem> &item
                                                const std::vector<PlaneBatchGroup> &groups, const PlaneConfig &config,
                                                int num_threads)
 {
+  validate_plane_inputs(items, groups, config);
   std::vector<ProcessPlaneResult> results(items.size());
 
   // One task_arena per NUMA node, each pinned to it, so a thread's scratch buffers land on the same
@@ -502,17 +503,7 @@ std::vector<ProcessPlaneResult> run_batch_core(std::vector<PlaneBatchItem> &item
     for (auto index = range.begin(); index != range.end(); ++index)
     {
       auto &item = items[index];
-      const auto group_index = item.group_index;
-      const auto &group = groups[group_index];
-
-      try
-      {
-        results[index] = process_plane(scratch, config, item, group);
-      }
-      catch (const std::exception &e)
-      {
-        std::cerr << e.what() << std::endl;
-      }
+      results[index] = process_plane(scratch, config, item, groups[item.group_index]);
     }
   };
   const auto run_slice = [&](size_t node)
@@ -523,12 +514,13 @@ std::vector<ProcessPlaneResult> run_batch_core(std::vector<PlaneBatchItem> &item
   };
 
   __itt_resume();
+  // A plane that throws cancels the planes not started yet, and wait() rethrows its exception once every slice has
+  // stopped. The calling thread runs queued slices while it waits instead of sitting idle.
   tbb::task_group task_group;
-  for (size_t node = 0; node + 1 < arenas.size(); ++node)
+  for (size_t node = 0; node < arenas.size(); ++node)
   {
     task_group.run([&, node]() { run_slice(node); });
   }
-  run_slice(arenas.size() - 1); // the calling thread takes the last node's slice instead of sitting idle
   task_group.wait();
   __itt_pause();
 
