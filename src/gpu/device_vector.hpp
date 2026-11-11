@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <iterator>
 #include <memory>
+#include <utility>
 
 #include <cuda_runtime.h>
 
@@ -22,6 +23,18 @@ public:
 
   /// Uninitialised. Assert builds fill it with 0xFF bytes, so that a read before the first write shows up in tests.
   explicit DeviceVector(std::size_t n) : data_{allocate(n)}, size_{n} {}
+
+  // Written out so that a moved-from vector is empty: defaulted moves would leave its size behind with a null pointer.
+  DeviceVector(DeviceVector &&other) noexcept : data_{std::move(other.data_)}, size_{std::exchange(other.size_, 0)} {}
+  DeviceVector &operator=(DeviceVector &&other) noexcept
+  {
+    if (this != &other)
+    {
+      data_ = std::move(other.data_);
+      size_ = std::exchange(other.size_, 0);
+    }
+    return *this;
+  }
 
   static DeviceVector zeros(std::size_t n)
   {

@@ -35,11 +35,13 @@ TEST_CASE("device vectors round trip a float array", "[gpu][smoke]")
   const bool round_trip = download(device, stream) == host; // not decomposed: Catch would print a million floats
   CHECK(round_trip);
 
-  // A moved-to vector owns the moved-from one's allocation.
+  // A moved-to vector owns the moved-from one's allocation, and the moved-from one is empty.
   const float *const allocation = device.data();
   const DeviceVector<float> moved = std::move(device);
   CHECK(moved.data() == allocation);
   CHECK(moved.size() == n);
+  CHECK(device.data() == nullptr);
+  CHECK(device.empty());
 }
 
 TEST_CASE("CHECK_GPU throws a GpuError that carries the CUDA error", "[gpu][smoke]")

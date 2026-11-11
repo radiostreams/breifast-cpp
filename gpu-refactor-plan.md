@@ -99,8 +99,9 @@ Core types (internal, `gpu_band.hpp`):
   `ensure(n)` (capacity ≥ n, contents unspecified after growth). Streams are created non-blocking.
 
 ### 6. Ownership
-- RAII `Stream` (non-blocking create; destructor synchronises then destroys, never throws; `synchronize()` throws) is
-  the only class with hand-written special members. Everything else is rule of zero.
+- RAII `Stream` (non-blocking create; destructor synchronises then destroys, never throws; `synchronize()` throws) and
+  `DeviceVector` (moves written out so that a moved-from vector is empty) are the only classes with hand-written
+  special members. Everything else is rule of zero.
 - `Stream` is the last member of `GpuSlot`, so it is destroyed first and waits before buffers are freed. Comment it.
 
 ### 7. Runtime layer
