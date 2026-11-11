@@ -161,7 +161,7 @@ void gpu_rms_noise_map(const float *plane, size_t n_y, size_t n_x, long boxsize,
  *        `n/2`.
  *
  * Order-preserving key, four MSB-first byte passes with a device-wide 256-bin digit histogram, then a scan of the bins
- * per pass. Device pointers; the work is enqueued on `stream`. `n == 0` writes NaN.
+ * per pass. Device pointers; the work is enqueued on `stream`. `n` must be greater than 0.
  * @param values `[n]` floats, read only.
  * @param out_median One float, written by this call.
  */

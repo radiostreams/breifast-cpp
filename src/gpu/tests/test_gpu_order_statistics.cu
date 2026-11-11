@@ -139,12 +139,6 @@ TEST_CASE("gpu_median handles ties, zeros of both signs, subnormals and infiniti
   CHECK_THAT(run_median({-0.F, 0.F, -0.F}, true), WithinRel(0.F));
 }
 
-TEST_CASE("gpu_median writes NaN for empty input", "[gpu][order_statistics]")
-{
-  CHECK(std::isnan(run_median({}, false)));
-  CHECK(std::isnan(run_median({}, true)));
-}
-
 TEST_CASE("gpu_median_abs applies its scale on the final write", "[gpu][order_statistics]")
 {
   CHECK_THAT(run_median({-2.F, 4.F, -6.F}, true, 1.4826F), WithinRel(4.F * 1.4826F));

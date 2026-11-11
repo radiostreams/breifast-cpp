@@ -1,3 +1,4 @@
+#include <cassert>
 #include <cstdint>
 
 #include <thrust/device_vector.h>
@@ -55,18 +56,9 @@ __global__ void radix_finalize_kernel(const uint32_t *state, const uint32_t *low
   *out_median = median_of_keys(n, state[0], state[1], *lower_max, abs_mode) * scale;
 }
 
-__global__ void write_nan_kernel(float *out)
-{
-  *out = __int_as_float(0x7FC00000);
-}
-
 void gpu_median_impl(const float *values, size_t n, float *out_median, bool abs_mode, float scale, GpuStream stream)
 {
-  if (n == 0)
-  {
-    launch(write_nan_kernel, 1, 1, stream, out_median);
-    return;
-  }
+  assert(n > 0);
 
   constexpr size_t scratch_words = radix_bins + 4; // 256 bins, then state[3] and lower_max[1]
   thrust::device_vector<uint32_t> scratch(scratch_words, 0);
