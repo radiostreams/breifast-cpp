@@ -1,9 +1,7 @@
 #include <limits>
 #include <stdexcept>
 
-#include <thrust/device_vector.h>
-#include <thrust/device_ptr.h>
-
+#include "device_vector.hpp"
 #include "gpu_kernels.hpp"
 #include "gpu_device_utils.cuh"
 
@@ -156,24 +154,24 @@ void gpu_spectral_variance_stats_host(const float *cube, const bool *nonzero_cha
 
   const size_t n_pixels = n_y * n_x;
 
-  thrust::device_vector<float> sum_pow2(n_pixels);
-  thrust::device_vector<float> sum_pow3(n_pixels);
-  thrust::device_vector<float> sum_pow4(n_pixels);
-  gpu_spectral_variance_moments(cube, nonzero_channels, thrust::raw_pointer_cast(sum_pow2.data()),
-                                thrust::raw_pointer_cast(sum_pow3.data()), thrust::raw_pointer_cast(sum_pow4.data()),
-                                n_pixels, static_cast<int>(n_channels), stream);
+  // Per plane, not per band; the slot owns them in Phase 4.
+  DeviceVector<float> sum_pow2(n_pixels);
+  DeviceVector<float> sum_pow3(n_pixels);
+  DeviceVector<float> sum_pow4(n_pixels);
+  gpu_spectral_variance_moments(cube, nonzero_channels, sum_pow2, sum_pow3, sum_pow4, n_pixels,
+                                static_cast<int>(n_channels), stream);
 
   result.sum_pow2.resize(n_pixels);
   result.sum_pow3.resize(n_pixels);
   result.sum_pow4.resize(n_pixels);
   result.nonzero_channels_mask.resize(n_channels);
 
-  CHECK_GPU(cudaMemcpyAsync(result.sum_pow2.data(), thrust::raw_pointer_cast(sum_pow2.data()), n_pixels * sizeof(float),
-                            cudaMemcpyDeviceToHost, stream));
-  CHECK_GPU(cudaMemcpyAsync(result.sum_pow3.data(), thrust::raw_pointer_cast(sum_pow3.data()), n_pixels * sizeof(float),
-                            cudaMemcpyDeviceToHost, stream));
-  CHECK_GPU(cudaMemcpyAsync(result.sum_pow4.data(), thrust::raw_pointer_cast(sum_pow4.data()), n_pixels * sizeof(float),
-                            cudaMemcpyDeviceToHost, stream));
+  CHECK_GPU(cudaMemcpyAsync(result.sum_pow2.data(), sum_pow2.data(), n_pixels * sizeof(float), cudaMemcpyDeviceToHost,
+                            stream));
+  CHECK_GPU(cudaMemcpyAsync(result.sum_pow3.data(), sum_pow3.data(), n_pixels * sizeof(float), cudaMemcpyDeviceToHost,
+                            stream));
+  CHECK_GPU(cudaMemcpyAsync(result.sum_pow4.data(), sum_pow4.data(), n_pixels * sizeof(float), cudaMemcpyDeviceToHost,
+                            stream));
   CHECK_GPU(cudaMemcpyAsync(result.nonzero_channels_mask.data(), nonzero_channels, n_channels * sizeof(bool),
                             cudaMemcpyDeviceToHost, stream));
   CHECK_GPU(cudaStreamSynchronize(stream));
