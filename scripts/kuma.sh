@@ -248,12 +248,20 @@ case "$command_name" in
     run="$(resolve_run "${1:-}")"
     [[ -n "$run" ]] || { echo "kuma.sh: no run on the cluster yet" >&2; exit 1; }
     echo ">> waiting for run $run"
-    while job_states "$run" | grep -qE ' (PENDING|RUNNING|CONFIGURING|COMPLETING|REQUEUED|RESIZING|SUSPENDED) '; do
+    while true; do
+      # A lost connection says nothing about the jobs, which keep running on the cluster: retry.
+      if ! states="$(job_states "$run")"; then
+        echo ">> cannot reach $KUMA_HOST, retrying in ${KUMA_POLL_SECONDS}s" >&2
+      elif ! grep -qE ' (PENDING|RUNNING|CONFIGURING|COMPLETING|REQUEUED|RESIZING|SUSPENDED) ' <<<"$states"; then
+        break
+      fi
       sleep "$KUMA_POLL_SECONDS"
     done
-    states="$(job_states "$run")"
     echo "$states"
-    fetch_run "$run"
+    until fetch_run "$run"; do
+      echo ">> cannot fetch the logs, retrying in ${KUMA_POLL_SECONDS}s" >&2
+      sleep "$KUMA_POLL_SECONDS"
+    done
     # Succeeds only if every job of the run completed.
     ! grep -vq ' COMPLETED ' <<<"$states"
     ;;
