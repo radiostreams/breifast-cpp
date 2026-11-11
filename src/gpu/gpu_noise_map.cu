@@ -92,6 +92,20 @@ __global__ void window_cols_kernel(const float *row_window_sums, const size_t n_
     }
   }
 }
+
+// The base noise is max(rms[p], *base_noise) with an RMS map, else *base_noise.
+__global__ void combine_noise_map_kernel(const float *rms, const float *base_noise, const float *selfnoise_offset,
+                                         const float *dde_noise, const float selfnoise_scale, const float dde_scale,
+                                         float *out_noise_map, const size_t n_pixels)
+{
+  const auto i_pixel = global_index();
+  if (i_pixel < n_pixels)
+  {
+    const float base = rms != nullptr ? fmaxf(rms[i_pixel], *base_noise) : *base_noise;
+    out_noise_map[i_pixel] =
+        sqrtf(base * base + selfnoise_scale * selfnoise_offset[i_pixel] + dde_scale * dde_noise[i_pixel]);
+  }
+}
 } // namespace
 
 void gpu_rms_noise_map(const float *plane, size_t n_y, size_t n_x, long boxsize, float *row_window_sums, float *out_rms,
@@ -105,5 +119,17 @@ void gpu_rms_noise_map(const float *plane, size_t n_y, size_t n_x, long boxsize,
   // One thread per row for the horizontal pass, then one thread per column for the vertical pass.
   launch_per_element(window_rows_kernel, n_y, stream, plane, n_y, n_x, boxsize, row_window_sums);
   launch_per_element(window_cols_kernel, n_x, stream, row_window_sums, n_y, n_x, boxsize, out_rms);
+}
+
+void gpu_combine_noise_map(const float *rms, const float *base_noise, const float *selfnoise_offset,
+                           const float *dde_noise, const float selfnoise_scale, const float dde_scale,
+                           float *out_noise_map, const size_t n_pixels, GpuStream stream)
+{
+  if (n_pixels == 0)
+  {
+    throw std::runtime_error("gpu_combine_noise_map: zero pixels");
+  }
+  launch_per_element(combine_noise_map_kernel, n_pixels, stream, rms, base_noise, selfnoise_offset, dde_noise,
+                     selfnoise_scale, dde_scale, out_noise_map, n_pixels);
 }
 } // namespace breifast::gpu
