@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 #include <cuda_runtime.h>
 #include <thrust/copy.h>
 
@@ -62,4 +63,21 @@ TEST_CASE("pinned and device vectors round trip a float array", "[gpu][smoke]")
   std::vector<float> moved = std::move(host_out);
   REQUIRE(moved.size() == n);
   REQUIRE(std::memcmp(in, thrust::raw_pointer_cast(moved.data()), bytes) == 0);
+}
+
+TEST_CASE("CHECK_GPU throws a GpuError that carries the CUDA error", "[gpu][smoke]")
+{
+  try
+  {
+    CHECK_GPU(cudaSetDevice(-1));
+    FAIL("CHECK_GPU did not throw");
+  }
+  catch (const breifast::gpu::GpuError &error)
+  {
+    CHECK(error.error() == cudaErrorInvalidDevice);
+    CHECK_THAT(error.what(), Catch::Matchers::ContainsSubstring("cudaSetDevice(-1)"));
+    CHECK_THAT(error.what(), !Catch::Matchers::ContainsSubstring("restart"));
+  }
+  // A failed call is also recorded as the last error: clear it, or the next launch check would report it.
+  (void)cudaGetLastError();
 }

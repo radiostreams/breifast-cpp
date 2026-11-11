@@ -2,43 +2,69 @@
 
 #include <cuda_runtime.h>
 
-#include <sstream>
 #include <stdexcept>
+#include <string>
 
-namespace breifast::gpu::detail
+namespace breifast::gpu
 {
-inline void check(cudaError_t err, char const *func, char const *file, int line)
+/// A CUDA runtime call that did not return cudaSuccess.
+class GpuError : public std::runtime_error
 {
-  if (err != cudaSuccess)
+public:
+  GpuError(const cudaError_t error, const std::string &message) : std::runtime_error{message}, error_{error} {}
+
+  [[nodiscard]] cudaError_t error() const noexcept { return error_; }
+
+private:
+  cudaError_t error_;
+};
+
+namespace detail
+{
+/// True for the errors that CUDA documents as leaving the process unusable (driver_types.h: "the process must be
+/// terminated and relaunched"): every later CUDA call fails too.
+constexpr bool is_sticky(const cudaError_t error)
+{
+  switch (error)
   {
-    std::stringstream ss;
-    ss << "CUDA Runtime Error at: " << file << ":" << line << '\n';
-    ss << cudaGetErrorString(err) << " " << func << '\n';
-    throw std::runtime_error(ss.str());
+  case cudaErrorIllegalAddress:
+  case cudaErrorLaunchTimeout:
+  case cudaErrorAssert:
+  case cudaErrorHardwareStackError:
+  case cudaErrorIllegalInstruction:
+  case cudaErrorMisalignedAddress:
+  case cudaErrorInvalidAddressSpace:
+  case cudaErrorInvalidPc:
+  case cudaErrorLaunchFailure:
+  case cudaErrorMpsClientTerminated:
+  case cudaErrorExternalDevice:
+    return true;
+  default:
+    return false;
   }
 }
 
-inline void checkLast(char const *file, int line)
+inline void check(const cudaError_t error, const char *const expression, const char *const file, const int line)
 {
-  cudaError_t const err{cudaGetLastError()};
-  if (err != cudaSuccess)
+  if (error != cudaSuccess)
   {
-    std::stringstream ss;
-    ss << "CUDA Runtime Error at: " << file << ":" << line << '\n';
-    ss << cudaGetErrorString(err) << '\n';
-    throw std::runtime_error(ss.str());
+    throw GpuError{error, std::string{file} + ":" + std::to_string(line) + ": " + expression + " failed: " +
+                              cudaGetErrorName(error) + ": " + cudaGetErrorString(error) +
+                              (is_sticky(error) ? " (the CUDA context is unusable: restart the process)" : "")};
   }
 }
-} // namespace breifast::gpu::detail
+} // namespace detail
+} // namespace breifast::gpu
 
-#define CHECK_GPU_ERROR(val) ::breifast::gpu::detail::check((val), #val, __FILE__, __LINE__)
-#define CHECK_LAST_GPU_ERROR() ::breifast::gpu::detail::checkLast(__FILE__, __LINE__)
+/// Throws GpuError when `expression`, a CUDA runtime call, does not return cudaSuccess. Kernel launches are checked
+/// with CHECK_GPU(cudaGetLastError()).
+#define CHECK_GPU(expression) ::breifast::gpu::detail::check((expression), #expression, __FILE__, __LINE__)
 
 #define gpuMemcpyHostToDeviceAsync(dst, src, size, stream)                                                             \
-  CHECK_GPU_ERROR(cudaMemcpyAsync(dst, src, size, cudaMemcpyHostToDevice, stream))
+  CHECK_GPU(cudaMemcpyAsync(dst, src, size, cudaMemcpyHostToDevice, stream))
 #define gpuMemcpyDeviceToHostAsync(dst, src, size, stream)                                                             \
-  CHECK_GPU_ERROR(cudaMemcpyAsync(dst, src, size, cudaMemcpyDeviceToHost, stream))
-#define gpuMemsetAsync(ptr, value, size, stream) CHECK_GPU_ERROR(cudaMemsetAsync(ptr, value, size, stream))
-#define gpuStreamCreate(stream) CHECK_GPU_ERROR(cudaStreamCreate(stream))
-#define gpuStreamDestroy(stream) CHECK_GPU_ERROR(cudaStreamDestroy(stream))
-#define gpuStreamSynchronize(stream) CHECK_GPU_ERROR(cudaStreamSynchronize(stream))
+  CHECK_GPU(cudaMemcpyAsync(dst, src, size, cudaMemcpyDeviceToHost, stream))
+#define gpuMemsetAsync(ptr, value, size, stream) CHECK_GPU(cudaMemsetAsync(ptr, value, size, stream))
+#define gpuStreamCreate(stream) CHECK_GPU(cudaStreamCreate(stream))
+#define gpuStreamDestroy(stream) CHECK_GPU(cudaStreamDestroy(stream))
+#define gpuStreamSynchronize(stream) CHECK_GPU(cudaStreamSynchronize(stream))

@@ -40,6 +40,6 @@ void gpu_any_true(const bool *values, const size_t n, int *out_any, GpuStream st
   const dim3 grid_size = {static_cast<unsigned int>((n + block_dim - 1) / block_dim)};
   gpuMemsetAsync(out_any, 0, sizeof(*out_any), stream);
   any_true_kernel<<<grid_size, block_size, 0, stream>>>(values, n, out_any);
-  CHECK_LAST_GPU_ERROR();
+  CHECK_GPU(cudaGetLastError());
 }
 } // namespace breifast::gpu

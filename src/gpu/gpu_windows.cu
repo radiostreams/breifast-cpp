@@ -139,6 +139,6 @@ void gpu_compact_mask(const bool *const mask, const size_t n, size_t *const out_
   const dim3 block_size = {threads};
   const dim3 grid_size = {static_cast<unsigned int>((n + threads - 1) / threads)};
   compact_mask_kernel<<<grid_size, block_size, 0, stream>>>(mask, n, out_indices, out_count, scratch);
-  CHECK_LAST_GPU_ERROR();
+  CHECK_GPU(cudaGetLastError());
 }
 } // namespace breifast::gpu

@@ -68,7 +68,7 @@ template <typename... Params, typename... Args>
 void launch(void (*kernel)(Params...), unsigned int grid, unsigned int block, cudaStream_t stream, Args &&...args)
 {
   kernel<<<grid, block, 0, stream>>>(std::forward<Args>(args)...);
-  CHECK_LAST_GPU_ERROR();
+  CHECK_GPU(cudaGetLastError());
 }
 
 /// One thread per element of [0, n).

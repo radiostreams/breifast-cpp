@@ -184,18 +184,18 @@ void gpu_label_islands(const bool *const mask, const size_t n_y, const size_t n_
   launch_per_element(init_labels_kernel, n, stream, mask, n, labels);
 
   int device = 0;
-  CHECK_GPU_ERROR(cudaGetDevice(&device));
+  CHECK_GPU(cudaGetDevice(&device));
   int cooperative_launch = 0;
-  CHECK_GPU_ERROR(cudaDeviceGetAttribute(&cooperative_launch, cudaDevAttrCooperativeLaunch, device));
+  CHECK_GPU(cudaDeviceGetAttribute(&cooperative_launch, cudaDevAttrCooperativeLaunch, device));
   if (cooperative_launch == 0)
   {
     throw std::runtime_error("gpu_label_islands: device does not support cooperative launch");
   }
 
   int multiprocessor_count = 0;
-  CHECK_GPU_ERROR(cudaDeviceGetAttribute(&multiprocessor_count, cudaDevAttrMultiProcessorCount, device));
+  CHECK_GPU(cudaDeviceGetAttribute(&multiprocessor_count, cudaDevAttrMultiProcessorCount, device));
   int blocks_per_multiprocessor = 0;
-  CHECK_GPU_ERROR(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+  CHECK_GPU(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
       &blocks_per_multiprocessor, reinterpret_cast<const void *>(converge_labels_kernel),
       static_cast<int>(block_size), 0));
   const size_t max_cooperative_blocks =
@@ -220,7 +220,7 @@ void gpu_label_islands(const bool *const mask, const size_t n_y, const size_t n_
   unsigned int *labels_arg = labels;
   unsigned int *changed_arg = thrust::raw_pointer_cast(changed.data());
   void *converge_args[] = {&mask_arg, &n_y_arg, &n_x_arg, &labels_arg, &changed_arg};
-  CHECK_GPU_ERROR(cudaLaunchCooperativeKernel(reinterpret_cast<void *>(converge_labels_kernel), cooperative_grid,
+  CHECK_GPU(cudaLaunchCooperativeKernel(reinterpret_cast<void *>(converge_labels_kernel), cooperative_grid,
                                               dim3(block_size), converge_args, 0, stream));
 
   launch_per_element(mark_roots_kernel, n, stream, n, labels, scratch);
