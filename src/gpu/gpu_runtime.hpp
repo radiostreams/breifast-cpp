@@ -165,11 +165,15 @@ public:
     }
   }
 
-  /// Grows to at least n elements and copies `host[0, n)` into the first n.
-  void assign(const T *host, std::size_t n)
+  /// Grows to at least n elements and copies `host[0, n)` into the first n, on `stream`: the work queued on `stream`
+  /// after this call sees the data. `host` may be freed once the call returns: a pageable source is staged by then.
+  void assign(const T *host, std::size_t n, cudaStream_t stream)
   {
     ensure(n);
-    upload(host, n);
+    if (n > 0)
+    {
+      CHECK_GPU(cudaMemcpyAsync(data(), host, n * sizeof(T), cudaMemcpyHostToDevice, stream));
+    }
   }
 
   T *data() noexcept { return data_.get(); }

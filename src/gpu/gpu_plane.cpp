@@ -70,17 +70,18 @@ float beam_kernel_sum(const float *kernel, long halfsize)
   return xt::sum(xt::adapt(kernel, side * side, xt::no_ownership(), std::array<std::size_t, 2>{side, side}))();
 }
 
-/// Copies `array` into `buffer`, growing it if needed, and returns the device pointer.
-template <typename T, typename Array> T *upload(DeviceVector<T> &buffer, const Array &array)
+/// Copies `array` into `buffer` on `stream`, growing it if needed, and returns the device pointer.
+template <typename T, typename Array> T *upload(DeviceVector<T> &buffer, const Array &array, cudaStream_t stream)
 {
-  buffer.assign(array.data(), array.size());
+  buffer.assign(array.data(), array.size(), stream);
   return buffer.data();
 }
 
 /// Same for an optional input: null when it is absent.
-template <typename T, typename Array> T *upload(DeviceVector<T> &buffer, const std::optional<Array> &array)
+template <typename T, typename Array>
+T *upload(DeviceVector<T> &buffer, const std::optional<Array> &array, cudaStream_t stream)
 {
-  return array ? upload(buffer, *array) : nullptr;
+  return array ? upload(buffer, *array, stream) : nullptr;
 }
 
 /// Spectral variance moments of the slot's cube, after the bands, as the CPU compute_spectral_variance_stats computes
@@ -89,7 +90,7 @@ SpectralVarianceStats spectral_variance_stats(GpuSlot &slot, const GpuPlaneInput
 {
   assert(plane.n_channels <= static_cast<std::size_t>(std::numeric_limits<int>::max()));
   const std::size_t n_pixels = plane.n_pixels();
-  const bool *const nonzero_channels = upload(slot.inputs.nonzero_channels, item.nonzero_channels);
+  const bool *const nonzero_channels = upload(slot.inputs.nonzero_channels, item.nonzero_channels, slot.stream);
   slot.sum_pow2.ensure(n_pixels);
   slot.sum_pow3.ensure(n_pixels);
   slot.sum_pow4.ensure(n_pixels);
@@ -117,20 +118,18 @@ ProcessPlaneResult gpu_process_plane(GpuSlot &slot, const PlaneBatchItem &item, 
   const std::size_t n_y = item.stokes_cube.shape(1);
   const std::size_t n_x = item.stokes_cube.shape(2);
 
-  // The uploads run on the default stream, which the slot's stream does not wait for: it must be idle.
-  slot.stream.synchronize();
   auto &inputs = slot.inputs;
   const GpuPlaneInput plane{
-      .cube = upload(inputs.cube, item.stokes_cube),
-      .weights = upload(inputs.weights, item.weights),
-      .accept_mask = upload(inputs.accept_mask, group.accept_mask),
-      .mean_image = config.subtract_mean ? upload(inputs.mean_image, group.mean_image) : nullptr,
-      .selfnoise_offset = upload(inputs.selfnoise_offset, group.selfnoise_offset),
-      .selfnoise_raw = upload(inputs.selfnoise_raw, group.selfnoise_raw),
-      .dde_noise = upload(inputs.dde_noise, group.dde_noise),
-      .snr_cutoff = upload(inputs.snr_cutoff, group.snr_cutoff),
-      .flux_cutoff = upload(inputs.flux_cutoff, group.flux_cutoff),
-      .baseline_flux = upload(inputs.baseline_flux, config.baseline_flux),
+      .cube = upload(inputs.cube, item.stokes_cube, slot.stream),
+      .weights = upload(inputs.weights, item.weights, slot.stream),
+      .accept_mask = upload(inputs.accept_mask, group.accept_mask, slot.stream),
+      .mean_image = config.subtract_mean ? upload(inputs.mean_image, group.mean_image, slot.stream) : nullptr,
+      .selfnoise_offset = upload(inputs.selfnoise_offset, group.selfnoise_offset, slot.stream),
+      .selfnoise_raw = upload(inputs.selfnoise_raw, group.selfnoise_raw, slot.stream),
+      .dde_noise = upload(inputs.dde_noise, group.dde_noise, slot.stream),
+      .snr_cutoff = upload(inputs.snr_cutoff, group.snr_cutoff, slot.stream),
+      .flux_cutoff = upload(inputs.flux_cutoff, group.flux_cutoff, slot.stream),
+      .baseline_flux = upload(inputs.baseline_flux, config.baseline_flux, slot.stream),
       .n_y = n_y,
       .n_x = n_x,
       .n_channels = n_channels,
@@ -160,7 +159,7 @@ ProcessPlaneResult gpu_process_plane(GpuSlot &slot, const PlaneBatchItem &item, 
         .start = slice->start,
         .stop = slice->stop,
         .selfnoise_scale_factor = slice->selfnoise_scale_factor,
-        .beam_kernel = upload(inputs.beam_kernel, beam.kernel),
+        .beam_kernel = upload(inputs.beam_kernel, beam.kernel, slot.stream),
         .beam_halfsize = beam_halfsize,
         .beam_kernel_sum = beam.kernel ? beam_kernel_sum(beam.kernel->data(), beam_halfsize) : 0.F,
     };
