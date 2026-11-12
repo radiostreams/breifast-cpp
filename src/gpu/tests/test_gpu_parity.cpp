@@ -484,10 +484,9 @@ TEST_CASE("CPU writes the SNR of single-channel bands back into the cube", "[par
   CHECK(after(3, 30, 40) == before(3, 30, 40));
 }
 
-// Known GPU bug: the GPU neither writes the SNR back nor computes the spectral variance stats after the bands, so the
-// wide band's detections and the variance stats differ from the CPU. Remove [!shouldfail] when the refactor fixes it
-// (gpu-refactor-plan.md, step 15).
-TEST_CASE("GPU parity when a wide band follows single-channel bands", "[gpu][parity][!shouldfail]")
+// The single-channel bands write their SNR into the cube, which the wide band processed after them and the spectral
+// variance stats then read, on the GPU as on the CPU.
+TEST_CASE("GPU parity when a wide band follows single-channel bands", "[gpu][parity]")
 {
   auto fixture = make_structured_fixture(true);
   fixture.config.band_slices = write_back_bands();

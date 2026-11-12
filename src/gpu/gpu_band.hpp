@@ -20,7 +20,7 @@ namespace breifast::gpu
 /// and the plane-wide settings.
 struct GpuPlaneInput
 {
-  const float *cube = nullptr;             ///< [n_channels, n_y, n_x]
+  float *cube = nullptr; ///< [n_channels, n_y, n_x]; a single-channel band writes its SNR into its channel
   const float *weights = nullptr;          ///< [n_channels]
   const bool *accept_mask = nullptr;       ///< [n_channels, n_y, n_x]
   const float *mean_image = nullptr;       ///< [n_channels, n_y, n_x]; null unless the mean is subtracted

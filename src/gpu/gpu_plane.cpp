@@ -102,14 +102,14 @@ float beam_kernel_sum(const float *kernel, long halfsize)
 }
 
 /// Copies `array` into `buffer`, growing it if needed, and returns the device pointer.
-template <typename T, typename Array> const T *upload(DeviceVector<T> &buffer, const Array &array)
+template <typename T, typename Array> T *upload(DeviceVector<T> &buffer, const Array &array)
 {
   buffer.assign(array.data(), array.size());
   return buffer.data();
 }
 
 /// Same for an optional input: null when it is absent.
-template <typename T, typename Array> const T *upload(DeviceVector<T> &buffer, const std::optional<Array> &array)
+template <typename T, typename Array> T *upload(DeviceVector<T> &buffer, const std::optional<Array> &array)
 {
   return array ? upload(buffer, *array) : nullptr;
 }
@@ -151,13 +151,6 @@ ProcessPlaneResult gpu_process_plane(GpuSlot &slot, const PlaneBatchItem &item, 
   };
 
   ProcessPlaneResult result;
-  if (n_channels > 1)
-  {
-    const bool *const nonzero_channels = upload(inputs.nonzero_channels, item.nonzero_channels);
-    result.variance_stats =
-        gpu_compute_spectral_variance_stats(plane.cube, nonzero_channels, n_y, n_x, n_channels, slot.stream);
-  }
-
   // Same order as the CPU process_plane: the last band first.
   const bool *const nonzero = item.nonzero_channels.data();
   for (auto slice = config.band_slices.rbegin(); slice != config.band_slices.rend(); ++slice)
@@ -183,6 +176,14 @@ ProcessPlaneResult gpu_process_plane(GpuSlot &slot, const PlaneBatchItem &item, 
     copy_band_result(slot.result, slot.host, slot.stream);
     append_band_result(slot.host, {item.stokes_label, slice->label}, plane.max_to_std_ratio,
                        config.use_rms_noise_estimator, result);
+  }
+
+  // After the bands, as on the CPU: the single-channel bands have written their SNR into the cube.
+  if (n_channels > 1)
+  {
+    const bool *const nonzero_channels = upload(inputs.nonzero_channels, item.nonzero_channels);
+    result.variance_stats =
+        gpu_compute_spectral_variance_stats(plane.cube, nonzero_channels, n_y, n_x, n_channels, slot.stream);
   }
   return result;
 }

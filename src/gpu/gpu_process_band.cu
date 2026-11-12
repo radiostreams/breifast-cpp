@@ -112,6 +112,14 @@ bool gpu_process_band(const GpuPlaneInput &plane, const GpuBand &band, GpuBandWo
                       n_pixels, params, workspace.snr, workspace.mask, result.histogram0, result.histogram1,
                       result.histogram2, result.min_sigma, result.max_sigma, stream);
 
+  // As on the CPU: a single-channel band of a multi-channel plane writes its SNR into its channel of the cube, which
+  // the bands after it and the spectral variance stats then read.
+  if (band.stop - band.start == 1 && plane.n_channels > 1)
+  {
+    CHECK_GPU(cudaMemcpyAsync(plane.cube + band.start * n_pixels, workspace.snr, n_pixels * sizeof(float),
+                              cudaMemcpyDeviceToDevice, stream));
+  }
+
   // An empty mask labels no island, so the count also tells whether anything passed the filters.
   gpu_label_islands(workspace.mask, plane.n_y, plane.n_x, workspace.labels, workspace.label_count,
                     workspace.label_scratch, stream);
