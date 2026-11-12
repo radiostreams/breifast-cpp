@@ -51,3 +51,16 @@ test_gpu_parity = executable('test_gpu_parity',
                 '-Wl,-rpath,' + tbb_install_dir / 'lib64', '-Wl,-rpath,' + tbb_install_dir / 'lib'],
 )
 test('gpu_parity', test_gpu_parity)
+
+# bench.cpp with its GPU path: replays a lot natively, without Python, for profiling (ncu, nsys).
+bench_gpu = executable('bench_gpu',
+  ['../bench.cpp', cpu_source_files, tbb_build],
+  include_directories : gpu_include,
+  dependencies : [xtl_dep, xtensor_dep, xsimd_dep, tbb_dep, itt_dep, json_dep, cuda_headers_dep],
+  cpp_args : ['-DBREIFAST_BENCH_GPU'],
+  link_with : [gpu_lib, gpu_host_lib],
+  link_language : 'cpp',
+  link_args : ['-L' + cudart_libdir, '-lcudart_static', '-lrt', '-lpthread', '-ldl',
+               '-Wl,-rpath,' + tbb_install_dir / 'lib64', '-Wl,-rpath,' + tbb_install_dir / 'lib'],
+  build_by_default : false,
+)
