@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -144,6 +145,20 @@ TEST_CASE("validate_plane_inputs names the plane and the field of an inconsisten
       item.beam_position_angle = xt::xtensor<float, 1>::from_shape({n_channels});
     }
     check_rejects(batch, "plane 0: beam_minor_axis has shape (1), expected (2)");
+  }
+  SECTION("negative or non-finite Gaussian beam major axis")
+  {
+    batch.config.beam_size_enabled = true;
+    for (auto &item : batch.items)
+    {
+      item.beam_major_axis = xt::xtensor<float, 1>({1.F, 1.F});
+      item.beam_minor_axis = xt::xtensor<float, 1>({1.F, 1.F});
+      item.beam_position_angle = xt::xtensor<float, 1>({0.F, 0.F});
+    }
+    (*batch.items[1].beam_major_axis)(0) = -1.F;
+    check_rejects(batch, "plane 1: beam_major_axis has a negative or non-finite value");
+    (*batch.items[1].beam_major_axis)(0) = std::numeric_limits<float>::quiet_NaN();
+    check_rejects(batch, "plane 1: beam_major_axis has a negative or non-finite value");
   }
 }
 

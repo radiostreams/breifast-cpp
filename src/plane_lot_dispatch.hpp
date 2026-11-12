@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <limits>
 #include <mutex>
+#include <numeric>
 #include <optional>
 #include <ranges>
 #include <string>
@@ -216,6 +217,51 @@ struct LotBatch
   std::vector<PlaneBatchItem> planes;
   std::vector<PlaneBatchGroup> groups; // indexed by PlaneBatchItem::group_index
 };
+
+/// The beam of one band: its half size, and its kernel, empty when the beam is disabled.
+struct BeamKernel
+{
+  size_t halfsize = 0;
+  std::optional<xt::xtensor<float, 2>> kernel;
+};
+
+/// Half size and kernel of the beam for the band: the fixed kernel of the config, or a Gaussian built from the band's
+/// weighted beam axes. Both backends call it, so they use the same kernel.
+inline BeamKernel beam_kernel_for_band(const PlaneBatchItem &item, const BandSlice &band, const PlaneConfig &config)
+{
+  BeamKernel beam;
+  if (config.beam_size_enabled)
+  {
+    if (config.fixed_beam_kernel.has_value())
+    {
+      beam.halfsize = config.fixed_beam_halfsize;
+      beam.kernel = xt::xtensor<float, 2>(*config.fixed_beam_kernel);
+    }
+    else
+    {
+      float beam_kernel_halfsize_flt = 0.F;
+      for (auto i_channel = band.start; i_channel < band.stop; ++i_channel)
+      {
+        beam_kernel_halfsize_flt += (*item.beam_major_axis)(i_channel);
+      }
+      beam_kernel_halfsize_flt *= 3 / static_cast<float>(band.size());
+      beam.halfsize = static_cast<long>(beam_kernel_halfsize_flt) + 1;
+
+      // The band weights and their sum, computed as process_band computes them.
+      const xt::xtensor<float, 1> weights_sliced = xt::view(item.weights, band.xrange());
+      const float weights_sum = std::accumulate(weights_sliced.cbegin(), weights_sliced.cend(), 0.F);
+      const auto beam_major_sliced = xt::view(*item.beam_major_axis, band.xrange());
+      const auto beam_minor_sliced = xt::view(*item.beam_minor_axis, band.xrange());
+      const auto beam_position_angle_sliced = xt::view(*item.beam_position_angle, band.xrange());
+      const float beam_major_weighted = xt::sum(beam_major_sliced * weights_sliced)() / weights_sum;
+      const float beam_minor_weighted = xt::sum(beam_minor_sliced * weights_sliced)() / weights_sum;
+      const auto beam_position_angle_weighted = xt::sum(beam_position_angle_sliced * weights_sliced)() / weights_sum;
+      beam.kernel = build_gaussian_beam_kernel(beam.halfsize, beam_major_weighted, beam_minor_weighted,
+                                               beam_position_angle_weighted);
+    }
+  }
+  return beam;
+}
 
 struct ProcessBandScratch
 {

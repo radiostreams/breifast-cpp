@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <optional>
 #include <sstream>
@@ -123,6 +124,14 @@ void validate_plane_inputs(const std::vector<PlaneBatchItem> &items, const std::
       require_present(where, "beam_major_axis", item.beam_major_axis, channel_shape);
       require_present(where, "beam_minor_axis", item.beam_minor_axis, channel_shape);
       require_present(where, "beam_position_angle", item.beam_position_angle, channel_shape);
+      // A band's beam half size is int(3 * mean(beam_major_axis)) + 1: undefined for a non-finite value, and negative,
+      // so meaningless as a size, for negative ones.
+      const auto &major = *item.beam_major_axis;
+      if (!std::all_of(major.cbegin(), major.cend(),
+                       [](const float value) { return std::isfinite(value) && value >= 0.F; }))
+      {
+        fail(where + "beam_major_axis has a negative or non-finite value");
+      }
     }
 
     require_shape(where, "accept_mask", group.accept_mask, cube_shape);

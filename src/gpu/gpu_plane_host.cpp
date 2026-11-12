@@ -4,16 +4,13 @@
 #include <functional>
 #include <limits>
 #include <optional>
-#include <string>
-#include <utility>
 #include <vector>
 
 #include <xtensor/containers/xadapt.hpp>
 #include <xtensor/core/xmath.hpp>
 
-#include "cpu/beam_kernel.hpp"
+#include "gpu_plane_detections.hpp"
 #include "gpu_plane_integration.hpp"
-#include "gpu_plane_jobs.hpp"
 #include "gpu_spectral_variance.hpp"
 
 namespace breifast::gpu
@@ -97,60 +94,87 @@ breifast::SpectralVarianceStats gpu_compute_spectral_variance_stats(const float 
   return assemble_spectral_variance_stats(host, n_y, n_x, n_channels);
 }
 
-std::vector<float> build_gaussian_beam_kernel_vector(long halfsize, float sigma_major, float sigma_minor, float rotate)
+namespace
 {
-  const auto kernel = breifast::build_gaussian_beam_kernel(halfsize, sigma_major, sigma_minor, rotate);
-  return std::vector<float>(kernel.begin(), kernel.end());
-}
-
+/// Sum of a (2 * halfsize + 1)^2 beam kernel, with the same xtensor expression as the CPU stamp_beam_chi2, so that both
+/// backends divide by the same float.
 float beam_kernel_sum(const float *kernel, long halfsize)
 {
   const auto side = static_cast<std::size_t>(2 * halfsize + 1);
   return xt::sum(xt::adapt(kernel, side * side, xt::no_ownership(), std::array<std::size_t, 2>{side, side}))();
 }
 
+/// Device copies of one plane's inputs; an absent optional input stays empty.
+struct GpuPlaneBuffers
+{
+  DeviceVector<float> cube;
+  DeviceVector<float> weights;
+  DeviceVector<bool> nonzero_channels;
+  DeviceVector<bool> accept_mask;
+  DeviceVector<float> selfnoise_offset;
+  DeviceVector<float> selfnoise_raw;
+  DeviceVector<float> dde_noise;
+  std::optional<DeviceVector<float>> mean_image;
+  std::optional<DeviceVector<float>> snr_cutoff;
+  std::optional<DeviceVector<float>> flux_cutoff;
+  std::optional<DeviceVector<float>> baseline_flux;
+};
+
+template <typename Array> auto to_device(const Array &array)
+{
+  return DeviceVector<typename Array::value_type>::from_host(array.data(), array.size());
+}
+
+template <typename Array> auto to_device(const std::optional<Array> &array)
+{
+  std::optional<DeviceVector<typename Array::value_type>> vector;
+  if (array)
+  {
+    vector = to_device(*array);
+  }
+  return vector;
+}
+
+template <typename T> const T *data_or_null(const std::optional<DeviceVector<T>> &vector)
+{
+  return vector ? vector->data() : nullptr;
+}
+} // namespace
+
 ProcessPlaneResult gpu_process_plane_batch(const PlaneBatchItem &item, const PlaneBatchGroup &group,
                                            const PlaneConfig &config)
 {
+  const std::size_t n_channels = item.stokes_cube.shape(0);
   const std::size_t n_y = item.stokes_cube.shape(1);
   const std::size_t n_x = item.stokes_cube.shape(2);
-  const std::size_t n_channels = item.stokes_cube.shape(0);
 
-  std::vector<GpuBandSpec> bands;
-  bands.reserve(config.band_slices.size());
-  for (const auto &band : config.band_slices)
-  {
-    bands.push_back({band.start, band.stop, band.selfnoise_scale_factor, band.label});
-  }
-
-  std::vector<float> fixed_beam_storage;
-  if (config.beam_size_enabled && config.fixed_beam_kernel)
-  {
-    fixed_beam_storage.assign(config.fixed_beam_kernel->begin(), config.fixed_beam_kernel->end());
-  }
-
-  const GpuPlaneJobSpec spec{
-      .cube = item.stokes_cube.data(),
-      .weights = item.weights.data(),
-      .nonzero_channels = item.nonzero_channels.data(),
-      .accept_mask = group.accept_mask.data(),
-      .mean_image = group.mean_image ? group.mean_image->data() : nullptr,
-      .selfnoise_offset = group.selfnoise_offset.data(),
-      .selfnoise_raw = group.selfnoise_raw.data(),
-      .dde_noise = group.dde_noise.data(),
-      .snr_cutoff = group.snr_cutoff ? group.snr_cutoff->data() : nullptr,
-      .flux_cutoff = group.flux_cutoff ? group.flux_cutoff->data() : nullptr,
-      .baseline_flux = config.baseline_flux ? config.baseline_flux->data() : nullptr,
-      .beam_major_axis = item.beam_major_axis ? item.beam_major_axis->data() : nullptr,
-      .beam_minor_axis = item.beam_minor_axis ? item.beam_minor_axis->data() : nullptr,
-      .beam_position_angle = item.beam_position_angle ? item.beam_position_angle->data() : nullptr,
-      .fixed_beam_kernel = fixed_beam_storage.empty() ? nullptr : fixed_beam_storage.data(),
-      .stokes_label = item.stokes_label,
-      .bands = std::move(bands),
+  const GpuPlaneBuffers buffers{
+      .cube = to_device(item.stokes_cube),
+      .weights = to_device(item.weights),
+      .nonzero_channels = to_device(item.nonzero_channels),
+      .accept_mask = to_device(group.accept_mask),
+      .selfnoise_offset = to_device(group.selfnoise_offset),
+      .selfnoise_raw = to_device(group.selfnoise_raw),
+      .dde_noise = to_device(group.dde_noise),
+      .mean_image = config.subtract_mean ? to_device(group.mean_image) : std::nullopt,
+      .snr_cutoff = to_device(group.snr_cutoff),
+      .flux_cutoff = to_device(group.flux_cutoff),
+      .baseline_flux = to_device(config.baseline_flux),
+  };
+  const GpuPlaneInput plane{
+      .cube = buffers.cube.data(),
+      .weights = buffers.weights.data(),
+      .accept_mask = buffers.accept_mask.data(),
+      .mean_image = data_or_null(buffers.mean_image),
+      .selfnoise_offset = buffers.selfnoise_offset.data(),
+      .selfnoise_raw = buffers.selfnoise_raw.data(),
+      .dde_noise = buffers.dde_noise.data(),
+      .snr_cutoff = data_or_null(buffers.snr_cutoff),
+      .flux_cutoff = data_or_null(buffers.flux_cutoff),
+      .baseline_flux = data_or_null(buffers.baseline_flux),
       .n_y = n_y,
       .n_x = n_x,
       .n_channels = n_channels,
-      .fixed_beam_halfsize = config.fixed_beam_halfsize,
       .boxsize = config.boxsize,
       .inner_boxsize = config.inner_boxsize,
       .histogram_detail = config.histogram_detail,
@@ -158,41 +182,51 @@ ProcessPlaneResult gpu_process_plane_batch(const PlaneBatchItem &item, const Pla
       .ddenoise_scaling_factor = config.ddenoise_scaling_factor,
       .reject_noise_threshold = config.reject_noise_threshold,
       .threshold = config.threshold,
-      .max_to_std_ratio_value = config.max_to_std_ratio_value(),
+      .max_to_std_ratio = config.max_to_std_ratio_value(),
       .use_rms_noise_estimator = config.use_rms_noise_estimator,
-      .subtract_mean = config.subtract_mean,
-      .beam_size_enabled = config.beam_size_enabled,
   };
-
-  GpuPlaneJobs plane_jobs(spec);
 
   ProcessPlaneResult result;
   if (n_channels > 1)
   {
     result.variance_stats =
-        gpu_compute_spectral_variance_stats(plane_jobs.cube, plane_jobs.nonzero_channels, n_y, n_x, n_channels);
+        gpu_compute_spectral_variance_stats(buffers.cube, buffers.nonzero_channels, n_y, n_x, n_channels);
   }
 
   // Same order as the CPU process_plane: the last band first.
   const Stream stream;
   GpuBandHostResult host;
-  for (std::size_t i = plane_jobs.band_inputs.size(); i-- > 0;)
+  const bool *const nonzero = item.nonzero_channels.data();
+  for (auto slice = config.band_slices.rbegin(); slice != config.band_slices.rend(); ++slice)
   {
-    const auto &input = plane_jobs.band_inputs[i];
-    const bool *const nonzero = item.nonzero_channels.data();
-    if (std::none_of(nonzero + input.band_start, nonzero + input.band_stop, std::identity{}))
+    if (std::none_of(nonzero + slice->start, nonzero + slice->stop, std::identity{}))
     {
       continue;
     }
-    GpuBandWorkspace workspace(plane_jobs.band_workspace_sizes[i]); // allocated per band, as before, until 13b
-    GpuBandResult band_result(n_y * n_x, plane_jobs.histogram_bins);
-    if (!gpu_process_band(input, workspace, band_result, stream.get()))
+    const auto beam = beam_kernel_for_band(item, *slice, config);
+    std::optional<DeviceVector<float>> beam_kernel;
+    if (beam.kernel)
+    {
+      beam_kernel = to_device(*beam.kernel);
+    }
+    const auto beam_halfsize = static_cast<long>(beam.halfsize);
+    const GpuBand band{
+        .start = slice->start,
+        .stop = slice->stop,
+        .selfnoise_scale_factor = slice->selfnoise_scale_factor,
+        .beam_kernel = data_or_null(beam_kernel),
+        .beam_halfsize = beam_halfsize,
+        .beam_kernel_sum = beam.kernel ? beam_kernel_sum(beam.kernel->data(), beam_halfsize) : 0.F,
+    };
+    GpuBandWorkspace workspace(band_workspace_sizes(plane, band)); // allocated per band, as before, until 13c
+    GpuBandResult band_result(plane.n_pixels(), band_workspace_sizes(plane, band).histogram_bins);
+    if (!gpu_process_band(plane, band, workspace, band_result, stream.get()))
     {
       continue;
     }
     copy_band_result(band_result, host, stream.get());
-    append_band_result(host, plane_jobs.labels[i], plane_jobs.max_to_std_ratio_value,
-                       plane_jobs.use_rms_noise_estimator, result);
+    append_band_result(host, {item.stokes_label, slice->label}, plane.max_to_std_ratio, config.use_rms_noise_estimator,
+                       result);
   }
   return result;
 }

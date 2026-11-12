@@ -173,50 +173,6 @@ NoiseStage noise_stage(ProcessBandScratch &scratch, const PlaneBatchGroup &group
   return {median_noise, rms_floor};
 }
 
-struct BeamKernel
-{
-  size_t halfsize = 0;
-  std::optional<xt::xtensor<float, 2>> kernel; ///< empty when the beam is disabled
-};
-
-/// Half size and kernel of the beam for the band: the fixed kernel of the config, or a Gaussian built from the band's
-/// weighted beam axes.
-BeamKernel beam_kernel_for_band(const PlaneBatchItem &item, const BandSlice &band, const PlaneConfig &config,
-                                const BandScalars &scalars)
-{
-  BeamKernel beam;
-  if (config.beam_size_enabled)
-  {
-    if (config.fixed_beam_kernel.has_value())
-    {
-      beam.halfsize = config.fixed_beam_halfsize;
-      beam.kernel = xt::xtensor<float, 2>(*config.fixed_beam_kernel);
-    }
-    else
-    {
-      float beam_kernel_halfsize_flt = 0.F;
-      for (auto i_channel = band.start; i_channel < band.stop; ++i_channel)
-      {
-        beam_kernel_halfsize_flt += (*item.beam_major_axis)(i_channel);
-      }
-      beam_kernel_halfsize_flt *= 3 / static_cast<float>(band.size());
-      beam.halfsize = static_cast<long>(beam_kernel_halfsize_flt) + 1;
-
-      const auto &weights_sliced = scalars.weights_sliced;
-      const auto weights_sum = scalars.weights_sum;
-      const auto beam_major_sliced = xt::view(*item.beam_major_axis, band.xrange());
-      const auto beam_minor_sliced = xt::view(*item.beam_minor_axis, band.xrange());
-      const auto beam_position_angle_sliced = xt::view(*item.beam_position_angle, band.xrange());
-      const float beam_major_weighted = xt::sum(beam_major_sliced * weights_sliced)() / weights_sum;
-      const float beam_minor_weighted = xt::sum(beam_minor_sliced * weights_sliced)() / weights_sum;
-      const auto beam_position_angle_weighted = xt::sum(beam_position_angle_sliced * weights_sliced)() / weights_sum;
-      beam.kernel = build_gaussian_beam_kernel(beam.halfsize, beam_major_weighted, beam_minor_weighted,
-                                               beam_position_angle_weighted);
-    }
-  }
-  return beam;
-}
-
 /// The per-island quantities that the detection record needs besides the peak, the island size and the noise maps.
 struct IslandStatistics
 {
@@ -340,7 +296,7 @@ inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, cons
     return;
   }
 
-  const auto beam = beam_kernel_for_band(item, band, config, scalars);
+  const auto beam = beam_kernel_for_band(item, band, config);
 
   breifast::islands::label_islands(scratch.islands, image_mask, scratch.snr, noise_map);
 

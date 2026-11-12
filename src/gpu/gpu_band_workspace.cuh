@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 
@@ -10,61 +11,52 @@ namespace breifast::gpu
 {
 inline constexpr std::size_t max_stamp_capacity = 4096;
 
-struct GpuBandInputSizes
+/// The inputs every band of a plane shares, built once per plane: device pointers (null for an absent optional input)
+/// and the plane-wide settings.
+struct GpuPlaneInput
 {
-  std::size_t cube = 0;
-  std::size_t weights = 0;
-  std::size_t nonzero_channels = 0;
-  std::size_t accept_mask = 0;
-  std::size_t mean_image = 0;
-  std::size_t selfnoise_offset = 0;
-  std::size_t selfnoise_raw = 0;
-  std::size_t dde_noise = 0;
-  std::size_t snr_cutoff = 0;
-  std::size_t flux_cutoff = 0;
-  std::size_t baseline_flux = 0;
-  std::size_t beam_kernel = 0;
-};
-
-struct GpuBandInput
-{
-  GpuBandInputSizes sizes{};
-  const float *cube = nullptr;
-  const float *weights = nullptr;
-  const bool *nonzero_channels = nullptr;
-  const float *mean_image = nullptr;
-  const bool *accept_mask = nullptr;
-  const float *selfnoise_offset = nullptr;
-  const float *selfnoise_raw = nullptr;
-  const float *dde_noise = nullptr;
-  const float *snr_cutoff = nullptr;
-  const float *flux_cutoff = nullptr;
-  const float *baseline_flux = nullptr;
-  const float *beam_kernel = nullptr;
+  const float *cube = nullptr;             ///< [n_channels, n_y, n_x]
+  const float *weights = nullptr;          ///< [n_channels]
+  const bool *accept_mask = nullptr;       ///< [n_channels, n_y, n_x]
+  const float *mean_image = nullptr;       ///< [n_channels, n_y, n_x]; null unless the mean is subtracted
+  const float *selfnoise_offset = nullptr; ///< [n_y, n_x]
+  const float *selfnoise_raw = nullptr;    ///< [n_y, n_x]
+  const float *dde_noise = nullptr;        ///< [n_y, n_x]
+  const float *snr_cutoff = nullptr;       ///< [n_channels, n_y, n_x], optional
+  const float *flux_cutoff = nullptr;      ///< [n_channels, n_y, n_x], optional
+  const float *baseline_flux = nullptr;    ///< [n_y, n_x], optional
 
   std::size_t n_y = 0;
   std::size_t n_x = 0;
-  std::size_t n_pixels = 0;
   std::size_t n_channels = 0;
 
-  long band_start = 0;
-  long band_stop = 0;
   long boxsize = 0;
   long inner_boxsize = 0;
-  long beam_halfsize = 0;
   long histogram_detail = 0;
-  long max_sigma_bin = 200;
+  long max_sigma_bin = 0;
 
-  float selfnoise_scale_factor = 1.F;
-  float inv_band_size = 1.F;
   float ddenoise_scaling_factor = 1.F;
   float reject_noise_threshold = 0.F;
   float threshold = 0.F;
-  float max_to_std_ratio_value = 0.F;
-  float beam_kernel_sum = 0.F;
+  float max_to_std_ratio = 0.F;
 
   bool use_rms_noise_estimator = false;
-  bool subtract_mean = false;
+
+  std::size_t n_pixels() const
+  {
+    return n_y * n_x;
+  }
+};
+
+/// What changes from one band of the plane to the next.
+struct GpuBand
+{
+  long start = 0;
+  long stop = 0;
+  float selfnoise_scale_factor = 1.F;
+  const float *beam_kernel = nullptr; ///< device, (2 * beam_halfsize + 1)^2; null when the beam is disabled
+  long beam_halfsize = 0;
+  float beam_kernel_sum = 0.F; ///< summed on the host, as the CPU does
 };
 
 struct GpuBandWorkspaceSizes
@@ -75,6 +67,20 @@ struct GpuBandWorkspaceSizes
   std::size_t beam_stamp_pixels = 0;
   std::size_t histogram_bins = 0;
 };
+
+/// The workspace a band needs.
+inline GpuBandWorkspaceSizes band_workspace_sizes(const GpuPlaneInput &plane, const GpuBand &band)
+{
+  const auto stamp_side = static_cast<std::size_t>(2 * (plane.boxsize / 2) + 1);
+  const auto beam_side = static_cast<std::size_t>(2 * band.beam_halfsize + 1);
+  return GpuBandWorkspaceSizes{
+      .n_pixels = plane.n_pixels(),
+      .stamp_capacity = std::min(plane.n_pixels(), max_stamp_capacity),
+      .stamp_pixels = stamp_side * stamp_side,
+      .beam_stamp_pixels = band.beam_kernel != nullptr ? beam_side * beam_side : 0,
+      .histogram_bins = static_cast<std::size_t>(2 * plane.max_sigma_bin),
+  };
+}
 
 /// Device scratch of gpu_median and gpu_median_abs: the 256-bin digit histogram, then the radix-select state (count
 /// below the prefix, prefix, coverage) and the largest key below the median.
