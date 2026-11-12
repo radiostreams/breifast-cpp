@@ -1,9 +1,6 @@
 #include "gpu_band_result.cuh"
 
-#include <algorithm>
 #include <cassert>
-#include <exception>
-#include <limits>
 
 #include "gpu_runtime.hpp"
 
@@ -157,89 +154,5 @@ void copy_band_result(const GpuBandResult &source, GpuBandHostResult &destinatio
   CHECK_GPU(cudaMemcpyAsync(&destination.global_mad, source.global_mad, sizeof(float), cudaMemcpyDeviceToHost, stream));
 
   CHECK_GPU(cudaStreamSynchronize(stream));
-}
-
-void copy_band_jobs(std::vector<GpuBandJob> &jobs, std::vector<GpuBandHostResult> &results)
-{
-  results.clear();
-  results.resize(jobs.size());
-
-  for (size_t i = 0; i < jobs.size(); ++i)
-  {
-    if (jobs[i].error != nullptr || jobs[i].status == GpuBandStatus::skipped)
-    {
-      continue;
-    }
-    copy_band_result(*jobs[i].result, results[i], jobs[i].stream.get());
-  }
-}
-
-void assemble_plane_bands(const std::vector<GpuBandStatus> &statuses,
-                          const std::vector<GpuBandHostResult> &bands, GpuPlaneHostResult &result)
-{
-  assert(statuses.size() == bands.size());
-
-  result.statuses = statuses;
-  result.bands = bands;
-  for (auto &histogram : result.histograms)
-  {
-    histogram.clear();
-  }
-  result.median_noises.clear();
-  result.min_sigma.reset();
-  result.max_sigma.reset();
-  bool histograms_set = false;
-
-  for (size_t i = 0; i < statuses.size(); ++i)
-  {
-    if (statuses[i] == GpuBandStatus::skipped)
-    {
-      continue;
-    }
-
-    if (!histograms_set)
-    {
-      result.histograms[0] = bands[i].histogram0;
-      result.histograms[1] = bands[i].histogram1;
-      result.histograms[2] = bands[i].histogram2;
-      histograms_set = true;
-    }
-
-    if (bands[i].min_sigma < std::numeric_limits<float>::infinity())
-    {
-      result.min_sigma = result.min_sigma ? std::min(*result.min_sigma, bands[i].min_sigma) : bands[i].min_sigma;
-      result.max_sigma = result.max_sigma ? std::max(*result.max_sigma, bands[i].max_sigma) : bands[i].max_sigma;
-    }
-  }
-
-  for (size_t i = statuses.size(); i > 0; --i)
-  {
-    const size_t band_index = i - 1;
-    if (statuses[band_index] == GpuBandStatus::skipped)
-    {
-      continue;
-    }
-    result.median_noises.push_back(bands[band_index].median_noise);
-  }
-}
-
-void gpu_process_plane(std::vector<GpuBandJob> &jobs, GpuPlaneHostResult &result)
-{
-  gpu_process_bands(jobs);
-
-  std::vector<GpuBandStatus> statuses;
-  statuses.reserve(jobs.size());
-  for (const auto &job : jobs)
-  {
-    if (job.error != nullptr)
-    {
-      std::rethrow_exception(job.error);
-    }
-    statuses.push_back(job.status);
-  }
-
-  std::vector<GpuBandHostResult> bands;
-  copy_band_jobs(jobs, bands);
-  assemble_plane_bands(statuses, bands, result);
 }
 } // namespace breifast::gpu

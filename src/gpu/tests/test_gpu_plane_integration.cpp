@@ -10,43 +10,56 @@ using namespace breifast;
 using Catch::Matchers::WithinAbs;
 using Catch::Matchers::WithinRel;
 
+namespace
+{
+constexpr std::size_t n_y = 3;
+constexpr std::size_t n_x = 4;
+constexpr std::size_t n_channels = 2;
+
+// A 2-channel 3x4 plane of ones, accepted at (0, 0) only, which yields one size-1 island there.
+struct Plane
+{
+  PlaneBatchItem item;
+  PlaneBatchGroup group;
+  PlaneConfig config;
+
+  Plane()
+  {
+    item.stokes_cube.resize({n_channels, n_y, n_x});
+    item.stokes_cube.fill(1.F);
+    item.weights = xt::xarray<float>({1.F, 1.F});
+    item.nonzero_channels = xt::xarray<bool>({true, true});
+    item.stokes_label = "I";
+
+    group.accept_mask.resize({n_channels, n_y, n_x});
+    group.accept_mask.fill(false);
+    group.accept_mask(0, 0, 0) = true;
+    group.selfnoise_offset.resize({n_y, n_x});
+    group.selfnoise_offset.fill(0.F);
+    group.selfnoise_raw.resize({n_y, n_x});
+    group.selfnoise_raw.fill(1.F);
+    group.dde_noise.resize({n_y, n_x});
+    group.dde_noise.fill(0.F);
+
+    config.subtract_mean = false;
+    config.use_rms_noise_estimator = true;
+    config.boxsize = 3;
+    config.inner_boxsize = 0;
+    config.histogram_detail = 1;
+    config.max_sigma_bin = 5;
+    config.threshold = 0.5F;
+    config.beam_size_enabled = false;
+    config.band_slices = {BandSlice{.start = 0, .stop = 2, .selfnoise_scale_factor = 1.F, .label = "band"}};
+  }
+};
+} // namespace
+
 TEST_CASE("gpu_process_plane_batch produces the expected plane result", "[gpu][integration]")
 {
-  constexpr std::size_t n_y = 3;
-  constexpr std::size_t n_x = 4;
-  constexpr std::size_t n_channels = 2;
-
-  PlaneBatchItem item;
-  item.stokes_cube.resize({n_channels, n_y, n_x});
-  item.stokes_cube.fill(1.F);
-  item.weights = xt::xarray<float>({1.F, 1.F});
-  item.nonzero_channels = xt::xarray<bool>({true, true});
-  item.stokes_label = "I";
-
-  PlaneBatchGroup group;
-  group.accept_mask.resize({n_channels, n_y, n_x});
-  group.accept_mask.fill(false);
-  group.accept_mask(0, 0, 0) = true;
-  group.selfnoise_offset.resize({n_y, n_x});
-  group.selfnoise_offset.fill(0.F);
-  group.selfnoise_raw.resize({n_y, n_x});
-  group.selfnoise_raw.fill(1.F);
-  group.dde_noise.resize({n_y, n_x});
-  group.dde_noise.fill(0.F);
-
-  PlaneConfig config;
-  config.subtract_mean = false;
-  config.use_rms_noise_estimator = true;
-  config.boxsize = 3;
-  config.inner_boxsize = 0;
-  config.histogram_detail = 1;
-  config.max_sigma_bin = 5;
-  config.threshold = 0.5F;
-  config.beam_size_enabled = false;
-  config.band_slices = {BandSlice{.start = 0, .stop = 2, .selfnoise_scale_factor = 1.F, .label = "band"}};
-
+  const Plane plane;
+  const auto &config = plane.config;
   const double expected_extended_box_snr = static_cast<double>(config.max_to_std_ratio_value());
-  const auto result = gpu::gpu_process_plane_batch(item, group, config);
+  const auto result = gpu::gpu_process_plane_batch(plane.item, plane.group, config);
 
   CHECK(result.any_data == false);
   REQUIRE(result.detections.size() == 1);
@@ -89,4 +102,20 @@ TEST_CASE("gpu_process_plane_batch produces the expected plane result", "[gpu][i
   REQUIRE(variance.nonzero_channels_mask.shape(0) == n_channels);
   CHECK(variance.nonzero_channels_mask(0) == true);
   CHECK(variance.nonzero_channels_mask(1) == true);
+}
+
+TEST_CASE("gpu_process_plane_batch skips a band with no nonzero channel", "[gpu][integration]")
+{
+  // The check is on the host: the band never reaches the GPU, so it adds no median noise, histogram or detection.
+  Plane plane;
+  plane.item.nonzero_channels = xt::xarray<bool>({false, false});
+  const auto result = gpu::gpu_process_plane_batch(plane.item, plane.group, plane.config);
+
+  CHECK(result.detections.size() == 0);
+  CHECK(result.median_noises.empty());
+  CHECK(result.histograms[0].empty());
+  CHECK(result.histograms[1].empty());
+  CHECK(result.histograms[2].empty());
+  CHECK(result.min_sigma.has_value() == false);
+  CHECK(result.max_sigma.has_value() == false);
 }

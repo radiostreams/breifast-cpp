@@ -1,6 +1,8 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <functional>
+#include <limits>
 #include <optional>
 #include <string>
 #include <utility>
@@ -12,83 +14,56 @@
 #include "cpu/beam_kernel.hpp"
 #include "gpu_plane_integration.hpp"
 #include "gpu_plane_jobs.hpp"
-#include "gpu_plane_result.hpp"
 #include "gpu_spectral_variance.hpp"
 
 namespace breifast::gpu
 {
-void assemble_plane_detections(const GpuPlaneHostResult &plane, const std::vector<GpuBandLabels> &labels,
-                               float max_to_std_ratio, bool use_rms_noise_estimator,
-                               breifast::DetectionArrays &detections)
+void append_band_result(const GpuBandHostResult &band, const GpuBandLabels &labels, float max_to_std_ratio,
+                        bool use_rms_noise_estimator, breifast::ProcessPlaneResult &result)
 {
-  assert(labels.size() == plane.statuses.size() && labels.size() == plane.bands.size());
   assert(max_to_std_ratio >= 0.F);
 
-  for (size_t i = plane.statuses.size(); i > 0; --i)
-  {
-    const size_t band_index = i - 1;
-    if (plane.statuses[band_index] == GpuBandStatus::skipped)
-    {
-      continue;
-    }
-
-    const auto &band = plane.bands[band_index];
-    const size_t count = band.label_count;
-    [[maybe_unused]] const auto has_count = [count](const auto &values) { return values.size() >= count; };
-    assert(has_count(band.peak_value) && has_count(band.peak_local_noise) && has_count(band.peak_y) &&
-           has_count(band.peak_x) && has_count(band.island_size) && has_count(band.stamp_extreme) &&
-           has_count(band.donut_std) && has_count(band.donut_lmad) && has_count(band.beam_chi2) &&
-           has_count(band.flux) && has_count(band.boost) && has_count(band.noise_at_peak) &&
-           has_count(band.rms_at_peak) && has_count(band.selfnoise_at_peak));
-
-    detections.reserve(detections.size() + count);
-    for (size_t j = 0; j < count; ++j)
-    {
-      const float flux = band.flux[j];
-      const float rms = band.donut_std[j];
-      const float lmad = band.donut_lmad[j];
-      const float adjacent_noise = band.stamp_extreme[j] / max_to_std_ratio;
-      const float noisemap0_at_peak =
-          use_rms_noise_estimator ? std::max(band.rms_at_peak[j], band.rms_floor) : band.global_mad;
-
-      detections.add(band.peak_y[j], band.peak_x[j], static_cast<long>(band.island_size[j]),
-                     labels[band_index].stokes_label, labels[band_index].band_label, flux,
-                     band.peak_local_noise[j], band.peak_local_noise[j] / band.median_noise, band.peak_value[j],
-                     rms != 0.F ? flux / rms : 0.F, adjacent_noise != 0.F ? flux / adjacent_noise : 0.F,
-                     lmad != 0.F ? flux / lmad : 0.F, flux / band.global_mad, band.selfnoise_at_peak[j],
-                     band.noise_at_peak[j] / noisemap0_at_peak, band.beam_chi2[j], band.boost[j]);
-    }
-  }
-}
-
-breifast::ProcessPlaneResult assemble_plane_result(const GpuPlaneHostResult &plane,
-                                                   const std::vector<GpuBandLabels> &labels, float max_to_std_ratio,
-                                                   bool use_rms_noise_estimator,
-                                                   std::optional<breifast::SpectralVarianceStats> variance_stats)
-{
-  breifast::ProcessPlaneResult result;
-  assemble_plane_detections(plane, labels, max_to_std_ratio, use_rms_noise_estimator, result.detections);
-
-  result.min_sigma = plane.min_sigma;
-  result.max_sigma = plane.max_sigma;
+  const std::array<const std::vector<unsigned long long> *, 3> histograms{&band.histogram0, &band.histogram1,
+                                                                          &band.histogram2};
   for (size_t i = 0; i < result.histograms.size(); ++i)
   {
-    result.histograms[i].resize(plane.histograms[i].size());
-    std::transform(plane.histograms[i].begin(), plane.histograms[i].end(), result.histograms[i].begin(),
+    result.histograms[i].resize(histograms[i]->size());
+    std::transform(histograms[i]->begin(), histograms[i]->end(), result.histograms[i].begin(),
                    [](const unsigned long long value) { return static_cast<long>(value); });
   }
-  result.median_noises = plane.median_noises;
-  result.variance_stats = std::move(variance_stats);
-  return result;
-}
+  result.median_noises.push_back(band.median_noise);
+  if (band.min_sigma < std::numeric_limits<float>::infinity())
+  {
+    result.min_sigma = result.min_sigma ? std::min(*result.min_sigma, band.min_sigma) : band.min_sigma;
+    result.max_sigma = result.max_sigma ? std::max(*result.max_sigma, band.max_sigma) : band.max_sigma;
+  }
 
-breifast::ProcessPlaneResult gpu_process_plane_result(
-    std::vector<GpuBandJob> &jobs, const std::vector<GpuBandLabels> &labels, float max_to_std_ratio,
-    bool use_rms_noise_estimator, std::optional<breifast::SpectralVarianceStats> variance_stats)
-{
-  GpuPlaneHostResult plane;
-  gpu_process_plane(jobs, plane);
-  return assemble_plane_result(plane, labels, max_to_std_ratio, use_rms_noise_estimator, std::move(variance_stats));
+  const size_t count = band.label_count;
+  [[maybe_unused]] const auto has_count = [count](const auto &values) { return values.size() >= count; };
+  assert(has_count(band.peak_value) && has_count(band.peak_local_noise) && has_count(band.peak_y) &&
+         has_count(band.peak_x) && has_count(band.island_size) && has_count(band.stamp_extreme) &&
+         has_count(band.donut_std) && has_count(band.donut_lmad) && has_count(band.beam_chi2) && has_count(band.flux) &&
+         has_count(band.boost) && has_count(band.noise_at_peak) && has_count(band.rms_at_peak) &&
+         has_count(band.selfnoise_at_peak));
+
+  auto &detections = result.detections;
+  detections.reserve(detections.size() + count);
+  for (size_t j = 0; j < count; ++j)
+  {
+    const float flux = band.flux[j];
+    const float rms = band.donut_std[j];
+    const float lmad = band.donut_lmad[j];
+    const float adjacent_noise = band.stamp_extreme[j] / max_to_std_ratio;
+    const float noisemap0_at_peak =
+        use_rms_noise_estimator ? std::max(band.rms_at_peak[j], band.rms_floor) : band.global_mad;
+
+    detections.add(band.peak_y[j], band.peak_x[j], static_cast<long>(band.island_size[j]), labels.stokes_label,
+                   labels.band_label, flux, band.peak_local_noise[j], band.peak_local_noise[j] / band.median_noise,
+                   band.peak_value[j], rms != 0.F ? flux / rms : 0.F,
+                   adjacent_noise != 0.F ? flux / adjacent_noise : 0.F, lmad != 0.F ? flux / lmad : 0.F,
+                   flux / band.global_mad, band.selfnoise_at_peak[j], band.noise_at_peak[j] / noisemap0_at_peak,
+                   band.beam_chi2[j], band.boost[j]);
+  }
 }
 
 breifast::SpectralVarianceStats assemble_spectral_variance_stats(const GpuSpectralVarianceHostResult &host, size_t n_y,
@@ -191,14 +166,34 @@ ProcessPlaneResult gpu_process_plane_batch(const PlaneBatchItem &item, const Pla
 
   GpuPlaneJobs plane_jobs(spec);
 
-  std::optional<SpectralVarianceStats> variance_stats;
+  ProcessPlaneResult result;
   if (n_channels > 1)
   {
-    variance_stats = gpu_compute_spectral_variance_stats(plane_jobs.cube, plane_jobs.nonzero_channels, n_y, n_x,
-                                                         n_channels);
+    result.variance_stats =
+        gpu_compute_spectral_variance_stats(plane_jobs.cube, plane_jobs.nonzero_channels, n_y, n_x, n_channels);
   }
 
-  return gpu_process_plane_result(plane_jobs.jobs, plane_jobs.labels, plane_jobs.max_to_std_ratio_value,
-                                  plane_jobs.use_rms_noise_estimator, std::move(variance_stats));
+  // Same order as the CPU process_plane: the last band first.
+  const Stream stream;
+  GpuBandHostResult host;
+  for (std::size_t i = plane_jobs.band_inputs.size(); i-- > 0;)
+  {
+    const auto &input = plane_jobs.band_inputs[i];
+    const bool *const nonzero = item.nonzero_channels.data();
+    if (std::none_of(nonzero + input.band_start, nonzero + input.band_stop, std::identity{}))
+    {
+      continue;
+    }
+    GpuBandWorkspace workspace(plane_jobs.band_workspace_sizes[i]); // allocated per band, as before, until 13b
+    GpuBandResult band_result(n_y * n_x, plane_jobs.histogram_bins);
+    if (!gpu_process_band(input, workspace, band_result, stream.get()))
+    {
+      continue;
+    }
+    copy_band_result(band_result, host, stream.get());
+    append_band_result(host, plane_jobs.labels[i], plane_jobs.max_to_std_ratio_value,
+                       plane_jobs.use_rms_noise_estimator, result);
+  }
+  return result;
 }
 } // namespace breifast::gpu

@@ -4,8 +4,6 @@
 #include <cassert>
 #include <stdexcept>
 #include <string>
-#include <thread>
-#include <vector>
 
 #include "gpu_runtime.hpp"
 
@@ -31,8 +29,7 @@ unsigned int read_count(const unsigned int *count, GpuStream stream)
 
 } // namespace
 
-GpuBandStatus gpu_process_band(const GpuBandInput &input, GpuBandWorkspace &workspace, GpuBandResult &result,
-                               GpuStream stream)
+bool gpu_process_band(const GpuBandInput &input, GpuBandWorkspace &workspace, GpuBandResult &result, GpuStream stream)
 {
   assert(input.n_y > 0 && input.n_x > 0 && input.n_channels > 0);
   assert(input.n_y * input.n_x == input.n_pixels);
@@ -76,18 +73,11 @@ GpuBandStatus gpu_process_band(const GpuBandInput &input, GpuBandWorkspace &work
       static_cast<unsigned int>(std::min(workspace.sizes.stamp_capacity, result.n_pixels));
   assert(island_capacity > 0);
 
-  const std::size_t band_size = static_cast<std::size_t>(input.band_stop - input.band_start);
-  gpu_any_true(input.nonzero_channels + input.band_start, band_size, workspace.any_flag, stream);
-  if (read_flag(workspace.any_flag, stream) == 0)
-  {
-    return GpuBandStatus::skipped;
-  }
-
   gpu_mask_or(input.accept_mask, input.n_pixels, input.band_start, input.band_stop, workspace.mask,
               workspace.any_flag, stream);
   if (read_flag(workspace.any_flag, stream) == 0)
   {
-    return GpuBandStatus::skipped;
+    return false;
   }
 
   gpu_weighted_band_image(input.cube, input.weights, input.subtract_mean ? input.mean_image : nullptr, workspace.plane,
@@ -130,7 +120,8 @@ GpuBandStatus gpu_process_band(const GpuBandInput &input, GpuBandWorkspace &work
   gpu_any_true(workspace.mask, input.n_pixels, workspace.any_flag, stream);
   if (read_flag(workspace.any_flag, stream) == 0)
   {
-    return GpuBandStatus::no_detections;
+    result.label_count = 0;
+    return true;
   }
 
   gpu_label_islands(workspace.mask, input.n_y, input.n_x, workspace.labels, workspace.label_count,
@@ -197,42 +188,6 @@ GpuBandStatus gpu_process_band(const GpuBandInput &input, GpuBandWorkspace &work
     CHECK_GPU(cudaMemsetAsync(result.boost_found, 0, island_capacity * sizeof(bool), stream));
   }
 
-  return GpuBandStatus::detections;
-}
-
-GpuBandJob::GpuBandJob(GpuBandInput input, const GpuBandWorkspaceSizes &workspace_sizes,
-                       std::size_t result_n_pixels, std::size_t result_histogram_bins)
-    : input(input), workspace_sizes(workspace_sizes), result_n_pixels(result_n_pixels),
-      result_histogram_bins(result_histogram_bins)
-{
-}
-
-void gpu_process_bands(std::vector<GpuBandJob> &jobs)
-{
-  std::vector<std::thread> threads;
-  threads.reserve(jobs.size());
-
-  for (auto &job : jobs)
-  {
-    threads.emplace_back(
-        [&job]()
-        {
-          try
-          {
-            job.workspace.emplace(job.workspace_sizes);
-            job.result.emplace(job.result_n_pixels, job.result_histogram_bins);
-            job.status = gpu_process_band(job.input, *job.workspace, *job.result, job.stream.get());
-          }
-          catch (...)
-          {
-            job.error = std::current_exception();
-          }
-        });
-  }
-
-  for (auto &thread : threads)
-  {
-    thread.join();
-  }
+  return true;
 }
 } // namespace breifast::gpu

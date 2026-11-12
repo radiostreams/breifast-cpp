@@ -3,18 +3,13 @@
 #include <cuda_runtime.h>
 
 #include <cstddef>
-#include <limits>
-#include <optional>
 #include <vector>
 
 #include "gpu_band_result.cuh"
 #include "gpu_test_utils.hpp"
 
-using breifast::gpu::assemble_plane_bands;
 using breifast::gpu::copy_band_result;
 using breifast::gpu::GpuBandHostResult;
-using breifast::gpu::GpuBandStatus;
-using breifast::gpu::GpuPlaneHostResult;
 using breifast::gpu::GpuBandResult;
 using breifast::gpu::Stream;
 using breifast::gpu::test::upload;
@@ -95,60 +90,4 @@ TEST_CASE("copy_band_result copies per-island arrays, histograms and scalars", "
   CHECK(destination.median_noise == median_noise);
   CHECK(destination.rms_floor == rms_floor);
   CHECK(destination.global_mad == global_mad);
-}
-
-TEST_CASE("assemble_plane_bands matches CPU histogram, median and sigma ordering", "[gpu][band_result]")
-{
-  const std::vector<GpuBandStatus> statuses = {
-      GpuBandStatus::skipped,
-      GpuBandStatus::no_detections,
-      GpuBandStatus::detections,
-  };
-
-  std::vector<GpuBandHostResult> bands(3);
-  bands[1].histogram0 = {1ULL, 2ULL};
-  bands[1].histogram1 = {3ULL, 4ULL};
-  bands[1].histogram2 = {5ULL, 6ULL};
-  bands[1].median_noise = 10.0;
-  bands[1].min_sigma = std::numeric_limits<float>::infinity();
-  bands[1].max_sigma = std::numeric_limits<float>::lowest();
-
-  bands[2].histogram0 = {7ULL, 8ULL};
-  bands[2].histogram1 = {9ULL, 10ULL};
-  bands[2].histogram2 = {11ULL, 12ULL};
-  bands[2].median_noise = 20.0;
-  bands[2].min_sigma = 0.5F;
-  bands[2].max_sigma = 2.0F;
-
-  GpuPlaneHostResult result;
-  assemble_plane_bands(statuses, bands, result);
-
-  CHECK(result.statuses == statuses);
-  CHECK_THAT(result.histograms[0], Equals(std::vector<unsigned long long>{1ULL, 2ULL}));
-  CHECK_THAT(result.histograms[1], Equals(std::vector<unsigned long long>{3ULL, 4ULL}));
-  CHECK_THAT(result.histograms[2], Equals(std::vector<unsigned long long>{5ULL, 6ULL}));
-  CHECK_THAT(result.median_noises, Equals(std::vector<double>{20.0, 10.0}));
-  REQUIRE(result.min_sigma.has_value() == true);
-  REQUIRE(result.max_sigma.has_value() == true);
-  CHECK(*result.min_sigma == 0.5F);
-  CHECK(*result.max_sigma == 2.0F);
-}
-
-TEST_CASE("assemble_plane_bands leaves everything empty when all bands are skipped", "[gpu][band_result]")
-{
-  const std::vector<GpuBandStatus> statuses = {
-      GpuBandStatus::skipped,
-      GpuBandStatus::skipped,
-  };
-  const std::vector<GpuBandHostResult> bands(2);
-
-  GpuPlaneHostResult result;
-  assemble_plane_bands(statuses, bands, result);
-
-  CHECK(result.histograms[0].empty());
-  CHECK(result.histograms[1].empty());
-  CHECK(result.histograms[2].empty());
-  CHECK(result.median_noises.empty());
-  CHECK(result.min_sigma.has_value() == false);
-  CHECK(result.max_sigma.has_value() == false);
 }

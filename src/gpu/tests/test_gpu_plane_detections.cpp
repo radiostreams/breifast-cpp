@@ -2,18 +2,17 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_vector.hpp>
 
-#include <optional>
+#include <limits>
+#include <string>
 #include <vector>
 
-#include "gpu_plane_result.hpp"
+#include "gpu_plane_detections.hpp"
+#include "process_plane_result.hpp"
 
-using breifast::DetectionArrays;
-using breifast::gpu::assemble_plane_detections;
-using breifast::gpu::gpu_process_plane_result;
+using breifast::ProcessPlaneResult;
+using breifast::gpu::append_band_result;
 using breifast::gpu::GpuBandHostResult;
 using breifast::gpu::GpuBandLabels;
-using breifast::gpu::GpuBandStatus;
-using breifast::gpu::GpuPlaneHostResult;
 using Catch::Approx;
 using Catch::Matchers::Equals;
 
@@ -50,14 +49,9 @@ void resize_detection_vectors(GpuBandHostResult &band)
 }
 } // namespace
 
-TEST_CASE("assemble_plane_detections appends bands in CPU reverse order", "[gpu][plane_detections]")
+TEST_CASE("append_band_result appends detections in the order the bands are appended", "[gpu][plane_detections]")
 {
-  GpuPlaneHostResult plane;
-  plane.statuses = {GpuBandStatus::no_detections, GpuBandStatus::detections, GpuBandStatus::skipped};
-  plane.bands.resize(plane.statuses.size());
-
-  auto &low = plane.bands[0];
-  low = band_with(1, 2.F, 0.5F, 4.F);
+  GpuBandHostResult low = band_with(1, 2.F, 0.5F, 4.F);
   resize_detection_vectors(low);
   low.peak_value[0] = 5.F;
   low.peak_local_noise[0] = 2.F;
@@ -74,8 +68,7 @@ TEST_CASE("assemble_plane_detections appends bands in CPU reverse order", "[gpu]
   low.rms_at_peak[0] = 2.F;
   low.selfnoise_at_peak[0] = 7.F;
 
-  auto &high = plane.bands[1];
-  high = band_with(2, 5.F, 1.F, 10.F);
+  GpuBandHostResult high = band_with(2, 5.F, 1.F, 10.F);
   resize_detection_vectors(high);
   high.peak_value = {8.F, 1.F};
   high.peak_local_noise = {4.F, 1.F};
@@ -92,9 +85,11 @@ TEST_CASE("assemble_plane_detections appends bands in CPU reverse order", "[gpu]
   high.rms_at_peak = {0.F, 4.F};
   high.selfnoise_at_peak = {9.F, 3.F};
 
-  const std::vector<GpuBandLabels> labels = {{"I", "low"}, {"I", "high"}, {"I", "skipped"}};
-  DetectionArrays detections;
-  assemble_plane_detections(plane, labels, 2.F, true, detections);
+  // CPU order: the last band first.
+  ProcessPlaneResult result;
+  append_band_result(high, {"I", "high"}, 2.F, true, result);
+  append_band_result(low, {"I", "low"}, 2.F, true, result);
+  const auto &detections = result.detections;
 
   REQUIRE(detections.size() == 3);
   CHECK_THAT(detections.band_label(), Equals(std::vector<std::string>{"high", "high", "low"}));
@@ -134,87 +129,37 @@ TEST_CASE("assemble_plane_detections appends bands in CPU reverse order", "[gpu]
   CHECK(detections.boost()[2] == Approx(1.5F));
 }
 
-TEST_CASE("assemble_plane_detections ignores skipped bands", "[gpu][plane_detections]")
+TEST_CASE("append_band_result keeps the CPU histogram, median and sigma order", "[gpu][plane_detections]")
 {
-  GpuPlaneHostResult plane;
-  plane.statuses = {GpuBandStatus::skipped, GpuBandStatus::skipped};
-  plane.bands.resize(plane.statuses.size());
+  // The last band, appended first, passed the filters with sigmas in [0.5, 2]; the first band, appended last, had no
+  // pixel pass (infinite minimum) and leaves the range alone, but its histograms are the ones the plane keeps.
+  GpuBandHostResult last_band;
+  last_band.histogram0 = {7ULL, 8ULL};
+  last_band.histogram1 = {9ULL, 10ULL};
+  last_band.histogram2 = {11ULL, 12ULL};
+  last_band.median_noise = 20.F;
+  last_band.min_sigma = 0.5F;
+  last_band.max_sigma = 2.F;
 
-  const std::vector<GpuBandLabels> labels = {{"I", "first"}, {"I", "second"}};
-  DetectionArrays detections;
-  assemble_plane_detections(plane, labels, 2.F, true, detections);
+  GpuBandHostResult first_band;
+  first_band.histogram0 = {1ULL, 2ULL};
+  first_band.histogram1 = {3ULL, 4ULL};
+  first_band.histogram2 = {5ULL, 6ULL};
+  first_band.median_noise = 10.F;
+  first_band.min_sigma = std::numeric_limits<float>::infinity();
+  first_band.max_sigma = std::numeric_limits<float>::lowest();
 
-  CHECK(detections.size() == 0);
-}
+  ProcessPlaneResult result;
+  append_band_result(last_band, {"I", "last"}, 2.F, true, result);
+  append_band_result(first_band, {"I", "first"}, 2.F, true, result);
 
-TEST_CASE("assemble_plane_result builds the final ProcessPlaneResult", "[gpu][plane_detections]")
-{
-  GpuPlaneHostResult plane;
-  plane.statuses = {GpuBandStatus::no_detections};
-  plane.bands.resize(1);
-  plane.min_sigma = 0.5F;
-  plane.max_sigma = 2.5F;
-  plane.histograms[0] = {1ULL, 2ULL};
-  plane.histograms[1] = {3ULL, 4ULL};
-  plane.histograms[2] = {5ULL, 6ULL};
-  plane.median_noises = {2.0};
-
-  auto &band = plane.bands[0];
-  band = band_with(1, 2.F, 0.5F, 4.F);
-  resize_detection_vectors(band);
-  band.peak_value[0] = 5.F;
-  band.peak_local_noise[0] = 2.F;
-  band.peak_y[0] = 1;
-  band.peak_x[0] = 2;
-  band.island_size[0] = 3;
-  band.stamp_extreme[0] = 6.F;
-  band.donut_std[0] = 2.5F;
-  band.donut_lmad[0] = 1.5F;
-  band.flux[0] = 10.F;
-  band.noise_at_peak[0] = 3.F;
-  band.rms_at_peak[0] = 2.F;
-  band.selfnoise_at_peak[0] = 7.F;
-
-  const std::vector<GpuBandLabels> labels = {{"I", "band"}};
-  breifast::SpectralVarianceStats variance;
-  const auto result =
-      assemble_plane_result(plane, labels, 2.F, true, std::optional<breifast::SpectralVarianceStats>{variance});
-
-  CHECK(result.any_data == false);
-  CHECK(result.detections.size() == 1);
-  CHECK_THAT(result.detections.band_label(), Equals(std::vector<std::string>{"band"}));
-  REQUIRE(result.min_sigma.has_value() == true);
-  REQUIRE(result.max_sigma.has_value() == true);
-  CHECK(*result.min_sigma == 0.5F);
-  CHECK(*result.max_sigma == 2.5F);
+  CHECK(result.detections.size() == 0);
   CHECK_THAT(result.histograms[0], Equals(std::vector<long>{1, 2}));
   CHECK_THAT(result.histograms[1], Equals(std::vector<long>{3, 4}));
   CHECK_THAT(result.histograms[2], Equals(std::vector<long>{5, 6}));
-  CHECK_THAT(result.median_noises, Equals(std::vector<double>{2.0}));
-  CHECK(result.variance_stats.has_value() == true);
-
-  const auto without_variance = assemble_plane_result(plane, labels, 2.F, true, std::nullopt);
-  CHECK(without_variance.variance_stats.has_value() == false);
-}
-
-TEST_CASE("gpu_process_plane_result wraps jobs into a ProcessPlaneResult", "[gpu][plane_detections]")
-{
-  std::vector<breifast::gpu::GpuBandJob> jobs;
-  const std::vector<GpuBandLabels> labels;
-
-  const auto result = gpu_process_plane_result(jobs, labels, 2.F, true, std::nullopt);
-  CHECK(result.detections.size() == 0);
-  CHECK(result.histograms[0].empty());
-  CHECK(result.histograms[1].empty());
-  CHECK(result.histograms[2].empty());
-  CHECK(result.median_noises.empty());
-  CHECK(result.min_sigma.has_value() == false);
-  CHECK(result.max_sigma.has_value() == false);
-  CHECK(result.any_data == false);
-  CHECK(result.variance_stats.has_value() == false);
-
-  breifast::SpectralVarianceStats variance;
-  const auto with_variance =
-      gpu_process_plane_result(jobs, labels, 2.F, true, std::optional<breifast::SpectralVarianceStats>{variance});
-  CHECK(with_variance.variance_stats.has_value() == true);
+  CHECK_THAT(result.median_noises, Equals(std::vector<double>{20.0, 10.0}));
+  REQUIRE(result.min_sigma.has_value() == true);
+  REQUIRE(result.max_sigma.has_value() == true);
+  CHECK(*result.min_sigma == 0.5F);
+  CHECK(*result.max_sigma == 2.F);
 }

@@ -12,13 +12,12 @@
 #include "gpu_test_utils.hpp"
 
 using breifast::gpu::DeviceVector;
+using breifast::gpu::gpu_process_band;
 using breifast::gpu::GpuBandInput;
-using breifast::gpu::GpuBandResult;
 using breifast::gpu::GpuBandInputSizes;
-using breifast::gpu::GpuBandStatus;
+using breifast::gpu::GpuBandResult;
 using breifast::gpu::GpuBandWorkspace;
 using breifast::gpu::GpuBandWorkspaceSizes;
-using breifast::gpu::gpu_process_band;
 using breifast::gpu::Stream;
 using breifast::gpu::test::download;
 using breifast::gpu::test::download_scalar;
@@ -61,8 +60,7 @@ struct Fixture
     };
   }
 
-  Fixture(bool nonzero_value, bool accept_value, bool use_rms)
-      : workspace(workspace_sizes()), result(n_pixels, histogram_bins)
+  Fixture(bool accept_value, bool use_rms) : workspace(workspace_sizes()), result(n_pixels, histogram_bins)
   {
     cube = upload(std::vector<float>(n_pixels * n_channels, 1.F));
     weights = upload(std::vector<float>(n_channels, 1.F));
@@ -70,7 +68,7 @@ struct Fixture
     selfnoise_raw = upload(std::vector<float>(n_pixels, 1.F));
     dde_noise = upload(std::vector<float>(n_pixels, 0.F));
     accept_mask = upload(std::vector<bool>(n_pixels * n_channels, accept_value));
-    nonzero_channels = upload(std::vector<bool>(n_channels, nonzero_value));
+    nonzero_channels = upload(std::vector<bool>(n_channels, true));
 
     input = GpuBandInput{
         .sizes = GpuBandInputSizes{
@@ -120,25 +118,17 @@ void set_accept_mask(Fixture &fixture, const std::vector<bool> &mask)
 }
 } // namespace
 
-TEST_CASE("gpu_process_band skips a band with no nonzero channel", "[gpu][process_band]")
-{
-  Fixture fixture(false, true, true);
-  CHECK(gpu_process_band(fixture.input, fixture.workspace, fixture.result, fixture.stream.get()) ==
-        GpuBandStatus::skipped);
-}
-
 TEST_CASE("gpu_process_band skips a band whose accept mask is empty", "[gpu][process_band]")
 {
-  Fixture fixture(true, false, true);
-  CHECK(gpu_process_band(fixture.input, fixture.workspace, fixture.result, fixture.stream.get()) ==
-        GpuBandStatus::skipped);
+  Fixture fixture(false, true);
+  CHECK_FALSE(gpu_process_band(fixture.input, fixture.workspace, fixture.result, fixture.stream.get()));
 }
 
 TEST_CASE("gpu_process_band runs the RMS noise stage and reports no detections", "[gpu][process_band]")
 {
-  Fixture fixture(true, true, true);
-  const auto status = gpu_process_band(fixture.input, fixture.workspace, fixture.result, fixture.stream.get());
-  CHECK(status == GpuBandStatus::no_detections);
+  Fixture fixture(true, true);
+  CHECK(gpu_process_band(fixture.input, fixture.workspace, fixture.result, fixture.stream.get()));
+  CHECK(fixture.result.label_count == 0U);
 
   CHECK_THAT(download_scalar(fixture.result.rms_floor.data(), fixture.stream), WithinRel(1.F, 1e-6));
   CHECK_THAT(download_scalar(fixture.result.median_noise.data(), fixture.stream), WithinRel(1.F, 1e-6));
@@ -154,9 +144,9 @@ TEST_CASE("gpu_process_band runs the RMS noise stage and reports no detections",
 
 TEST_CASE("gpu_process_band runs the MAD noise stage and reports no detections", "[gpu][process_band]")
 {
-  Fixture fixture(true, true, false);
-  const auto status = gpu_process_band(fixture.input, fixture.workspace, fixture.result, fixture.stream.get());
-  CHECK(status == GpuBandStatus::no_detections);
+  Fixture fixture(true, false);
+  CHECK(gpu_process_band(fixture.input, fixture.workspace, fixture.result, fixture.stream.get()));
+  CHECK(fixture.result.label_count == 0U);
 
   CHECK_THAT(download_scalar(fixture.result.global_mad.data(), fixture.stream), WithinRel(1.4826F, 1e-6));
   CHECK_THAT(download_scalar(fixture.result.median_noise.data(), fixture.stream), WithinRel(1.4826F, 1e-6));
@@ -164,7 +154,7 @@ TEST_CASE("gpu_process_band runs the MAD noise stage and reports no detections",
 
 TEST_CASE("gpu_process_band errors when island count exceeds stamp_capacity", "[gpu][process_band]")
 {
-  Fixture fixture(true, true, true);
+  Fixture fixture(true, true);
   fixture.input.threshold = 0.5F;
 
   std::vector<bool> mask(Fixture::n_pixels * Fixture::n_channels, false);
@@ -178,13 +168,13 @@ TEST_CASE("gpu_process_band errors when island count exceeds stamp_capacity", "[
 
 TEST_CASE("gpu_process_band reaches the detection stage when capacity is sufficient", "[gpu][process_band]")
 {
-  Fixture fixture(true, true, true);
+  Fixture fixture(true, true);
   fixture.input.threshold = 0.5F;
 
   std::vector<bool> mask(Fixture::n_pixels * Fixture::n_channels, false);
   mask[0] = true;
   set_accept_mask(fixture, mask);
 
-  CHECK(gpu_process_band(fixture.input, fixture.workspace, fixture.result, fixture.stream.get()) ==
-        GpuBandStatus::detections);
+  CHECK(gpu_process_band(fixture.input, fixture.workspace, fixture.result, fixture.stream.get()));
+  CHECK(fixture.result.label_count == 1U);
 }

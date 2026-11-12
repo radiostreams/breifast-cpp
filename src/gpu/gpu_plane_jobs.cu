@@ -60,7 +60,7 @@ GpuPlaneJobs::GpuPlaneJobs(const GpuPlaneJobSpec &spec, const GpuPlaneSizes &siz
   const long radius = spec.boxsize / 2;
   const std::size_t stamp_side = static_cast<std::size_t>(2 * radius + 1);
   const std::size_t stamp_pixels = stamp_side * stamp_side;
-  const std::size_t histogram_bins = static_cast<std::size_t>(2 * spec.max_sigma_bin);
+  histogram_bins = static_cast<std::size_t>(2 * spec.max_sigma_bin);
 
   const bool use_fixed_beam = spec.beam_size_enabled && spec.fixed_beam_kernel != nullptr;
   if (use_fixed_beam)
@@ -72,7 +72,8 @@ GpuPlaneJobs::GpuPlaneJobs(const GpuPlaneJobSpec &spec, const GpuPlaneSizes &siz
   const float fixed_beam_sum = use_fixed_beam ? beam_kernel_sum(spec.fixed_beam_kernel, spec.fixed_beam_halfsize) : 0.F;
 
   band_beam_kernels.reserve(spec.bands.size());
-  jobs.reserve(spec.bands.size());
+  band_inputs.reserve(spec.bands.size());
+  band_workspace_sizes.reserve(spec.bands.size());
   labels.reserve(spec.bands.size());
 
   for (const auto &band : spec.bands)
@@ -193,7 +194,8 @@ GpuPlaneJobs::GpuPlaneJobs(const GpuPlaneJobSpec &spec, const GpuPlaneSizes &siz
         .subtract_mean = mean_image.has_value(),
     };
 
-    jobs.emplace_back(input, workspace_sizes, n_pixels, histogram_bins);
+    band_inputs.push_back(input);
+    band_workspace_sizes.push_back(workspace_sizes);
     labels.push_back({spec.stokes_label, band.label});
   }
 }

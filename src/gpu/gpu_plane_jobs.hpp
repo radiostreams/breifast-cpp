@@ -103,8 +103,11 @@ struct GpuPlaneJobs
   std::optional<DeviceVector<float>> fixed_beam_kernel;
   std::vector<DeviceVector<float>> band_beam_kernels;
 
-  std::vector<GpuBandJob> jobs;
+  // One entry per band, in config.band_slices order.
+  std::vector<GpuBandInput> band_inputs;
+  std::vector<GpuBandWorkspaceSizes> band_workspace_sizes;
   std::vector<GpuBandLabels> labels;
+  std::size_t histogram_bins = 0;
 
 private:
   GpuPlaneJobs(const GpuPlaneJobSpec &spec, const GpuPlaneSizes &sizes);
