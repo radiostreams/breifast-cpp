@@ -137,9 +137,12 @@ void gpu_snr_and_filters(const float *plane, const float *noise_map, const float
  * pass. Device pointers; the work is enqueued on `stream`. `boxsize <= 0` is treated as 1.
  * @param plane `[n_y, n_x]` floats, row major.
  * @param row_window_sums Caller scratch of `n_y * n_x` floats, overwritten.
+ * @param row_prefix Caller scratch of `n_y * n_x` doubles, overwritten: the per-row prefix sums of `plane^2`.
+ * @param row_prefix_scan_storage Caller scratch for the scan's temporary storage; grown as needed.
  * @param out_rms `[n_y, n_x]` floats, written completely.
  */
-void gpu_rms_noise_map(const float *plane, size_t n_y, size_t n_x, long boxsize, float *row_window_sums, float *out_rms,
+void gpu_rms_noise_map(const float *plane, size_t n_y, size_t n_x, long boxsize, float *row_window_sums,
+                       double *row_prefix, DeviceVector<std::byte> &row_prefix_scan_storage, float *out_rms,
                        cudaStream_t stream = nullptr);
 
 /**

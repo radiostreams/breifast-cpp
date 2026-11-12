@@ -89,8 +89,8 @@ bool gpu_process_band(const GpuPlaneInput &plane, const GpuBand &band, GpuBandWo
     const float *base_noise = result.global_mad;
     if (plane.use_rms_noise_estimator)
     {
-      gpu_rms_noise_map(workspace.plane, plane.n_y, plane.n_x, plane.boxsize, workspace.row_sums, workspace.rms_map,
-                        stream);
+      gpu_rms_noise_map(workspace.plane, plane.n_y, plane.n_x, plane.boxsize, workspace.row_sums,
+                        workspace.row_prefix, workspace.row_prefix_scan_storage, workspace.rms_map, stream);
       gpu_median(workspace.rms_map, n_pixels, result.rms_floor, workspace.median_scratch, stream);
       rms = workspace.rms_map;
       base_noise = result.rms_floor;
@@ -205,6 +205,7 @@ void GpuBandWorkspace::ensure(const GpuPlaneInput &input)
   snr.ensure(n_pixels);
   mask.ensure(n_pixels);
   row_sums.ensure(n_pixels);
+  row_prefix.ensure(n_pixels);
   rms_map.ensure(n_pixels);
 
   labels.ensure(n_pixels);
