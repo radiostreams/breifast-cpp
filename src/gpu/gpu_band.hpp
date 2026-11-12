@@ -149,7 +149,7 @@ struct GpuBandResult
 /// needs. Returns false when the band's accept mask is empty: the band is skipped, as on the CPU. The caller has
 /// already skipped a band with no nonzero channel.
 bool gpu_process_band(const GpuPlaneInput &plane, const GpuBand &band, GpuBandWorkspace &workspace,
-                      GpuBandResult &result, GpuStream stream);
+                      GpuBandResult &result, cudaStream_t stream);
 
 /// Host copy of a GpuBandResult: every island column holds label_count entries.
 struct GpuBandHostResult
@@ -170,7 +170,7 @@ struct GpuBandHostResult
 };
 
 /// Copies the band outputs of `source` into `destination` and waits for `stream`.
-void copy_band_result(const GpuBandResult &source, GpuBandHostResult &destination, GpuStream stream);
+void copy_band_result(const GpuBandResult &source, GpuBandHostResult &destination, cudaStream_t stream);
 
 struct GpuBandLabels
 {

@@ -88,13 +88,13 @@ void set_accept_mask(Fixture &fixture, const std::vector<bool> &mask)
 TEST_CASE("gpu_process_band skips a band whose accept mask is empty", "[gpu][process_band]")
 {
   Fixture fixture(false, true);
-  CHECK_FALSE(gpu_process_band(fixture.plane, fixture.band, fixture.workspace, fixture.result, fixture.stream.get()));
+  CHECK_FALSE(gpu_process_band(fixture.plane, fixture.band, fixture.workspace, fixture.result, fixture.stream));
 }
 
 TEST_CASE("gpu_process_band runs the RMS noise stage and reports no detections", "[gpu][process_band]")
 {
   Fixture fixture(true, true);
-  CHECK(gpu_process_band(fixture.plane, fixture.band, fixture.workspace, fixture.result, fixture.stream.get()));
+  CHECK(gpu_process_band(fixture.plane, fixture.band, fixture.workspace, fixture.result, fixture.stream));
   CHECK(fixture.result.label_count == 0U);
 
   CHECK_THAT(download_scalar(fixture.result.rms_floor.data(), fixture.stream), WithinRel(1.F, 1e-6));
@@ -112,7 +112,7 @@ TEST_CASE("gpu_process_band runs the RMS noise stage and reports no detections",
 TEST_CASE("gpu_process_band runs the MAD noise stage and reports no detections", "[gpu][process_band]")
 {
   Fixture fixture(true, false);
-  CHECK(gpu_process_band(fixture.plane, fixture.band, fixture.workspace, fixture.result, fixture.stream.get()));
+  CHECK(gpu_process_band(fixture.plane, fixture.band, fixture.workspace, fixture.result, fixture.stream));
   CHECK(fixture.result.label_count == 0U);
 
   CHECK_THAT(download_scalar(fixture.result.global_mad.data(), fixture.stream), WithinRel(1.4826F, 1e-6));
@@ -128,6 +128,6 @@ TEST_CASE("gpu_process_band reaches the detection stage", "[gpu][process_band]")
   mask[0] = true;
   set_accept_mask(fixture, mask);
 
-  CHECK(gpu_process_band(fixture.plane, fixture.band, fixture.workspace, fixture.result, fixture.stream.get()));
+  CHECK(gpu_process_band(fixture.plane, fixture.band, fixture.workspace, fixture.result, fixture.stream));
   CHECK(fixture.result.label_count == 1U);
 }

@@ -47,7 +47,7 @@ Result run_gpu_mask_or(const std::vector<std::string> &channels, int band_start,
   auto device_any = upload(std::vector<int>{-1}); // nonzero sentinel: the call must zero it itself
 
   const Stream stream;
-  gpu_mask_or(device_mask, n_pixels, band_start, band_stop, device_out, device_any, stream.get());
+  gpu_mask_or(device_mask, n_pixels, band_start, band_stop, device_out, device_any, stream);
   const auto out = download(device_out, stream);
   const int any = download_scalar(device_any.data(), stream);
 

@@ -269,7 +269,7 @@ __global__ void stamp_beam_chi2_kernel(const unsigned int *active_count, const f
  * @param out_lmad `[n_stamps]` floats, written completely.
  */
 void gpu_donut_median_abs(const float *stamps, const unsigned int *active_count, unsigned int capacity,
-                          size_t stamp_pixels, float scale, float *out_lmad, GpuStream stream)
+                          size_t stamp_pixels, float scale, float *out_lmad, cudaStream_t stream)
 {
   assert(capacity > 0);
   assert(active_count != nullptr);
@@ -279,7 +279,7 @@ void gpu_donut_median_abs(const float *stamps, const unsigned int *active_count,
 }
 
 void gpu_donut_std(const float *stamps, const unsigned int *active_count, unsigned int capacity, size_t stamp_pixels,
-                   float *out_std, GpuStream stream)
+                   float *out_std, cudaStream_t stream)
 {
   assert(capacity > 0);
   assert(active_count != nullptr);
@@ -289,7 +289,7 @@ void gpu_donut_std(const float *stamps, const unsigned int *active_count, unsign
 }
 
 void gpu_stamp_abs_extreme(const float *stamps, const unsigned int *active_count, unsigned int capacity,
-                           size_t stamp_pixels, float *out_extreme, GpuStream stream)
+                           size_t stamp_pixels, float *out_extreme, cudaStream_t stream)
 {
   assert(capacity > 0);
   assert(active_count != nullptr);
@@ -300,7 +300,7 @@ void gpu_stamp_abs_extreme(const float *stamps, const unsigned int *active_count
 
 void gpu_stamp_extract(const float *plane, size_t n_y, size_t n_x, const long *centre_y, const long *centre_x,
                        const unsigned int *active_count, unsigned int capacity, long radius, long inner_boxsize,
-                       float *stamps, GpuStream stream)
+                       float *stamps, cudaStream_t stream)
 {
   assert(capacity > 0);
   assert(active_count != nullptr);
@@ -315,8 +315,8 @@ void gpu_stamp_extract(const float *plane, size_t n_y, size_t n_x, const long *c
 }
 
 void gpu_stamp_extract_no_zero(const float *plane, size_t n_y, size_t n_x, const long *centre_y, const long *centre_x,
-                              const unsigned int *active_count, unsigned int capacity, long radius, float *stamps,
-                              GpuStream stream)
+                               const unsigned int *active_count, unsigned int capacity, long radius, float *stamps,
+                               cudaStream_t stream)
 {
   assert(capacity > 0);
   assert(active_count != nullptr);
@@ -331,7 +331,7 @@ void gpu_stamp_extract_no_zero(const float *plane, size_t n_y, size_t n_x, const
 
 void gpu_stamp_beam_chi2(const float *stamps, const float *kernel, const float kernel_sum,
                          const unsigned int *active_count, unsigned int capacity, size_t stamp_pixels,
-                         const float *stamp_extreme, float inv_max_to_std_ratio, float *out_chi2, GpuStream stream)
+                         const float *stamp_extreme, float inv_max_to_std_ratio, float *out_chi2, cudaStream_t stream)
 {
   assert(capacity > 0);
   assert(active_count != nullptr);

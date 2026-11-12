@@ -22,7 +22,7 @@ int run_any_true(const std::vector<unsigned char> &values)
   DeviceVector<int> device_out(1);
 
   const Stream stream;
-  gpu_any_true(reinterpret_cast<const bool *>(device_values.data()), values.size(), device_out, stream.get());
+  gpu_any_true(reinterpret_cast<const bool *>(device_values.data()), values.size(), device_out, stream);
   return download_scalar(device_out.data(), stream);
 }
 } // namespace

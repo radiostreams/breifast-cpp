@@ -89,8 +89,8 @@ __global__ void spectral_variance_moments_kernel(const float *cube, const bool *
 }
 } // namespace
 
-void gpu_mask_or(const bool *accept_mask, size_t n_pixels, long band_start, long band_stop, bool *out_mask, int *out_any,
-                 GpuStream stream)
+void gpu_mask_or(const bool *accept_mask, size_t n_pixels, long band_start, long band_stop, bool *out_mask,
+                 int *out_any, cudaStream_t stream)
 {
   assert(band_start >= 0 && band_start < band_stop);
   assert(n_pixels > 0);
@@ -101,7 +101,7 @@ void gpu_mask_or(const bool *accept_mask, size_t n_pixels, long band_start, long
 }
 
 void gpu_weighted_band_image(const float *cube, const float *weights, const float *mean_image, float *out_plane,
-                             size_t n_pixels, long band_start, long band_stop, float inv_band_size, GpuStream stream)
+                             size_t n_pixels, long band_start, long band_stop, float inv_band_size, cudaStream_t stream)
 {
   assert(band_start >= 0 && band_start < band_stop);
   assert(n_pixels > 0);
@@ -110,7 +110,7 @@ void gpu_weighted_band_image(const float *cube, const float *weights, const floa
 }
 
 void gpu_spectral_variance_moments(const float *cube, const bool *nonzero_channels, float *out_sum2, float *out_sum3,
-                                   float *out_sum4, size_t n_pixels, int n_channels, GpuStream stream)
+                                   float *out_sum4, size_t n_pixels, int n_channels, cudaStream_t stream)
 {
   assert(n_pixels > 0);
   launch_per_element(spectral_variance_moments_kernel, n_pixels, stream, cube, nonzero_channels, out_sum2, out_sum3,
@@ -118,7 +118,7 @@ void gpu_spectral_variance_moments(const float *cube, const bool *nonzero_channe
 }
 
 void gpu_spectral_variance_stats_host(const float *cube, const bool *nonzero_channels, size_t n_y, size_t n_x,
-                                      size_t n_channels, GpuSpectralVarianceHostResult &result, GpuStream stream)
+                                      size_t n_channels, GpuSpectralVarianceHostResult &result, cudaStream_t stream)
 {
   assert(n_y > 0 && n_x > 0 && n_channels > 0);
   assert(cube != nullptr && nonzero_channels != nullptr);

@@ -32,7 +32,7 @@ std::vector<unsigned int> run_label(const std::vector<unsigned char> &mask, size
   scratch.ensure(n);
 
   const Stream stream;
-  gpu_label_islands(device_mask, n_y, n_x, device_labels, device_count, scratch, stream.get());
+  gpu_label_islands(device_mask, n_y, n_x, device_labels, device_count, scratch, stream);
   const auto host_labels = download(device_labels, stream);
   const unsigned int count = download_scalar(device_count.data(), stream);
 

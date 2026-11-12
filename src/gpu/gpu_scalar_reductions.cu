@@ -31,7 +31,7 @@ __global__ void any_true_kernel(const bool *values, const size_t n, int *out_any
 }
 } // namespace
 
-void gpu_any_true(const bool *values, const size_t n, int *out_any, GpuStream stream)
+void gpu_any_true(const bool *values, const size_t n, int *out_any, cudaStream_t stream)
 {
   assert(n > 0);
 

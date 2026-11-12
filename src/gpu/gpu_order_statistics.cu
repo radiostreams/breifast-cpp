@@ -55,7 +55,7 @@ __global__ void radix_finalize_kernel(const uint32_t *state, const uint32_t *low
 }
 
 void gpu_median_impl(const float *values, size_t n, float *out_median, bool abs_mode, float scale,
-                     MedianScratch &scratch, GpuStream stream)
+                     MedianScratch &scratch, cudaStream_t stream)
 {
   static_assert(MedianScratch::histogram_bins == radix_bins);
   assert(n > 0);
@@ -83,13 +83,13 @@ void gpu_median_impl(const float *values, size_t n, float *out_median, bool abs_
 }
 } // namespace
 
-void gpu_median(const float *values, size_t n, float *out_median, MedianScratch &scratch, GpuStream stream)
+void gpu_median(const float *values, size_t n, float *out_median, MedianScratch &scratch, cudaStream_t stream)
 {
   gpu_median_impl(values, n, out_median, false, 1.F, scratch, stream);
 }
 
 void gpu_median_abs(const float *values, size_t n, float *out_median, float scale, MedianScratch &scratch,
-                    GpuStream stream)
+                    cudaStream_t stream)
 {
   gpu_median_impl(values, n, out_median, true, scale, scratch, stream);
 }

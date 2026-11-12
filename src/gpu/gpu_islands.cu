@@ -259,7 +259,7 @@ void LabelScratch::ensure(const std::size_t n_pixels)
 }
 
 void gpu_label_islands(const bool *const mask, const size_t n_y, const size_t n_x, unsigned int *const labels,
-                       unsigned int *const out_count, LabelScratch &scratch, GpuStream stream)
+                       unsigned int *const out_count, LabelScratch &scratch, cudaStream_t stream)
 {
   assert(n_y > 0 && n_x > 0);
 
@@ -279,7 +279,8 @@ void gpu_label_islands(const bool *const mask, const size_t n_y, const size_t n_
 
 void gpu_island_boost(const unsigned int *const labels_per_pixel, const float *const baseline_flux,
                       const size_t n_pixels, const unsigned int *const active_count, const unsigned int capacity,
-                      const float *const flux_per_label, float *const boost, IslandScratch &scratch, GpuStream stream)
+                      const float *const flux_per_label, float *const boost, IslandScratch &scratch,
+                      cudaStream_t stream)
 {
   assert(n_pixels > 0);
   assert(active_count != nullptr);
@@ -298,9 +299,8 @@ void gpu_island_boost(const unsigned int *const labels_per_pixel, const float *c
 
 void gpu_label_stats(const unsigned int *const labels, const float *const image, const float *const local_noise,
                      const size_t n_pixels, const size_t n_x, const unsigned int *const active_count,
-                     const unsigned int capacity, float *const value, float *const out_local_noise,
-                     long *const peak_y, long *const peak_x, unsigned int *const island_size, IslandScratch &scratch,
-                     GpuStream stream)
+                     const unsigned int capacity, float *const value, float *const out_local_noise, long *const peak_y,
+                     long *const peak_x, unsigned int *const island_size, IslandScratch &scratch, cudaStream_t stream)
 {
   assert(n_pixels > 0);
   assert(n_x > 0);

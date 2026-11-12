@@ -9,26 +9,6 @@
 // Host-side interface of the GPU kernels: the launch wrappers and the scratch they reuse.
 namespace breifast::gpu
 {
-/// The stream a GPU call runs on; `nullptr` is the default stream. Opaque here so the header needs no CUDA includes,
-/// and implicitly a `cudaStream_t` inside CUDA translation units.
-struct CUstream_st;
-struct GpuStream
-{
-  void *handle_ = nullptr;
-  GpuStream(std::nullptr_t = nullptr)
-  {
-  }
-  GpuStream(void *h) : handle_(h)
-  {
-  }
-#ifdef __CUDACC__
-  operator ::CUstream_st *() const
-  {
-    return static_cast<::CUstream_st *>(handle_);
-  }
-#endif
-};
-
 inline constexpr std::size_t max_stamp_capacity = 4096;
 
 /// Device scratch of gpu_median and gpu_median_abs: the 256-bin digit histogram, then the radix-select state (count
@@ -80,8 +60,8 @@ struct IslandScratch
  * @param out_mask `[n_pixels]` bools, true where any channel of the band is true.
  * @param out_any One int, nonzero when any pixel of `out_mask` is true. Written by this call, no host read-back.
  */
-void gpu_mask_or(const bool *accept_mask, size_t n_pixels, long band_start, long band_stop, bool *out_mask, int *out_any,
-                 GpuStream stream = nullptr);
+void gpu_mask_or(const bool *accept_mask, size_t n_pixels, long band_start, long band_stop, bool *out_mask,
+                 int *out_any, cudaStream_t stream = nullptr);
 
 /**
  * @brief Weighted band image: `out[p] = Σ_c cube[c,p]*weights[c]*inv_weights_sum - Σ_c mean[c,p]*inv_band_size`.
@@ -96,7 +76,7 @@ void gpu_mask_or(const bool *accept_mask, size_t n_pixels, long band_start, long
  */
 void gpu_weighted_band_image(const float *cube, const float *weights, const float *mean_image, float *out_plane,
                              size_t n_pixels, long band_start, long band_stop, float inv_band_size,
-                             GpuStream stream = nullptr);
+                             cudaStream_t stream = nullptr);
 
 /**
  * @brief Per-pixel sums of the second, third and fourth powers over the valid channels:
@@ -109,7 +89,7 @@ void gpu_weighted_band_image(const float *cube, const float *weights, const floa
  * @param out_sum2 `[n_pixels]` floats, written completely. Same for `out_sum3` and `out_sum4`.
  */
 void gpu_spectral_variance_moments(const float *cube, const bool *nonzero_channels, float *out_sum2, float *out_sum3,
-                                   float *out_sum4, size_t n_pixels, int n_channels, GpuStream stream = nullptr);
+                                   float *out_sum4, size_t n_pixels, int n_channels, cudaStream_t stream = nullptr);
 
 struct GpuSpectralVarianceHostResult
 {
@@ -121,7 +101,7 @@ struct GpuSpectralVarianceHostResult
 
 void gpu_spectral_variance_stats_host(const float *cube, const bool *nonzero_channels, size_t n_y, size_t n_x,
                                       size_t n_channels, GpuSpectralVarianceHostResult &result,
-                                      GpuStream stream = nullptr);
+                                      cudaStream_t stream = nullptr);
 
 /**
  * @brief Noise map: `out[p] = sqrt(base[p]^2 + selfnoise_scale * selfnoise_offset[p] + dde_scale * dde_noise[p])`.
@@ -134,7 +114,7 @@ void gpu_spectral_variance_stats_host(const float *cube, const bool *nonzero_cha
  */
 void gpu_combine_noise_map(const float *rms, const float *base_noise, const float *selfnoise_offset,
                            const float *dde_noise, float selfnoise_scale, float dde_scale, float *out_noise_map,
-                           size_t n_pixels, GpuStream stream = nullptr);
+                           size_t n_pixels, cudaStream_t stream = nullptr);
 
 /**
  * @brief SNR and mask cascade of one band, fused: `snr`, the four cumulative masks, the histogram counts and the SNR
@@ -159,9 +139,9 @@ void gpu_combine_noise_map(const float *rms, const float *base_noise, const floa
  */
 void gpu_snr_and_filters(const float *plane, const float *noise_map, const float *snr_cutoff, const float *flux_cutoff,
                          const float *median_noise, size_t n_pixels, const common::SnrFilterParams &params,
-                         float *out_snr, bool *image_mask,
-                         unsigned long long *histogram0, unsigned long long *histogram1, unsigned long long *histogram2,
-                         float *out_min_sigma, float *out_max_sigma, GpuStream stream = nullptr);
+                         float *out_snr, bool *image_mask, unsigned long long *histogram0,
+                         unsigned long long *histogram1, unsigned long long *histogram2, float *out_min_sigma,
+                         float *out_max_sigma, cudaStream_t stream = nullptr);
 
 /**
  * @brief Local RMS noise map: a sliding `boxsize x boxsize` window over `plane`, edge-corrected, square root of the
@@ -174,7 +154,7 @@ void gpu_snr_and_filters(const float *plane, const float *noise_map, const float
  * @param out_rms `[n_y, n_x]` floats, written completely.
  */
 void gpu_rms_noise_map(const float *plane, size_t n_y, size_t n_x, long boxsize, float *row_window_sums, float *out_rms,
-                       GpuStream stream = nullptr);
+                       cudaStream_t stream = nullptr);
 
 /**
  * @brief Exact median of `values`, numpy semantics: odd `n` picks rank `n/2`, even `n` averages ranks `n/2 - 1` and
@@ -186,7 +166,8 @@ void gpu_rms_noise_map(const float *plane, size_t n_y, size_t n_x, long boxsize,
  * @param out_median One float, written by this call.
  * @param scratch Reused by every call on the same stream; each call resets the parts it reads.
  */
-void gpu_median(const float *values, size_t n, float *out_median, MedianScratch &scratch, GpuStream stream = nullptr);
+void gpu_median(const float *values, size_t n, float *out_median, MedianScratch &scratch,
+                cudaStream_t stream = nullptr);
 
 /**
  * @brief Exact median of `|values|`, the global MAD input.
@@ -197,7 +178,7 @@ void gpu_median(const float *values, size_t n, float *out_median, MedianScratch 
  * @param scale Multiplier applied to the median before writing it.
  */
 void gpu_median_abs(const float *values, size_t n, float *out_median, float scale, MedianScratch &scratch,
-                    GpuStream stream = nullptr);
+                    cudaStream_t stream = nullptr);
 
 /**
  * @brief Scaled median absolute value of the nonzero pixels of each stamp: the `lmad` of stamp_donut_stats.
@@ -213,7 +194,7 @@ void gpu_median_abs(const float *values, size_t n, float *out_median, float scal
  * @param out_lmad `[capacity]` floats, written for every valid stamp.
  */
 void gpu_donut_median_abs(const float *stamps, const unsigned int *active_count, unsigned int capacity,
-                          size_t stamp_pixels, float scale, float *out_lmad, GpuStream stream = nullptr);
+                          size_t stamp_pixels, float scale, float *out_lmad, cudaStream_t stream = nullptr);
 
 /**
  * @brief Population standard deviation of the nonzero pixels of each stamp: the `stddev` of stamp_donut_stats.
@@ -227,8 +208,8 @@ void gpu_donut_median_abs(const float *stamps, const unsigned int *active_count,
  * @param stamp_pixels `(2 * radius + 1)^2`.
  * @param out_std `[capacity]` floats, written for every valid stamp.
  */
-void gpu_donut_std(const float *stamps, const unsigned int *active_count, unsigned int capacity,
-                   size_t stamp_pixels, float *out_std, GpuStream stream = nullptr);
+void gpu_donut_std(const float *stamps, const unsigned int *active_count, unsigned int capacity, size_t stamp_pixels,
+                   float *out_std, cudaStream_t stream = nullptr);
 
 /**
  * @brief `max(|min|, |max|)` over each stamp, the local-noise extreme of stamp_abs_extreme.
@@ -242,7 +223,7 @@ void gpu_donut_std(const float *stamps, const unsigned int *active_count, unsign
  * @param out_extreme `[capacity]` floats, written for every valid stamp.
  */
 void gpu_stamp_abs_extreme(const float *stamps, const unsigned int *active_count, unsigned int capacity,
-                           size_t stamp_pixels, float *out_extreme, GpuStream stream = nullptr);
+                           size_t stamp_pixels, float *out_extreme, cudaStream_t stream = nullptr);
 
 /**
  * @brief Extract the `(2 * radius + 1)^2` window around each island's peak into a stamp, with the inner box zeroed.
@@ -260,7 +241,7 @@ void gpu_stamp_abs_extreme(const float *stamps, const unsigned int *active_count
  */
 void gpu_stamp_extract(const float *plane, size_t n_y, size_t n_x, const long *centre_y, const long *centre_x,
                        const unsigned int *active_count, unsigned int capacity, long radius, long inner_boxsize,
-                       float *stamps, GpuStream stream = nullptr);
+                       float *stamps, cudaStream_t stream = nullptr);
 
 /**
  * @brief Extract the `(2 * radius + 1)^2` window around each island's peak into a stamp, without zeroing anything.
@@ -275,9 +256,9 @@ void gpu_stamp_extract(const float *plane, size_t n_y, size_t n_x, const long *c
  * @param radius Half-width of the window.
  * @param stamps `[capacity, (2 * radius + 1)^2]` floats, written for every valid stamp.
  */
-void gpu_stamp_extract_no_zero(const float *plane, size_t n_y, size_t n_x, const long *centre_y,
-                               const long *centre_x, const unsigned int *active_count, unsigned int capacity,
-                               long radius, float *stamps, GpuStream stream = nullptr);
+void gpu_stamp_extract_no_zero(const float *plane, size_t n_y, size_t n_x, const long *centre_y, const long *centre_x,
+                               const unsigned int *active_count, unsigned int capacity, long radius, float *stamps,
+                               cudaStream_t stream = nullptr);
 
 /**
  * @brief True when any of the `n` bools is true.
@@ -288,7 +269,7 @@ void gpu_stamp_extract_no_zero(const float *plane, size_t n_y, size_t n_x, const
  * @param values `[n]` bools.
  * @param out_any One int, written (`nonzero` when any value is true).
  */
-void gpu_any_true(const bool *values, size_t n, int *out_any, GpuStream stream = nullptr);
+void gpu_any_true(const bool *values, size_t n, int *out_any, cudaStream_t stream = nullptr);
 
 /**
  * @brief Reduced chi2 of each stamp against the beam kernel, over the nonzero stamp pixels.
@@ -309,7 +290,7 @@ void gpu_any_true(const bool *values, size_t n, int *out_any, GpuStream stream =
  */
 void gpu_stamp_beam_chi2(const float *stamps, const float *kernel, float kernel_sum, const unsigned int *active_count,
                          unsigned int capacity, size_t stamp_pixels, const float *stamp_extreme,
-                         float inv_max_to_std_ratio, float *out_chi2, GpuStream stream = nullptr);
+                         float inv_max_to_std_ratio, float *out_chi2, cudaStream_t stream = nullptr);
 
 /**
  * @brief 4-connected component labels of `mask`, numbered `1..count` in raster order of each island's first pixel.
@@ -325,7 +306,7 @@ void gpu_stamp_beam_chi2(const float *stamps, const float *kernel, float kernel_
  * @param scratch Built for at least `n_y * n_x` pixels.
  */
 void gpu_label_islands(const bool *mask, size_t n_y, size_t n_x, unsigned int *labels, unsigned int *out_count,
-                       LabelScratch &scratch, GpuStream stream = nullptr);
+                       LabelScratch &scratch, cudaStream_t stream = nullptr);
 
 /**
  * @brief Per-label statistics of a labeled image: the `peak_per_label` outputs of the CPU label_islands() pass.
@@ -355,7 +336,7 @@ void gpu_label_islands(const bool *mask, size_t n_y, size_t n_x, unsigned int *l
 void gpu_label_stats(const unsigned int *labels, const float *image, const float *local_noise, size_t n_pixels,
                      size_t n_x, const unsigned int *active_count, unsigned int capacity, float *value,
                      float *out_local_noise, long *peak_y, long *peak_x, unsigned int *island_size,
-                     IslandScratch &scratch, GpuStream stream = nullptr);
+                     IslandScratch &scratch, cudaStream_t stream = nullptr);
 
 /**
  * @brief Batched island boost: for every compact label `1..*active_count`, the largest-magnitude
@@ -375,5 +356,5 @@ void gpu_label_stats(const unsigned int *labels, const float *image, const float
  */
 void gpu_island_boost(const unsigned int *labels_per_pixel, const float *baseline_flux, size_t n_pixels,
                       const unsigned int *active_count, unsigned int capacity, const float *flux_per_label,
-                      float *boost, IslandScratch &scratch, GpuStream stream = nullptr);
+                      float *boost, IslandScratch &scratch, cudaStream_t stream = nullptr);
 } // namespace breifast::gpu

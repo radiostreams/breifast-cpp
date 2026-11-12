@@ -109,7 +109,7 @@ __global__ void combine_noise_map_kernel(const float *rms, const float *base_noi
 } // namespace
 
 void gpu_rms_noise_map(const float *plane, size_t n_y, size_t n_x, long boxsize, float *row_window_sums, float *out_rms,
-                       GpuStream stream)
+                       cudaStream_t stream)
 {
   assert(n_y > 0 && n_x > 0);
 
@@ -120,7 +120,7 @@ void gpu_rms_noise_map(const float *plane, size_t n_y, size_t n_x, long boxsize,
 
 void gpu_combine_noise_map(const float *rms, const float *base_noise, const float *selfnoise_offset,
                            const float *dde_noise, const float selfnoise_scale, const float dde_scale,
-                           float *out_noise_map, const size_t n_pixels, GpuStream stream)
+                           float *out_noise_map, const size_t n_pixels, cudaStream_t stream)
 {
   assert(n_pixels > 0);
   launch_per_element(combine_noise_map_kernel, n_pixels, stream, rms, base_noise, selfnoise_offset, dde_noise,

@@ -14,7 +14,7 @@ namespace breifast::gpu
 {
 namespace
 {
-int read_flag(int *flag, GpuStream stream)
+int read_flag(int *flag, cudaStream_t stream)
 {
   int host_flag = 0;
   CHECK_GPU(cudaMemcpyAsync(&host_flag, flag, sizeof(int), cudaMemcpyDeviceToHost, stream));
@@ -22,7 +22,7 @@ int read_flag(int *flag, GpuStream stream)
   return host_flag;
 }
 
-unsigned int read_count(const unsigned int *count, GpuStream stream)
+unsigned int read_count(const unsigned int *count, cudaStream_t stream)
 {
   unsigned int host_count = 0;
   CHECK_GPU(cudaMemcpyAsync(&host_count, count, sizeof(unsigned int), cudaMemcpyDeviceToHost, stream));
@@ -32,7 +32,7 @@ unsigned int read_count(const unsigned int *count, GpuStream stream)
 
 /// Resizes `host` to `count` and copies the first `count` entries of `device` into it, on `stream`.
 template <typename T>
-void copy_column(const DeviceVector<T> &device, std::vector<T> &host, std::size_t count, GpuStream stream)
+void copy_column(const DeviceVector<T> &device, std::vector<T> &host, std::size_t count, cudaStream_t stream)
 {
   assert(count <= device.size());
   host.resize(count);
@@ -43,20 +43,20 @@ void copy_column(const DeviceVector<T> &device, std::vector<T> &host, std::size_
 }
 
 template <typename Device, typename Host, std::size_t... I>
-void copy_columns(const Device &device, const Host &host, std::size_t count, GpuStream stream,
+void copy_columns(const Device &device, const Host &host, std::size_t count, cudaStream_t stream,
                   std::index_sequence<I...>)
 {
   (copy_column(std::get<I>(device), std::get<I>(host), count, stream), ...);
 }
 
-template <typename T> void copy_scalar(const DeviceVector<T> &device, T &host, GpuStream stream)
+template <typename T> void copy_scalar(const DeviceVector<T> &device, T &host, cudaStream_t stream)
 {
   CHECK_GPU(cudaMemcpyAsync(&host, device.data(), sizeof(T), cudaMemcpyDeviceToHost, stream));
 }
 } // namespace
 
 bool gpu_process_band(const GpuPlaneInput &plane, const GpuBand &band, GpuBandWorkspace &workspace,
-                      GpuBandResult &result, GpuStream stream)
+                      GpuBandResult &result, cudaStream_t stream)
 {
   const std::size_t n_pixels = plane.n_pixels();
   assert(n_pixels > 0 && plane.n_channels > 0);
@@ -229,7 +229,7 @@ void GpuBandResult::ensure(const std::size_t island_capacity, const std::size_t 
   this->histogram_bins = histogram_bins;
 }
 
-void copy_band_result(const GpuBandResult &source, GpuBandHostResult &destination, GpuStream stream)
+void copy_band_result(const GpuBandResult &source, GpuBandHostResult &destination, cudaStream_t stream)
 {
   const std::size_t count = source.label_count;
   destination.label_count = count;

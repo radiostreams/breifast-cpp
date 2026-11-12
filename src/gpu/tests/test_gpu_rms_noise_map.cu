@@ -62,7 +62,7 @@ std::vector<float> run_gpu_rms_noise_map(const std::vector<float> &plane_values,
   auto device_out = upload(std::vector<float>(n_plane_pixels, prefill));
 
   const Stream stream;
-  gpu_rms_noise_map(device_plane, n_rows, n_cols, box, device_rows, device_out, stream.get());
+  gpu_rms_noise_map(device_plane, n_rows, n_cols, box, device_rows, device_out, stream);
   return download(device_out, stream);
 }
 

@@ -50,8 +50,8 @@ LabelStats run_stats(const std::vector<unsigned int> &labels, const std::vector<
 
   const Stream stream;
   gpu_label_stats(device_labels, device_image, device_local_noise, labels.size(), n_x, device_count, n_labels,
-                  device_value, device_local_noise_max, device_peak_y, device_peak_x, device_island_size,
-                  scratch, stream.get());
+                  device_value, device_local_noise_max, device_peak_y, device_peak_x, device_island_size, scratch,
+                  stream);
   return {download(device_value, stream), download(device_local_noise_max, stream), download(device_peak_y, stream),
           download(device_peak_x, stream), download(device_island_size, stream)};
 }

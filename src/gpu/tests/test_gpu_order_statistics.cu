@@ -31,11 +31,11 @@ float run_median(const std::vector<float> &values, bool abs_mode, float abs_scal
   const Stream stream;
   if (abs_mode)
   {
-    gpu_median_abs(device_values, values.size(), device_median, abs_scale, scratch, stream.get());
+    gpu_median_abs(device_values, values.size(), device_median, abs_scale, scratch, stream);
   }
   else
   {
-    gpu_median(device_values, values.size(), device_median, scratch, stream.get());
+    gpu_median(device_values, values.size(), device_median, scratch, stream);
   }
   return download_scalar(device_median.data(), stream);
 }

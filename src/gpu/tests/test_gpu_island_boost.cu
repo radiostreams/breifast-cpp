@@ -42,7 +42,7 @@ float run_boost(const std::vector<unsigned int> &labels, const std::vector<float
 
   const Stream stream;
   gpu_island_boost(device_labels, device_baseline, labels.size(), device_count, capacity, device_flux, device_boost,
-                   scratch, stream.get());
+                   scratch, stream);
   return download_scalar(device_boost.data() + (label - 1U), stream);
 }
 

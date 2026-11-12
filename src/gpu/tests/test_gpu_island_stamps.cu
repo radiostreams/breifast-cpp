@@ -50,9 +50,8 @@ std::vector<float> run_donut(const std::vector<std::vector<float>> &stamps, floa
   DeviceVector<float> device_out(n_stamps);
 
   const Stream stream;
-  gpu_donut_median_abs(device_stamps, device_count, n_stamps, stamps.front().size(), scale, device_out,
-                       stream.get());
-  return download(device_out, stream.get());
+  gpu_donut_median_abs(device_stamps, device_count, n_stamps, stamps.front().size(), scale, device_out, stream);
+  return download(device_out, stream);
 }
 
 float run_donut(const std::vector<float> &stamp, float scale)
@@ -122,8 +121,8 @@ std::vector<float> run_abs_extreme(const std::vector<std::vector<float>> &stamps
   DeviceVector<float> device_out(n_stamps);
 
   const Stream stream;
-  gpu_stamp_abs_extreme(device_stamps, device_count, n_stamps, stamps.front().size(), device_out, stream.get());
-  return download(device_out, stream.get());
+  gpu_stamp_abs_extreme(device_stamps, device_count, n_stamps, stamps.front().size(), device_out, stream);
+  return download(device_out, stream);
 }
 
 float run_abs_extreme(const std::vector<float> &stamp)
@@ -145,8 +144,8 @@ std::vector<float> run_stamp_extract(const std::vector<float> &plane, size_t n_y
 
   const Stream stream;
   gpu_stamp_extract(device_plane, n_y, n_x, device_cy, device_cx, device_count, n_stamps, radius, inner_boxsize,
-                    device_stamps, stream.get());
-  return download(device_stamps, stream.get());
+                    device_stamps, stream);
+  return download(device_stamps, stream);
 }
 
 std::vector<float> run_stamp_extract_no_zero(const std::vector<float> &plane, size_t n_y, size_t n_x,
@@ -162,9 +161,9 @@ std::vector<float> run_stamp_extract_no_zero(const std::vector<float> &plane, si
   DeviceVector<float> device_stamps(n_stamps * side * side);
 
   const Stream stream;
-  gpu_stamp_extract_no_zero(device_plane, n_y, n_x, device_cy, device_cx, device_count, n_stamps, radius,
-                            device_stamps, stream.get());
-  return download(device_stamps, stream.get());
+  gpu_stamp_extract_no_zero(device_plane, n_y, n_x, device_cy, device_cx, device_count, n_stamps, radius, device_stamps,
+                            stream);
+  return download(device_stamps, stream);
 }
 
 std::vector<float> run_donut_std(const std::vector<std::vector<float>> &stamps)
@@ -175,8 +174,8 @@ std::vector<float> run_donut_std(const std::vector<std::vector<float>> &stamps)
   DeviceVector<float> device_out(n_stamps);
 
   const Stream stream;
-  gpu_donut_std(device_stamps, device_count, n_stamps, stamps.front().size(), device_out, stream.get());
-  return download(device_out, stream.get());
+  gpu_donut_std(device_stamps, device_count, n_stamps, stamps.front().size(), device_out, stream);
+  return download(device_out, stream);
 }
 
 float run_donut_std(const std::vector<float> &stamp)
@@ -226,8 +225,8 @@ std::vector<float> run_beam_chi2(const std::vector<std::vector<float>> &stamps, 
 
   const Stream stream;
   gpu_stamp_beam_chi2(device_stamps, device_kernel, kernel_sum, device_count, n_stamps, stamps.front().size(),
-                      device_extreme, inv_max_to_std_ratio, device_out, stream.get());
-  return download(device_out, stream.get());
+                      device_extreme, inv_max_to_std_ratio, device_out, stream);
+  return download(device_out, stream);
 }
 
 float run_beam_chi2(const std::vector<float> &stamp, const std::vector<float> &kernel, float adjacent_noise,

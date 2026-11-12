@@ -62,7 +62,7 @@ TEST_CASE("copy_band_result copies per-island arrays, histograms and scalars", "
 
   GpuBandHostResult destination;
   const Stream stream;
-  copy_band_result(source, destination, stream.get());
+  copy_band_result(source, destination, stream);
 
   CHECK(destination.label_count == label_count);
   CHECK_THAT(destination.islands.peak_value, Equals(floats));

@@ -94,7 +94,7 @@ std::vector<float> run_gpu_weighted_band_image(const std::vector<float> &cube_va
   const Stream stream;
   gpu_weighted_band_image(device_cube, device_weights, mean_values.empty() ? nullptr : device_mean.data(), device_out,
                           n_plane_pixels, band_start, band_stop, 1.F / static_cast<float>(band_stop - band_start),
-                          stream.get());
+                          stream);
   return download(device_out, stream);
 }
 

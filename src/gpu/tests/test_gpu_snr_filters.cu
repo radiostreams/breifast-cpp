@@ -150,9 +150,9 @@ Outputs run_gpu_snr_and_filters(const std::vector<float> &plane_values, const st
 
   const Stream stream;
   gpu_snr_and_filters(device_plane, device_noise, snr_cutoff_values.empty() ? nullptr : device_snr_cutoff.data(),
-                      flux_cutoff_values.empty() ? nullptr : device_flux_cutoff.data(), device_median_noise, n,
-                      params, device_out, device_mask, device_histogram0, device_histogram1, device_histogram2,
-                      device_min, device_max, stream.get());
+                      flux_cutoff_values.empty() ? nullptr : device_flux_cutoff.data(), device_median_noise, n, params,
+                      device_out, device_mask, device_histogram0, device_histogram1, device_histogram2, device_min,
+                      device_max, stream);
 
   std::string mask;
   mask.reserve(n);

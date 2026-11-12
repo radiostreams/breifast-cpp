@@ -65,7 +65,7 @@ std::vector<float> run_gpu_combine_noise_map_rms(const std::vector<float> &rms_v
 
   const Stream stream;
   gpu_combine_noise_map(device_rms, device_floor, device_selfnoise, device_dde, selfnoise_scale, dde_scale, device_out,
-                        n_plane_pixels, stream.get());
+                        n_plane_pixels, stream);
   return download(device_out, stream);
 }
 
@@ -82,7 +82,7 @@ std::vector<float> run_gpu_combine_noise_map_constant(const std::vector<float> &
 
   const Stream stream;
   gpu_combine_noise_map(nullptr, device_base_noise, device_selfnoise, device_dde, selfnoise_scale, dde_scale,
-                        device_out, n_plane_pixels, stream.get());
+                        device_out, n_plane_pixels, stream);
   return download(device_out, stream);
 }
 

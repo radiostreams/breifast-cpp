@@ -74,7 +74,7 @@ Sums run_gpu_spectral_variance_moments(const std::vector<float> &cube_values, co
 
   const Stream stream;
   gpu_spectral_variance_moments(device_cube, device_flags, device_sum2, device_sum3, device_sum4, n_plane_pixels,
-                                static_cast<int>(n_plane_channels), stream.get());
+                                static_cast<int>(n_plane_channels), stream);
   return {download(device_sum2, stream), download(device_sum3, stream), download(device_sum4, stream)};
 }
 

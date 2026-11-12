@@ -84,7 +84,7 @@ breifast::SpectralVarianceStats assemble_spectral_variance_stats(const GpuSpectr
 
 breifast::SpectralVarianceStats gpu_compute_spectral_variance_stats(const float *cube, const bool *nonzero_channels,
                                                                     size_t n_y, size_t n_x, size_t n_channels,
-                                                                    GpuStream stream)
+                                                                    cudaStream_t stream)
 {
   GpuSpectralVarianceHostResult host;
   gpu_spectral_variance_stats_host(cube, nonzero_channels, n_y, n_x, n_channels, host, stream);
@@ -155,7 +155,7 @@ ProcessPlaneResult gpu_process_plane(GpuSlot &slot, const PlaneBatchItem &item, 
   {
     const bool *const nonzero_channels = upload(inputs.nonzero_channels, item.nonzero_channels);
     result.variance_stats =
-        gpu_compute_spectral_variance_stats(plane.cube, nonzero_channels, n_y, n_x, n_channels, slot.stream.get());
+        gpu_compute_spectral_variance_stats(plane.cube, nonzero_channels, n_y, n_x, n_channels, slot.stream);
   }
 
   // Same order as the CPU process_plane: the last band first.
@@ -176,11 +176,11 @@ ProcessPlaneResult gpu_process_plane(GpuSlot &slot, const PlaneBatchItem &item, 
         .beam_halfsize = beam_halfsize,
         .beam_kernel_sum = beam.kernel ? beam_kernel_sum(beam.kernel->data(), beam_halfsize) : 0.F,
     };
-    if (!gpu_process_band(plane, band, slot.workspace, slot.result, slot.stream.get()))
+    if (!gpu_process_band(plane, band, slot.workspace, slot.result, slot.stream))
     {
       continue;
     }
-    copy_band_result(slot.result, slot.host, slot.stream.get());
+    copy_band_result(slot.result, slot.host, slot.stream);
     append_band_result(slot.host, {item.stokes_label, slice->label}, plane.max_to_std_ratio,
                        config.use_rms_noise_estimator, result);
   }

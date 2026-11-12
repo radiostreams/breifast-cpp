@@ -99,9 +99,9 @@ __global__ void snr_and_filters(const float *plane, const float *noise_map, cons
 
 void gpu_snr_and_filters(const float *plane, const float *noise_map, const float *snr_cutoff, const float *flux_cutoff,
                          const float *median_noise, size_t n_pixels, const common::SnrFilterParams &params,
-                         float *out_snr, bool *image_mask,
-                         unsigned long long *histogram0, unsigned long long *histogram1, unsigned long long *histogram2,
-                         float *out_min_sigma, float *out_max_sigma, GpuStream stream)
+                         float *out_snr, bool *image_mask, unsigned long long *histogram0,
+                         unsigned long long *histogram1, unsigned long long *histogram2, float *out_min_sigma,
+                         float *out_max_sigma, cudaStream_t stream)
 {
   assert(n_pixels > 0);
   assert(params.max_sigma_bin > 0);

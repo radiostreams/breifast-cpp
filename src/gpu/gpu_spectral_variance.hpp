@@ -12,5 +12,5 @@ breifast::SpectralVarianceStats assemble_spectral_variance_stats(const GpuSpectr
 
 breifast::SpectralVarianceStats gpu_compute_spectral_variance_stats(const float *cube, const bool *nonzero_channels,
                                                                     size_t n_y, size_t n_x, size_t n_channels,
-                                                                    GpuStream stream = nullptr);
+                                                                    cudaStream_t stream = nullptr);
 } // namespace breifast::gpu
