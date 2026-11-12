@@ -7,7 +7,6 @@
 
 #include <cuda_runtime.h>
 
-#include "device_vector.hpp"
 #include "gpu_runtime.hpp"
 
 /// Host-device copies for the GPU tests. Uploads are in place before any stream can read them (DeviceVector::from_host);

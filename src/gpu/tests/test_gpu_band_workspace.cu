@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <tuple>
 
-#include "gpu_band_workspace.cuh"
+#include "gpu_band.hpp"
 
 using breifast::gpu::GpuBand;
 using breifast::gpu::GpuBandResult;

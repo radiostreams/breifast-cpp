@@ -12,8 +12,7 @@
 #include <vector>
 #include <optional>
 
-#include "gpu_lot_integration.hpp"
-#include "gpu_plane_integration.hpp"
+#include "gpu_plane.hpp"
 
 using namespace breifast;
 using Catch::Matchers::Equals;

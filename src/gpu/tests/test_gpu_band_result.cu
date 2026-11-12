@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <vector>
 
-#include "gpu_band_result.cuh"
+#include "gpu_band.hpp"
 #include "gpu_test_utils.hpp"
 
 using breifast::gpu::copy_band_result;

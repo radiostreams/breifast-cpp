@@ -1,4 +1,4 @@
-#include "gpu_kernels.hpp"
+#include "gpu_device.hpp"
 
 #include <cuda_runtime.h>
 

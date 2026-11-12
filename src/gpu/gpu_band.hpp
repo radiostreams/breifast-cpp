@@ -1,16 +1,21 @@
 #pragma once
 
 #include <cstddef>
-#include <cstdint>
+#include <string>
 #include <tuple>
+#include <vector>
 
-#include "device_vector.hpp"
 #include "gpu_kernels.hpp"
+#include "gpu_runtime.hpp"
 
+namespace breifast
+{
+struct ProcessPlaneResult; // process_plane_result.hpp includes xtensor, which nvcc cannot compile
+}
+
+// The band level of the GPU pipeline, for gpu_plane.cpp and the tests.
 namespace breifast::gpu
 {
-inline constexpr std::size_t max_stamp_capacity = 4096;
-
 /// The inputs every band of a plane shares, built once per plane: device pointers (null for an absent optional input)
 /// and the plane-wide settings.
 struct GpuPlaneInput
@@ -90,44 +95,6 @@ template <template <class...> class Vector> struct IslandColumns
   }
 };
 
-/// Device scratch of gpu_median and gpu_median_abs: the 256-bin digit histogram, then the radix-select state (count
-/// below the prefix, prefix, coverage) and the largest key below the median.
-struct MedianScratch
-{
-  static constexpr std::size_t histogram_bins = 256;
-  DeviceVector<std::uint32_t> words{histogram_bins + 4};
-};
-
-/// Device scratch of gpu_label_islands: the per-pixel root ranks, the convergence flag, and the temporary storage of
-/// the rank scan (cub::DeviceScan).
-struct LabelScratch
-{
-  /// Grows every array for a plane of `n_pixels`; the contents are unspecified after growing.
-  void ensure(std::size_t n_pixels); // in gpu_islands.cu, where CUB is available
-
-  DeviceVector<unsigned int> root_ranks;
-  DeviceVector<unsigned int> changed{1};
-  DeviceVector<std::byte> scan_storage;
-};
-
-/// Device scratch of gpu_label_stats and gpu_island_boost: the per-island reduction keys and partial results.
-struct IslandScratch
-{
-  /// Grows every array to hold `capacity` islands; the contents are unspecified after growing.
-  void ensure(std::size_t capacity)
-  {
-    value_keys.ensure(capacity);
-    local_noise_max.ensure(capacity);
-    sizes.ensure(capacity);
-    boost_keys.ensure(capacity + 1); // indexed by label, 1..capacity
-  }
-
-  DeviceVector<unsigned long long> value_keys;
-  DeviceVector<float> local_noise_max;
-  DeviceVector<unsigned int> sizes;
-  DeviceVector<unsigned long long> boost_keys;
-};
-
 /// Device buffers of gpu_process_band, grown to what each band needs and reused from band to band.
 struct GpuBandWorkspace
 {
@@ -176,5 +143,73 @@ struct GpuBandResult
   DeviceVector<float> median_noise{1};
   DeviceVector<float> rms_floor{1};
   DeviceVector<float> global_mad{1};
+};
+
+/// Runs one band on `stream` and leaves its outputs in `result`, growing `workspace` and `result` to what the band
+/// needs. Returns false when the band's accept mask is empty: the band is skipped, as on the CPU. The caller has
+/// already skipped a band with no nonzero channel.
+bool gpu_process_band(const GpuPlaneInput &plane, const GpuBand &band, GpuBandWorkspace &workspace,
+                      GpuBandResult &result, GpuStream stream);
+
+/// Host copy of a GpuBandResult: every island column holds label_count entries.
+struct GpuBandHostResult
+{
+  std::size_t label_count = 0;
+
+  IslandColumns<std::vector> islands;
+
+  std::vector<unsigned long long> histogram0;
+  std::vector<unsigned long long> histogram1;
+  std::vector<unsigned long long> histogram2;
+
+  float min_sigma = 0.F;
+  float max_sigma = 0.F;
+  float median_noise = 0.F;
+  float rms_floor = 0.F;
+  float global_mad = 0.F;
+};
+
+/// Copies the band outputs of `source` into `destination` and waits for `stream`.
+void copy_band_result(const GpuBandResult &source, GpuBandHostResult &destination, GpuStream stream);
+
+struct GpuBandLabels
+{
+  std::string stokes_label;
+  std::string band_label;
+};
+
+/// Adds one processed band to `result` as the CPU process_band does: its histograms replace the previous band's, its
+/// median noise is appended, its sigma range merged, and its islands appended as detections. Called in CPU band order.
+void append_band_result(const GpuBandHostResult &band, const GpuBandLabels &labels, float max_to_std_ratio,
+                        bool use_rms_noise_estimator, breifast::ProcessPlaneResult &result);
+
+/// Device copies of a plane's inputs, grown to the largest plane and reused. An input the current plane does not have
+/// keeps the previous plane's contents: the null pointer in GpuPlaneInput is what says it is absent.
+struct GpuPlaneBuffers
+{
+  DeviceVector<float> cube;
+  DeviceVector<float> weights;
+  DeviceVector<bool> nonzero_channels;
+  DeviceVector<bool> accept_mask;
+  DeviceVector<float> selfnoise_offset;
+  DeviceVector<float> selfnoise_raw;
+  DeviceVector<float> dde_noise;
+  DeviceVector<float> mean_image;
+  DeviceVector<float> snr_cutoff;
+  DeviceVector<float> flux_cutoff;
+  DeviceVector<float> baseline_flux;
+  DeviceVector<float> beam_kernel; ///< the current band's
+};
+
+/// Everything one plane in flight needs on the GPU, reused from plane to plane: the input buffers, the band workspace
+/// and outputs, the host staging, and the stream they all run on.
+struct GpuSlot
+{
+  GpuPlaneBuffers inputs;
+  GpuBandWorkspace workspace;
+  GpuBandResult result;
+  GpuBandHostResult host;
+  // Declared last: destroyed first, it waits for the work on the buffers above.
+  Stream stream;
 };
 } // namespace breifast::gpu

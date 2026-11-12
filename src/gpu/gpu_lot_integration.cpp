@@ -1,5 +1,3 @@
-#include "gpu_lot_integration.hpp"
-
 #include <algorithm>
 #include <cstddef>
 #include <vector>
@@ -7,8 +5,8 @@
 #include <oneapi/tbb/parallel_for.h>
 #include <oneapi/tbb/task_arena.h>
 
-#include "gpu_band_result.cuh"
-#include "gpu_plane_integration.hpp"
+#include "gpu_band.hpp"
+#include "gpu_plane.hpp"
 
 namespace breifast::gpu
 {

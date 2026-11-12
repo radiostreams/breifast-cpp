@@ -1,7 +1,7 @@
 #include <cassert>
 #include <limits>
 
-#include "device_vector.hpp"
+#include "gpu_runtime.hpp"
 #include "gpu_kernels.hpp"
 #include "gpu_device_utils.cuh"
 

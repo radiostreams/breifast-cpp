@@ -1,41 +1,14 @@
 #pragma once
 #include <cstddef>
-#include <sstream>
-#include <string>
+#include <cstdint>
 #include <vector>
 
 #include "common/snr_filter_params.hpp"
+#include "gpu_runtime.hpp"
 
-// Host-side interface of the GPU library: no CUDA headers, so C++23 translation units can include it.
+// Host-side interface of the GPU kernels: the launch wrappers and the scratch they reuse.
 namespace breifast::gpu
 {
-struct GpuDeviceSummary
-{
-  std::string name;
-  int compute_capability_major = 0;
-  int compute_capability_minor = 0;
-  size_t total_global_memory = 0;
-  int multiprocessor_count = 0;
-  int max_threads_per_block = 0;
-  int max_threads_per_multiprocessor = 0;
-
-  std::string to_string() const
-  {
-    std::stringstream ss;
-    ss << "GPU Device: " << name << "\n";
-    ss << "  Compute capability: " << compute_capability_major << "." << compute_capability_minor << "\n";
-    ss << "  Total global memory: " << (total_global_memory / (1024 * 1024)) << " MiB\n";
-    ss << "  Multiprocessors: " << multiprocessor_count << "\n";
-    ss << "  Max threads per block: " << max_threads_per_block << "\n";
-    ss << "  Max threads per multiprocessor: " << max_threads_per_multiprocessor << "\n";
-    return ss.str();
-  }
-};
-
-/// Properties of the GPU with index `device_id` among the devices visible to the process.
-GpuDeviceSummary gpu_device_summary(int device_id = 0);
-void require_cuda_device();
-
 /// The stream a GPU call runs on; `nullptr` is the default stream. Opaque here so the header needs no CUDA includes,
 /// and implicitly a `cudaStream_t` inside CUDA translation units.
 struct CUstream_st;
@@ -54,6 +27,46 @@ struct GpuStream
     return static_cast<::CUstream_st *>(handle_);
   }
 #endif
+};
+
+inline constexpr std::size_t max_stamp_capacity = 4096;
+
+/// Device scratch of gpu_median and gpu_median_abs: the 256-bin digit histogram, then the radix-select state (count
+/// below the prefix, prefix, coverage) and the largest key below the median.
+struct MedianScratch
+{
+  static constexpr std::size_t histogram_bins = 256;
+  DeviceVector<std::uint32_t> words{histogram_bins + 4};
+};
+
+/// Device scratch of gpu_label_islands: the per-pixel root ranks, the convergence flag, and the temporary storage of
+/// the rank scan (cub::DeviceScan).
+struct LabelScratch
+{
+  /// Grows every array for a plane of `n_pixels`; the contents are unspecified after growing.
+  void ensure(std::size_t n_pixels); // in gpu_islands.cu, where CUB is available
+
+  DeviceVector<unsigned int> root_ranks;
+  DeviceVector<unsigned int> changed{1};
+  DeviceVector<std::byte> scan_storage;
+};
+
+/// Device scratch of gpu_label_stats and gpu_island_boost: the per-island reduction keys and partial results.
+struct IslandScratch
+{
+  /// Grows every array to hold `capacity` islands; the contents are unspecified after growing.
+  void ensure(std::size_t capacity)
+  {
+    value_keys.ensure(capacity);
+    local_noise_max.ensure(capacity);
+    sizes.ensure(capacity);
+    boost_keys.ensure(capacity + 1); // indexed by label, 1..capacity
+  }
+
+  DeviceVector<unsigned long long> value_keys;
+  DeviceVector<float> local_noise_max;
+  DeviceVector<unsigned int> sizes;
+  DeviceVector<unsigned long long> boost_keys;
 };
 
 /**
@@ -173,7 +186,6 @@ void gpu_rms_noise_map(const float *plane, size_t n_y, size_t n_x, long boxsize,
  * @param out_median One float, written by this call.
  * @param scratch Reused by every call on the same stream; each call resets the parts it reads.
  */
-struct MedianScratch;
 void gpu_median(const float *values, size_t n, float *out_median, MedianScratch &scratch, GpuStream stream = nullptr);
 
 /**
@@ -312,7 +324,6 @@ void gpu_stamp_beam_chi2(const float *stamps, const float *kernel, float kernel_
  * @param out_count One `unsigned int`, the number of islands.
  * @param scratch Built for at least `n_y * n_x` pixels.
  */
-struct LabelScratch;
 void gpu_label_islands(const bool *mask, size_t n_y, size_t n_x, unsigned int *labels, unsigned int *out_count,
                        LabelScratch &scratch, GpuStream stream = nullptr);
 
@@ -341,7 +352,6 @@ void gpu_label_islands(const bool *mask, size_t n_y, size_t n_x, unsigned int *l
  * @param island_size `[n_labels]` pixel counts, written.
  * @param scratch Grown to at least `capacity` islands.
  */
-struct IslandScratch;
 void gpu_label_stats(const unsigned int *labels, const float *image, const float *local_noise, size_t n_pixels,
                      size_t n_x, const unsigned int *active_count, unsigned int capacity, float *value,
                      float *out_local_noise, long *peak_y, long *peak_x, unsigned int *island_size,

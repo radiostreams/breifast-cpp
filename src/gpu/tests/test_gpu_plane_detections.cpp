@@ -7,7 +7,7 @@
 #include <tuple>
 #include <vector>
 
-#include "gpu_plane_detections.hpp"
+#include "gpu_band.hpp"
 #include "process_plane_result.hpp"
 
 using breifast::ProcessPlaneResult;

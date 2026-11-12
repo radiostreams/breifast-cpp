@@ -10,8 +10,8 @@
 #include <xtensor/containers/xadapt.hpp>
 #include <xtensor/core/xmath.hpp>
 
-#include "gpu_plane_detections.hpp"
-#include "gpu_plane_integration.hpp"
+#include "gpu_band.hpp"
+#include "gpu_plane.hpp"
 #include "gpu_spectral_variance.hpp"
 
 namespace breifast::gpu

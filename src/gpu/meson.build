@@ -5,25 +5,26 @@ gpu_include = include_directories('.', '..')
 
 gpu_lib = static_library('breifast_gpu',
   [
-    'gpu_device.cu',
     'gpu_channel_reductions.cu',
     'gpu_snr_filters.cu',
     'gpu_order_statistics.cu',
     'gpu_noise_map.cu',
     'gpu_islands.cu',
     'gpu_process_band.cu',
-    'gpu_band_result.cu',
     'gpu_island_stamps.cu',
     'gpu_scalar_reductions.cu',
   ],
   include_directories : gpu_include,
 )
 
-# TBB headers only: run_batch_core_gpu's users (the extension, test_gpu_parity) link TBB themselves. tbb_build[0], the
-# install directory, orders the compile after TBB is built; the whole target would archive its .so outputs.
+# gpu_lot_integration.cpp stays a source of its own: a program that does not call run_batch_core_gpu (test_gpu) then
+# links neither TBB nor validate_plane_inputs. Its users (the extension, test_gpu_parity) link both. TBB headers only
+# here; tbb_build[0], the install directory, orders the compile after TBB is built, where the whole target would
+# archive its .so outputs.
 gpu_host_lib = static_library('breifast_gpu_host',
   [
-    'gpu_plane_host.cpp',
+    'gpu_plane.cpp',
+    'gpu_device.cpp',
     'gpu_lot_integration.cpp',
     tbb_build[0],
   ],

@@ -6,8 +6,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "gpu_band_workspace.cuh"
-#include "gpu_process_band.cuh"
+#include "gpu_band.hpp"
 #include "gpu_test_utils.hpp"
 
 using breifast::gpu::DeviceVector;

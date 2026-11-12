@@ -4,8 +4,8 @@
 #include <cstddef>
 #include <optional>
 
-#include "gpu_band_result.cuh"
-#include "gpu_plane_integration.hpp"
+#include "gpu_band.hpp"
+#include "gpu_plane.hpp"
 
 using namespace breifast;
 using Catch::Matchers::WithinAbs;

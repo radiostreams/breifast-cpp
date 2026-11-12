@@ -1,7 +1,7 @@
 #include <cassert>
 #include <cstdint>
 
-#include "gpu_band_workspace.cuh"
+#include "gpu_band.hpp"
 #include "gpu_kernels.hpp"
 #include "gpu_device_utils.cuh"
 #include "radix_keys.cuh"

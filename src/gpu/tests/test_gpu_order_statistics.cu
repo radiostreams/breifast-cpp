@@ -8,7 +8,7 @@
 #include <limits>
 #include <vector>
 
-#include "gpu_band_workspace.cuh"
+#include "gpu_band.hpp"
 #include "gpu_kernels.hpp"
 #include "gpu_test_utils.hpp"
 
