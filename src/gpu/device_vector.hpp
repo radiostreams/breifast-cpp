@@ -64,6 +64,13 @@ public:
     }
   }
 
+  /// Grows to at least n elements and copies `host[0, n)` into the first n.
+  void assign(const T *host, std::size_t n)
+  {
+    ensure(n);
+    upload(host, n);
+  }
+
   T *data() noexcept { return data_.get(); }
   const T *data() const noexcept { return data_.get(); }
   operator T *() noexcept { return data(); }

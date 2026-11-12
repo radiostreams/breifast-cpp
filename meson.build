@@ -146,7 +146,6 @@ ext_link_with = []
 ext_deps = [py.dependency(), pybind11_dep, xtl_dep, xtensor_dep, xsimd_dep, xtensor_python_dep, numpy_dep,
             tbb_dep, itt_dep]
 if have_gpu
-  ext_sources += ['src/gpu/gpu_lot_integration.cpp']
   ext_cpp_args += ['-DBREIFAST_HAVE_GPU']
   ext_link_with += [gpu_lib, gpu_host_lib]
   ext_link_args += ['-L' + cudart_libdir, '-lcudart_static', '-lrt', '-lpthread', '-ldl']

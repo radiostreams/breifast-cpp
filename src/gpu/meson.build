@@ -19,12 +19,16 @@ gpu_lib = static_library('breifast_gpu',
   include_directories : gpu_include,
 )
 
+# TBB headers only: run_batch_core_gpu's users (the extension, test_gpu_parity) link TBB themselves. tbb_build[0], the
+# install directory, orders the compile after TBB is built; the whole target would archive its .so outputs.
 gpu_host_lib = static_library('breifast_gpu_host',
   [
     'gpu_plane_host.cpp',
+    'gpu_lot_integration.cpp',
+    tbb_build[0],
   ],
   include_directories : gpu_include,
-  dependencies : [xtl_dep, xtensor_dep, xsimd_dep, cuda_headers_dep],
+  dependencies : [xtl_dep, xtensor_dep, xsimd_dep, cuda_headers_dep, tbb_dep.partial_dependency(compile_args : true)],
 )
 
 test_gpu = executable('test_gpu',
@@ -46,7 +50,7 @@ test_gpu = executable('test_gpu',
 test('gpu', test_gpu)
 
 test_gpu_parity = executable('test_gpu_parity',
-  ['tests/test_gpu_parity.cpp', 'gpu_lot_integration.cpp', cpu_source_files, tbb_build, catch2_build],
+  ['tests/test_gpu_parity.cpp', cpu_source_files, tbb_build, catch2_build],
   include_directories : gpu_include,
   dependencies : [catch2_dep, xtl_dep, xtensor_dep, xsimd_dep, tbb_dep, itt_dep, cuda_headers_dep],
   link_with : [gpu_lib, gpu_host_lib],

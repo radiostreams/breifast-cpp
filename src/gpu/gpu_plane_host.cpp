@@ -2,9 +2,9 @@
 #include <array>
 #include <cassert>
 #include <functional>
-#include <tuple>
 #include <limits>
 #include <optional>
+#include <tuple>
 #include <vector>
 
 #include <xtensor/containers/xadapt.hpp>
@@ -101,74 +101,41 @@ float beam_kernel_sum(const float *kernel, long halfsize)
   return xt::sum(xt::adapt(kernel, side * side, xt::no_ownership(), std::array<std::size_t, 2>{side, side}))();
 }
 
-/// Device copies of one plane's inputs; an absent optional input stays empty.
-struct GpuPlaneBuffers
+/// Copies `array` into `buffer`, growing it if needed, and returns the device pointer.
+template <typename T, typename Array> const T *upload(DeviceVector<T> &buffer, const Array &array)
 {
-  DeviceVector<float> cube;
-  DeviceVector<float> weights;
-  DeviceVector<bool> nonzero_channels;
-  DeviceVector<bool> accept_mask;
-  DeviceVector<float> selfnoise_offset;
-  DeviceVector<float> selfnoise_raw;
-  DeviceVector<float> dde_noise;
-  std::optional<DeviceVector<float>> mean_image;
-  std::optional<DeviceVector<float>> snr_cutoff;
-  std::optional<DeviceVector<float>> flux_cutoff;
-  std::optional<DeviceVector<float>> baseline_flux;
-};
-
-template <typename Array> auto to_device(const Array &array)
-{
-  return DeviceVector<typename Array::value_type>::from_host(array.data(), array.size());
+  buffer.assign(array.data(), array.size());
+  return buffer.data();
 }
 
-template <typename Array> auto to_device(const std::optional<Array> &array)
+/// Same for an optional input: null when it is absent.
+template <typename T, typename Array> const T *upload(DeviceVector<T> &buffer, const std::optional<Array> &array)
 {
-  std::optional<DeviceVector<typename Array::value_type>> vector;
-  if (array)
-  {
-    vector = to_device(*array);
-  }
-  return vector;
-}
-
-template <typename T> const T *data_or_null(const std::optional<DeviceVector<T>> &vector)
-{
-  return vector ? vector->data() : nullptr;
+  return array ? upload(buffer, *array) : nullptr;
 }
 } // namespace
 
-ProcessPlaneResult gpu_process_plane_batch(const PlaneBatchItem &item, const PlaneBatchGroup &group,
-                                           const PlaneConfig &config)
+ProcessPlaneResult gpu_process_plane(GpuSlot &slot, const PlaneBatchItem &item, const PlaneBatchGroup &group,
+                                     const PlaneConfig &config)
 {
   const std::size_t n_channels = item.stokes_cube.shape(0);
   const std::size_t n_y = item.stokes_cube.shape(1);
   const std::size_t n_x = item.stokes_cube.shape(2);
 
-  const GpuPlaneBuffers buffers{
-      .cube = to_device(item.stokes_cube),
-      .weights = to_device(item.weights),
-      .nonzero_channels = to_device(item.nonzero_channels),
-      .accept_mask = to_device(group.accept_mask),
-      .selfnoise_offset = to_device(group.selfnoise_offset),
-      .selfnoise_raw = to_device(group.selfnoise_raw),
-      .dde_noise = to_device(group.dde_noise),
-      .mean_image = config.subtract_mean ? to_device(group.mean_image) : std::nullopt,
-      .snr_cutoff = to_device(group.snr_cutoff),
-      .flux_cutoff = to_device(group.flux_cutoff),
-      .baseline_flux = to_device(config.baseline_flux),
-  };
+  // The uploads run on the default stream, which the slot's stream does not wait for: it must be idle.
+  slot.stream.synchronize();
+  auto &inputs = slot.inputs;
   const GpuPlaneInput plane{
-      .cube = buffers.cube.data(),
-      .weights = buffers.weights.data(),
-      .accept_mask = buffers.accept_mask.data(),
-      .mean_image = data_or_null(buffers.mean_image),
-      .selfnoise_offset = buffers.selfnoise_offset.data(),
-      .selfnoise_raw = buffers.selfnoise_raw.data(),
-      .dde_noise = buffers.dde_noise.data(),
-      .snr_cutoff = data_or_null(buffers.snr_cutoff),
-      .flux_cutoff = data_or_null(buffers.flux_cutoff),
-      .baseline_flux = data_or_null(buffers.baseline_flux),
+      .cube = upload(inputs.cube, item.stokes_cube),
+      .weights = upload(inputs.weights, item.weights),
+      .accept_mask = upload(inputs.accept_mask, group.accept_mask),
+      .mean_image = config.subtract_mean ? upload(inputs.mean_image, group.mean_image) : nullptr,
+      .selfnoise_offset = upload(inputs.selfnoise_offset, group.selfnoise_offset),
+      .selfnoise_raw = upload(inputs.selfnoise_raw, group.selfnoise_raw),
+      .dde_noise = upload(inputs.dde_noise, group.dde_noise),
+      .snr_cutoff = upload(inputs.snr_cutoff, group.snr_cutoff),
+      .flux_cutoff = upload(inputs.flux_cutoff, group.flux_cutoff),
+      .baseline_flux = upload(inputs.baseline_flux, config.baseline_flux),
       .n_y = n_y,
       .n_x = n_x,
       .n_channels = n_channels,
@@ -186,16 +153,12 @@ ProcessPlaneResult gpu_process_plane_batch(const PlaneBatchItem &item, const Pla
   ProcessPlaneResult result;
   if (n_channels > 1)
   {
+    const bool *const nonzero_channels = upload(inputs.nonzero_channels, item.nonzero_channels);
     result.variance_stats =
-        gpu_compute_spectral_variance_stats(buffers.cube, buffers.nonzero_channels, n_y, n_x, n_channels);
+        gpu_compute_spectral_variance_stats(plane.cube, nonzero_channels, n_y, n_x, n_channels, slot.stream.get());
   }
 
-  // Same order as the CPU process_plane: the last band first. The workspace and result grow to the largest band.
-  GpuBandWorkspace workspace;
-  GpuBandResult band_result;
-  GpuBandHostResult host;
-  // Declared after the buffers: destroyed first, it waits for their work.
-  const Stream stream;
+  // Same order as the CPU process_plane: the last band first.
   const bool *const nonzero = item.nonzero_channels.data();
   for (auto slice = config.band_slices.rbegin(); slice != config.band_slices.rend(); ++slice)
   {
@@ -204,28 +167,30 @@ ProcessPlaneResult gpu_process_plane_batch(const PlaneBatchItem &item, const Pla
       continue;
     }
     const auto beam = beam_kernel_for_band(item, *slice, config);
-    std::optional<DeviceVector<float>> beam_kernel;
-    if (beam.kernel)
-    {
-      beam_kernel = to_device(*beam.kernel);
-    }
     const auto beam_halfsize = static_cast<long>(beam.halfsize);
     const GpuBand band{
         .start = slice->start,
         .stop = slice->stop,
         .selfnoise_scale_factor = slice->selfnoise_scale_factor,
-        .beam_kernel = data_or_null(beam_kernel),
+        .beam_kernel = upload(inputs.beam_kernel, beam.kernel),
         .beam_halfsize = beam_halfsize,
         .beam_kernel_sum = beam.kernel ? beam_kernel_sum(beam.kernel->data(), beam_halfsize) : 0.F,
     };
-    if (!gpu_process_band(plane, band, workspace, band_result, stream.get()))
+    if (!gpu_process_band(plane, band, slot.workspace, slot.result, slot.stream.get()))
     {
       continue;
     }
-    copy_band_result(band_result, host, stream.get());
-    append_band_result(host, {item.stokes_label, slice->label}, plane.max_to_std_ratio, config.use_rms_noise_estimator,
-                       result);
+    copy_band_result(slot.result, slot.host, slot.stream.get());
+    append_band_result(slot.host, {item.stokes_label, slice->label}, plane.max_to_std_ratio,
+                       config.use_rms_noise_estimator, result);
   }
   return result;
+}
+
+ProcessPlaneResult gpu_process_plane(const PlaneBatchItem &item, const PlaneBatchGroup &group,
+                                     const PlaneConfig &config)
+{
+  GpuSlot slot;
+  return gpu_process_plane(slot, item, group, config);
 }
 } // namespace breifast::gpu

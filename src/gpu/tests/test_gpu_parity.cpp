@@ -331,7 +331,7 @@ ProcessPlaneResult run_parity(Fixture fixture)
   auto gpu_item = fixture.item;
   ProcessBandScratch scratch;
   const auto cpu_result = process_plane(scratch, fixture.config, cpu_item, fixture.group);
-  const auto gpu_result = gpu::gpu_process_plane_batch(gpu_item, fixture.group, fixture.config);
+  const auto gpu_result = gpu::gpu_process_plane(gpu_item, fixture.group, fixture.config);
   compare_plane_results(cpu_result, gpu_result);
   return cpu_result;
 }
@@ -344,7 +344,7 @@ TEST_CASE("GPU plane result matches CPU in RMS noise mode", "[gpu][parity]")
   auto gpu_item = fixture.item;
   ProcessBandScratch scratch;
   const auto cpu_result = process_plane(scratch, fixture.config, cpu_item, fixture.group);
-  const auto gpu_result = gpu::gpu_process_plane_batch(gpu_item, fixture.group, fixture.config);
+  const auto gpu_result = gpu::gpu_process_plane(gpu_item, fixture.group, fixture.config);
   compare_plane_results(cpu_result, gpu_result);
 }
 
@@ -355,7 +355,7 @@ TEST_CASE("GPU plane result matches CPU in global-MAD noise mode", "[gpu][parity
   auto gpu_item = fixture.item;
   ProcessBandScratch scratch;
   const auto cpu_result = process_plane(scratch, fixture.config, cpu_item, fixture.group);
-  const auto gpu_result = gpu::gpu_process_plane_batch(gpu_item, fixture.group, fixture.config);
+  const auto gpu_result = gpu::gpu_process_plane(gpu_item, fixture.group, fixture.config);
   compare_plane_results(cpu_result, gpu_result);
 }
 
