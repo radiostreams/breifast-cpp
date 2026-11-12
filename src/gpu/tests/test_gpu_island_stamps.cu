@@ -46,11 +46,10 @@ std::vector<float> run_donut(const std::vector<std::vector<float>> &stamps, floa
 {
   const auto n_stamps = static_cast<unsigned int>(stamps.size());
   const auto device_stamps = upload(flatten(stamps));
-  const auto device_count = upload(std::vector<unsigned int>{n_stamps});
   DeviceVector<float> device_out(n_stamps);
 
   const Stream stream;
-  gpu_donut_median_abs(device_stamps, device_count, n_stamps, stamps.front().size(), scale, device_out, stream);
+  gpu_donut_median_abs(device_stamps, n_stamps, stamps.front().size(), scale, device_out, stream);
   return download(device_out, stream);
 }
 
@@ -117,11 +116,10 @@ std::vector<float> run_abs_extreme(const std::vector<std::vector<float>> &stamps
 {
   const auto n_stamps = static_cast<unsigned int>(stamps.size());
   const auto device_stamps = upload(flatten(stamps));
-  const auto device_count = upload(std::vector<unsigned int>{n_stamps});
   DeviceVector<float> device_out(n_stamps);
 
   const Stream stream;
-  gpu_stamp_abs_extreme(device_stamps, device_count, n_stamps, stamps.front().size(), device_out, stream);
+  gpu_stamp_abs_extreme(device_stamps, n_stamps, stamps.front().size(), device_out, stream);
   return download(device_out, stream);
 }
 
@@ -139,12 +137,11 @@ std::vector<float> run_stamp_extract(const std::vector<float> &plane, size_t n_y
   const auto device_plane = upload(plane);
   const auto device_cy = upload(centre_y);
   const auto device_cx = upload(centre_x);
-  const auto device_count = upload(std::vector<unsigned int>{n_stamps});
   DeviceVector<float> device_stamps(n_stamps * side * side);
 
   const Stream stream;
-  gpu_stamp_extract(device_plane, n_y, n_x, device_cy, device_cx, device_count, n_stamps, radius, inner_boxsize,
-                    device_stamps, stream);
+  gpu_stamp_extract(device_plane, n_y, n_x, device_cy, device_cx, n_stamps, radius, inner_boxsize, device_stamps,
+                    stream);
   return download(device_stamps, stream);
 }
 
@@ -157,12 +154,10 @@ std::vector<float> run_stamp_extract_no_zero(const std::vector<float> &plane, si
   const auto device_plane = upload(plane);
   const auto device_cy = upload(centre_y);
   const auto device_cx = upload(centre_x);
-  const auto device_count = upload(std::vector<unsigned int>{n_stamps});
   DeviceVector<float> device_stamps(n_stamps * side * side);
 
   const Stream stream;
-  gpu_stamp_extract_no_zero(device_plane, n_y, n_x, device_cy, device_cx, device_count, n_stamps, radius, device_stamps,
-                            stream);
+  gpu_stamp_extract_no_zero(device_plane, n_y, n_x, device_cy, device_cx, n_stamps, radius, device_stamps, stream);
   return download(device_stamps, stream);
 }
 
@@ -170,11 +165,10 @@ std::vector<float> run_donut_std(const std::vector<std::vector<float>> &stamps)
 {
   const auto n_stamps = static_cast<unsigned int>(stamps.size());
   const auto device_stamps = upload(flatten(stamps));
-  const auto device_count = upload(std::vector<unsigned int>{n_stamps});
   DeviceVector<float> device_out(n_stamps);
 
   const Stream stream;
-  gpu_donut_std(device_stamps, device_count, n_stamps, stamps.front().size(), device_out, stream);
+  gpu_donut_std(device_stamps, n_stamps, stamps.front().size(), device_out, stream);
   return download(device_out, stream);
 }
 
@@ -220,12 +214,11 @@ std::vector<float> run_beam_chi2(const std::vector<std::vector<float>> &stamps, 
   const auto device_stamps = upload(flatten(stamps));
   const auto device_kernel = upload(kernel);
   const auto device_extreme = upload(extreme);
-  const auto device_count = upload(std::vector<unsigned int>{n_stamps});
   DeviceVector<float> device_out(n_stamps);
 
   const Stream stream;
-  gpu_stamp_beam_chi2(device_stamps, device_kernel, kernel_sum, device_count, n_stamps, stamps.front().size(),
-                      device_extreme, inv_max_to_std_ratio, device_out, stream);
+  gpu_stamp_beam_chi2(device_stamps, device_kernel, kernel_sum, n_stamps, stamps.front().size(), device_extreme,
+                      inv_max_to_std_ratio, device_out, stream);
   return download(device_out, stream);
 }
 

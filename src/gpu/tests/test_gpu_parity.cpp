@@ -494,7 +494,7 @@ TEST_CASE("GPU parity when a wide band follows single-channel bands", "[gpu][par
   run_parity(fixture);
 }
 
-// Control for the next test: the fixture has more islands than the GPU's 4096 cap.
+// Control for the next test: the fixture has more islands than the GPU's former 4096 cap.
 TEST_CASE("CPU finds more than 4096 islands in the many-islands fixture", "[parity][fixture]")
 {
   auto fixture = make_many_islands_fixture();
@@ -503,10 +503,8 @@ TEST_CASE("CPU finds more than 4096 islands in the many-islands fixture", "[pari
   CHECK(result.detections.size() == 85 * 85);
 }
 
-// Known GPU bug: a band with more than 4096 islands throws on the GPU (and the batch runner then returns an empty
-// result); the CPU has no limit. Remove [!shouldfail] when the refactor removes the cap (gpu-refactor-plan.md,
-// step 14).
-TEST_CASE("GPU parity with more than 4096 islands", "[gpu][parity][!shouldfail]")
+// The GPU used to cap a band at 4096 islands; it now sizes its island buffers from the count, as the CPU has no limit.
+TEST_CASE("GPU parity with more than 4096 islands", "[gpu][parity]")
 {
   run_parity(make_many_islands_fixture());
 }

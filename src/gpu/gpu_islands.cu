@@ -114,9 +114,8 @@ __global__ void scatter_labels_kernel(const bool *const mask, const size_t n, un
 }
 
 __global__ void island_boost_atomic_kernel(const unsigned int *const labels_per_pixel, const size_t n_pixels,
-                                           const float *const baseline_flux, const unsigned int *const active_count,
-                                           const unsigned int capacity, const float *const flux_per_label,
-                                           unsigned long long *const keys)
+                                           const float *const baseline_flux, const unsigned int n_labels,
+                                           const float *const flux_per_label, unsigned long long *const keys)
 {
   const size_t index = global_index();
   if (index >= n_pixels)
@@ -124,7 +123,7 @@ __global__ void island_boost_atomic_kernel(const unsigned int *const labels_per_
     return;
   }
   const unsigned int label = labels_per_pixel[index];
-  if (label == 0U || label > capacity || label > *active_count)
+  if (label == 0U || label > n_labels)
   {
     return;
   }
@@ -142,22 +141,16 @@ __global__ void island_boost_atomic_kernel(const unsigned int *const labels_per_
 }
 
 __global__ void island_boost_finalize_kernel(const unsigned long long *const keys, const float *const baseline_flux,
-                                             const unsigned int *const active_count, const unsigned int capacity,
-                                             const float *const flux_per_label, float *const boost)
+                                             const unsigned int n_labels, const float *const flux_per_label,
+                                             float *const boost)
 {
   const auto slot = global_index();
-  if (slot >= capacity)
+  if (slot >= n_labels)
   {
     return;
   }
 
   const unsigned int label = static_cast<unsigned int>(slot) + 1U;
-  if (label > *active_count)
-  {
-    boost[slot] = 0.F;
-    return;
-  }
-
   const unsigned long long key = keys[label];
   if (key == 0ULL) // no pixel carries the label
   {
@@ -169,11 +162,11 @@ __global__ void island_boost_finalize_kernel(const unsigned long long *const key
   boost[slot] = flux_per_label[slot] / baseline_flux[index];
 }
 
-__global__ void label_stats_init_kernel(const unsigned int capacity, unsigned long long *const value_keys,
+__global__ void label_stats_init_kernel(const unsigned int n_labels, unsigned long long *const value_keys,
                                         float *const local_noise_max, unsigned int *const island_size)
 {
   const auto label_id = global_index();
-  if (label_id < capacity)
+  if (label_id < n_labels)
   {
     island_size[label_id] = 0;
     local_noise_max[label_id] = -FLT_MAX;
@@ -183,8 +176,8 @@ __global__ void label_stats_init_kernel(const unsigned int capacity, unsigned lo
 
 __global__ void label_stats_scan_kernel(const unsigned int *const labels, const float *const image,
                                         const float *const local_noise, const size_t n_pixels,
-                                        const unsigned int capacity, unsigned long long *const value_keys,
-                                        float *const local_noise_max, unsigned int *const island_size)
+                                        unsigned long long *const value_keys, float *const local_noise_max,
+                                        unsigned int *const island_size)
 {
   const size_t pixel_id = global_index();
   if (pixel_id >= n_pixels)
@@ -214,13 +207,12 @@ __global__ void label_stats_scan_kernel(const unsigned int *const labels, const 
   }
 }
 
-__global__ void label_stats_finalize_kernel(const unsigned int *const active_count, const unsigned int capacity,
-                                            const size_t n_x, const unsigned long long *const value_keys,
+__global__ void label_stats_finalize_kernel(const unsigned int n_labels, const size_t n_x,
+                                            const unsigned long long *const value_keys,
                                             const float *const local_noise_max, const unsigned int *const island_size,
                                             float *const value, float *const out_local_noise, long *const peak_y,
                                             long *const peak_x, unsigned int *const out_island_size)
 {
-  const unsigned int n_labels = *active_count;
   const auto label = global_index();
   if (label >= n_labels)
   {
@@ -278,54 +270,43 @@ void gpu_label_islands(const bool *const mask, const size_t n_y, const size_t n_
 }
 
 void gpu_island_boost(const unsigned int *const labels_per_pixel, const float *const baseline_flux,
-                      const size_t n_pixels, const unsigned int *const active_count, const unsigned int capacity,
-                      const float *const flux_per_label, float *const boost, IslandScratch &scratch,
-                      cudaStream_t stream)
+                      const size_t n_pixels, const unsigned int n_labels, const float *const flux_per_label,
+                      float *const boost, IslandScratch &scratch, cudaStream_t stream)
 {
   assert(n_pixels > 0);
-  assert(active_count != nullptr);
-  assert(capacity > 0);
+  assert(n_labels > 0);
 
-  assert(scratch.boost_keys.size() >= capacity + 1U);
+  assert(scratch.boost_keys.size() >= n_labels + 1U);
   unsigned long long *const keys_ptr = scratch.boost_keys.data();
   // atomicMax keys: they start at 0, and the scratch still holds the previous call's.
-  CHECK_GPU(cudaMemsetAsync(keys_ptr, 0, (capacity + 1U) * sizeof(unsigned long long), stream));
+  CHECK_GPU(cudaMemsetAsync(keys_ptr, 0, (n_labels + 1U) * sizeof(unsigned long long), stream));
 
-  launch_per_element(island_boost_atomic_kernel, n_pixels, stream, labels_per_pixel, n_pixels, baseline_flux,
-                     active_count, capacity, flux_per_label, keys_ptr);
-  launch_per_element(island_boost_finalize_kernel, capacity, stream, keys_ptr, baseline_flux, active_count, capacity,
-                     flux_per_label, boost);
+  launch_per_element(island_boost_atomic_kernel, n_pixels, stream, labels_per_pixel, n_pixels, baseline_flux, n_labels,
+                     flux_per_label, keys_ptr);
+  launch_per_element(island_boost_finalize_kernel, n_labels, stream, keys_ptr, baseline_flux, n_labels, flux_per_label,
+                     boost);
 }
 
 void gpu_label_stats(const unsigned int *const labels, const float *const image, const float *const local_noise,
-                     const size_t n_pixels, const size_t n_x, const unsigned int *const active_count,
-                     const unsigned int capacity, float *const value, float *const out_local_noise, long *const peak_y,
-                     long *const peak_x, unsigned int *const island_size, IslandScratch &scratch, cudaStream_t stream)
+                     const size_t n_pixels, const size_t n_x, const unsigned int n_labels, float *const value,
+                     float *const out_local_noise, long *const peak_y, long *const peak_x,
+                     unsigned int *const island_size, IslandScratch &scratch, cudaStream_t stream)
 {
   assert(n_pixels > 0);
   assert(n_x > 0);
-  assert(active_count != nullptr);
-
-  unsigned int host_count = 0;
-  CHECK_GPU(cudaMemcpyAsync(&host_count, active_count, sizeof(unsigned int), cudaMemcpyDeviceToHost, stream));
-  CHECK_GPU(cudaStreamSynchronize(stream));
-  assert(host_count <= capacity);
-  if (host_count == 0)
-  {
-    return;
-  }
+  assert(n_labels > 0);
 
   // The init kernel below resets all three for this call.
-  assert(scratch.sizes.size() >= capacity);
+  assert(scratch.sizes.size() >= n_labels);
   unsigned long long *const value_keys_ptr = scratch.value_keys.data();
   float *const local_noise_max_ptr = scratch.local_noise_max.data();
   unsigned int *const sizes_ptr = scratch.sizes.data();
 
-  launch_per_element(label_stats_init_kernel, capacity, stream, capacity, value_keys_ptr, local_noise_max_ptr,
+  launch_per_element(label_stats_init_kernel, n_labels, stream, n_labels, value_keys_ptr, local_noise_max_ptr,
                      sizes_ptr);
-  launch_per_element(label_stats_scan_kernel, n_pixels, stream, labels, image, local_noise, n_pixels, capacity,
-                     value_keys_ptr, local_noise_max_ptr, sizes_ptr);
-  launch_per_element(label_stats_finalize_kernel, capacity, stream, active_count, capacity, n_x, value_keys_ptr,
-                     local_noise_max_ptr, sizes_ptr, value, out_local_noise, peak_y, peak_x, island_size);
+  launch_per_element(label_stats_scan_kernel, n_pixels, stream, labels, image, local_noise, n_pixels, value_keys_ptr,
+                     local_noise_max_ptr, sizes_ptr);
+  launch_per_element(label_stats_finalize_kernel, n_labels, stream, n_labels, n_x, value_keys_ptr, local_noise_max_ptr,
+                     sizes_ptr, value, out_local_noise, peak_y, peak_x, island_size);
 }
 } // namespace breifast::gpu

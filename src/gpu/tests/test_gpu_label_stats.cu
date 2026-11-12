@@ -39,7 +39,6 @@ LabelStats run_stats(const std::vector<unsigned int> &labels, const std::vector<
   const auto device_labels = upload(labels);
   const auto device_image = upload(image);
   const auto device_local_noise = upload(local_noise);
-  const auto device_count = upload(std::vector<unsigned int>{n_labels});
   DeviceVector<float> device_value(n_labels);
   DeviceVector<float> device_local_noise_max(n_labels);
   DeviceVector<long> device_peak_y(n_labels);
@@ -49,9 +48,8 @@ LabelStats run_stats(const std::vector<unsigned int> &labels, const std::vector<
   scratch.ensure(n_labels);
 
   const Stream stream;
-  gpu_label_stats(device_labels, device_image, device_local_noise, labels.size(), n_x, device_count, n_labels,
-                  device_value, device_local_noise_max, device_peak_y, device_peak_x, device_island_size, scratch,
-                  stream);
+  gpu_label_stats(device_labels, device_image, device_local_noise, labels.size(), n_x, n_labels, device_value,
+                  device_local_noise_max, device_peak_y, device_peak_x, device_island_size, scratch, stream);
   return {download(device_value, stream), download(device_local_noise_max, stream), download(device_peak_y, stream),
           download(device_peak_x, stream), download(device_island_size, stream)};
 }

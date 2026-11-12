@@ -9,21 +9,20 @@ using breifast::gpu::GpuBand;
 using breifast::gpu::GpuBandResult;
 using breifast::gpu::GpuBandWorkspace;
 using breifast::gpu::GpuPlaneInput;
-using breifast::gpu::max_stamp_capacity;
 
 namespace
 {
-// A 64 x 128 plane (more pixels than the island capacity) with 5 x 5 stamps. ensure only reads the sizes, so the
-// pointers stay null.
+// A 64 x 128 plane with 5 x 5 stamps and 100 islands. ensure and ensure_islands only read the sizes, so the pointers
+// stay null.
 constexpr std::size_t n_pixels = 64 * 128;
-constexpr std::size_t island_capacity = max_stamp_capacity;
+constexpr std::size_t n_islands = 100;
 
 GpuPlaneInput make_plane()
 {
   return GpuPlaneInput{.n_y = 64, .n_x = 128, .n_channels = 1, .boxsize = 5, .max_sigma_bin = 5};
 }
 
-// A band with a 7 x 7 beam kernel. ensure only tests whether the kernel pointer is null.
+// A band with a 7 x 7 beam kernel. ensure_islands only tests whether the kernel pointer is null.
 GpuBand make_band(const float *beam_kernel)
 {
   return GpuBand{.start = 0, .stop = 1, .beam_kernel = beam_kernel, .beam_halfsize = 3};
@@ -39,7 +38,8 @@ TEST_CASE("GpuBandWorkspace grows every buffer to what the band needs", "[gpu][b
 {
   const float kernel = 0.F;
   GpuBandWorkspace workspace;
-  workspace.ensure(make_plane(), make_band(&kernel));
+  workspace.ensure(make_plane());
+  workspace.ensure_islands(make_plane(), make_band(&kernel), n_islands);
 
   CHECK(workspace.plane.size() == n_pixels);
   CHECK(workspace.noise_map.size() == n_pixels);
@@ -50,9 +50,9 @@ TEST_CASE("GpuBandWorkspace grows every buffer to what the band needs", "[gpu][b
   CHECK(workspace.labels.size() == n_pixels);
   CHECK(workspace.label_scratch.root_ranks.size() == n_pixels);
   CHECK(workspace.label_scratch.scan_storage.empty() == false);
-  CHECK(workspace.island_scratch.value_keys.size() == island_capacity);
-  CHECK(workspace.donut_stamps.size() == island_capacity * 25);
-  CHECK(workspace.beam_stamps.size() == island_capacity * 49);
+  CHECK(workspace.island_scratch.value_keys.size() == n_islands);
+  CHECK(workspace.donut_stamps.size() == n_islands * 25);
+  CHECK(workspace.beam_stamps.size() == n_islands * 49);
   CHECK(workspace.any_flag.size() == 1);
   CHECK(workspace.label_count.size() == 1);
 }
@@ -60,7 +60,7 @@ TEST_CASE("GpuBandWorkspace grows every buffer to what the band needs", "[gpu][b
 TEST_CASE("GpuBandWorkspace leaves the beam stamps empty without a beam kernel", "[gpu][band_workspace]")
 {
   GpuBandWorkspace workspace;
-  workspace.ensure(make_plane(), make_band(nullptr));
+  workspace.ensure_islands(make_plane(), make_band(nullptr), n_islands);
   CHECK(workspace.donut_stamps.empty() == false);
   CHECK(workspace.beam_stamps.empty() == true);
 }
@@ -86,12 +86,14 @@ TEST_CASE("GpuBandWorkspace and GpuBandResult keep their buffers for a smaller b
 {
   const float kernel = 0.F;
   GpuBandWorkspace workspace;
-  workspace.ensure(make_plane(), make_band(&kernel));
-  workspace.ensure(GpuPlaneInput{.n_y = 8, .n_x = 8, .n_channels = 1, .boxsize = 1, .max_sigma_bin = 5},
-                   make_band(nullptr));
+  workspace.ensure(make_plane());
+  workspace.ensure_islands(make_plane(), make_band(&kernel), n_islands);
+  const GpuPlaneInput small{.n_y = 8, .n_x = 8, .n_channels = 1, .boxsize = 1, .max_sigma_bin = 5};
+  workspace.ensure(small);
+  workspace.ensure_islands(small, make_band(nullptr), 10);
   CHECK(workspace.plane.size() == n_pixels);
-  CHECK(workspace.donut_stamps.size() == island_capacity * 25);
-  CHECK(workspace.beam_stamps.size() == island_capacity * 49);
+  CHECK(workspace.donut_stamps.size() == n_islands * 25);
+  CHECK(workspace.beam_stamps.size() == n_islands * 49);
 
   GpuBandResult result;
   result.ensure(64, 10);

@@ -98,8 +98,10 @@ template <template <class...> class Vector> struct IslandColumns
 /// Device buffers of gpu_process_band, grown to what each band needs and reused from band to band.
 struct GpuBandWorkspace
 {
-  /// Grows every buffer to what `band` of `input` needs; the contents are unspecified after growing.
-  void ensure(const GpuPlaneInput &input, const GpuBand &band);
+  /// Grows the per-pixel buffers for a plane like `input`; the contents are unspecified after growing.
+  void ensure(const GpuPlaneInput &input);
+  /// Grows the per-island buffers for `n_islands` islands of `band`; the contents are unspecified after growing.
+  void ensure_islands(const GpuPlaneInput &input, const GpuBand &band, std::size_t n_islands);
 
   DeviceVector<float> plane;
   DeviceVector<float> noise_map;
@@ -125,9 +127,9 @@ struct GpuBandWorkspace
 /// buffer is valid.
 struct GpuBandResult
 {
-  /// Grows every buffer for `island_capacity` islands and `histogram_bins` bins, and sets histogram_bins; the contents
-  /// are unspecified after growing.
-  void ensure(std::size_t island_capacity, std::size_t histogram_bins);
+  /// Grows every buffer for `n_islands` islands and `histogram_bins` bins, and sets histogram_bins; the contents are
+  /// unspecified after growing.
+  void ensure(std::size_t n_islands, std::size_t histogram_bins);
 
   unsigned int label_count = 0;   ///< valid entries of every island column
   std::size_t histogram_bins = 0; ///< valid entries of every histogram

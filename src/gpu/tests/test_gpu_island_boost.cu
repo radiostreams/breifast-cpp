@@ -28,21 +28,19 @@ float run_boost(const std::vector<unsigned int> &labels, const std::vector<float
   REQUIRE(labels.size() == baseline_flux.size());
   REQUIRE(label > 0U);
 
-  const unsigned int active_count = labels.empty() ? 0U : *std::max_element(labels.begin(), labels.end());
-  const unsigned int capacity = std::max(active_count, label);
+  const unsigned int largest_label = labels.empty() ? 0U : *std::max_element(labels.begin(), labels.end());
+  const unsigned int n_labels = std::max(largest_label, label);
 
-  std::vector<float> host_flux(capacity, 0.F);
+  std::vector<float> host_flux(n_labels, 0.F);
   host_flux[label - 1U] = flux;
   const auto device_labels = upload(labels);
   const auto device_baseline = upload(baseline_flux);
-  const auto device_count = upload(std::vector<unsigned int>{active_count});
   const auto device_flux = upload(host_flux);
-  DeviceVector<float> device_boost(capacity);
-  scratch.ensure(capacity);
+  DeviceVector<float> device_boost(n_labels);
+  scratch.ensure(n_labels);
 
   const Stream stream;
-  gpu_island_boost(device_labels, device_baseline, labels.size(), device_count, capacity, device_flux, device_boost,
-                   scratch, stream);
+  gpu_island_boost(device_labels, device_baseline, labels.size(), n_labels, device_flux, device_boost, scratch, stream);
   return download_scalar(device_boost.data() + (label - 1U), stream);
 }
 
@@ -136,7 +134,7 @@ TEST_CASE("gpu_island_boost is the plain ratio for a one-pixel island and infini
 
 TEST_CASE("gpu_island_boost gives a zero boost to a label with no pixel", "[gpu][island_boost]")
 {
-  // Label 2 is below the label count (3) but no pixel carries it.
+  // Label 2 is within the 3 labels but no pixel carries it.
   const std::vector<unsigned int> image = {1, 0, 3, 0};
   CHECK(run_boost(image, std::vector<float>{1.F, 1.F, 1.F, 1.F}, 2, 1.F) == 0.F);
 }
