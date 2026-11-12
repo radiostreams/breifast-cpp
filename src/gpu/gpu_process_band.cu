@@ -69,61 +69,74 @@ bool gpu_process_band(const GpuPlaneInput &plane, const GpuBand &band, GpuBandWo
   workspace.ensure(plane);
   result.ensure(0, histogram_bins); // the island columns grow once the islands are counted
 
-  gpu_mask_or(plane.accept_mask, n_pixels, band.start, band.stop, workspace.mask, workspace.any_flag, stream);
-  if (read_flag(workspace.any_flag, stream) == 0)
   {
-    return false;
+    const NvtxRange range{"mask"};
+    gpu_mask_or(plane.accept_mask, n_pixels, band.start, band.stop, workspace.mask, workspace.any_flag, stream);
+    if (read_flag(workspace.any_flag, stream) == 0)
+    {
+      return false;
+    }
   }
 
-  gpu_weighted_band_image(plane.cube, plane.weights, plane.mean_image, workspace.plane, n_pixels, band.start, band.stop,
-                          inv_band_size, stream);
-
-  // Both noise modes need it: the band result reports it, and it is the base noise without an RMS map.
-  gpu_median_abs(workspace.plane, n_pixels, result.global_mad, 1.4826F, workspace.median_scratch, stream);
-  const float *rms = nullptr;
-  const float *base_noise = result.global_mad;
-  if (plane.use_rms_noise_estimator)
   {
-    gpu_rms_noise_map(workspace.plane, plane.n_y, plane.n_x, plane.boxsize, workspace.row_sums, workspace.rms_map,
-                      stream);
-    gpu_median(workspace.rms_map, n_pixels, result.rms_floor, workspace.median_scratch, stream);
-    rms = workspace.rms_map;
-    base_noise = result.rms_floor;
-  }
-  else
-  {
-    CHECK_GPU(cudaMemsetAsync(result.rms_floor, 0, sizeof(float), stream)); // 0 in the global MAD mode, as on the CPU
-  }
-  gpu_combine_noise_map(rms, base_noise, plane.selfnoise_offset, plane.dde_noise, band.selfnoise_scale_factor,
-                        plane.ddenoise_scaling_factor, workspace.noise_map, n_pixels, stream);
+    const NvtxRange range{"band image and noise"};
+    gpu_weighted_band_image(plane.cube, plane.weights, plane.mean_image, workspace.plane, n_pixels, band.start,
+                            band.stop, inv_band_size, stream);
 
-  gpu_median(workspace.noise_map, n_pixels, result.median_noise, workspace.median_scratch, stream);
+    // Both noise modes need it: the band result reports it, and it is the base noise without an RMS map.
+    gpu_median_abs(workspace.plane, n_pixels, result.global_mad, 1.4826F, workspace.median_scratch, stream);
+    const float *rms = nullptr;
+    const float *base_noise = result.global_mad;
+    if (plane.use_rms_noise_estimator)
+    {
+      gpu_rms_noise_map(workspace.plane, plane.n_y, plane.n_x, plane.boxsize, workspace.row_sums, workspace.rms_map,
+                        stream);
+      gpu_median(workspace.rms_map, n_pixels, result.rms_floor, workspace.median_scratch, stream);
+      rms = workspace.rms_map;
+      base_noise = result.rms_floor;
+    }
+    else
+    {
+      CHECK_GPU(cudaMemsetAsync(result.rms_floor, 0, sizeof(float), stream)); // 0 in the global MAD mode, as on the CPU
+    }
+    gpu_combine_noise_map(rms, base_noise, plane.selfnoise_offset, plane.dde_noise, band.selfnoise_scale_factor,
+                          plane.ddenoise_scaling_factor, workspace.noise_map, n_pixels, stream);
 
-  common::SnrFilterParams params;
-  params.inv_band_size = inv_band_size;
-  params.band_start = band.start;
-  params.band_stop = band.stop;
-  params.max_sigma_bin = plane.max_sigma_bin;
-  params.histogram_detail = plane.histogram_detail;
-  params.reject_noise_threshold = plane.reject_noise_threshold;
-  params.threshold = plane.threshold;
-
-  gpu_snr_and_filters(workspace.plane, workspace.noise_map, plane.snr_cutoff, plane.flux_cutoff, result.median_noise,
-                      n_pixels, params, workspace.snr, workspace.mask, result.histogram0, result.histogram1,
-                      result.histogram2, result.min_sigma, result.max_sigma, stream);
-
-  // As on the CPU: a single-channel band of a multi-channel plane writes its SNR into its channel of the cube, which
-  // the bands after it and the spectral variance stats then read.
-  if (band.stop - band.start == 1 && plane.n_channels > 1)
-  {
-    CHECK_GPU(cudaMemcpyAsync(plane.cube + band.start * n_pixels, workspace.snr, n_pixels * sizeof(float),
-                              cudaMemcpyDeviceToDevice, stream));
+    gpu_median(workspace.noise_map, n_pixels, result.median_noise, workspace.median_scratch, stream);
   }
 
-  // An empty mask labels no island, so the count also tells whether anything passed the filters.
-  gpu_label_islands(workspace.mask, plane.n_y, plane.n_x, workspace.labels, workspace.label_count,
-                    workspace.label_scratch, stream);
-  const unsigned int n_islands = read_count(workspace.label_count, stream);
+  {
+    const NvtxRange range{"snr"};
+    common::SnrFilterParams params;
+    params.inv_band_size = inv_band_size;
+    params.band_start = band.start;
+    params.band_stop = band.stop;
+    params.max_sigma_bin = plane.max_sigma_bin;
+    params.histogram_detail = plane.histogram_detail;
+    params.reject_noise_threshold = plane.reject_noise_threshold;
+    params.threshold = plane.threshold;
+
+    gpu_snr_and_filters(workspace.plane, workspace.noise_map, plane.snr_cutoff, plane.flux_cutoff, result.median_noise,
+                        n_pixels, params, workspace.snr, workspace.mask, result.histogram0, result.histogram1,
+                        result.histogram2, result.min_sigma, result.max_sigma, stream);
+
+    // As on the CPU: a single-channel band of a multi-channel plane writes its SNR into its channel of the cube, which
+    // the bands after it and the spectral variance stats then read.
+    if (band.stop - band.start == 1 && plane.n_channels > 1)
+    {
+      CHECK_GPU(cudaMemcpyAsync(plane.cube + band.start * n_pixels, workspace.snr, n_pixels * sizeof(float),
+                                cudaMemcpyDeviceToDevice, stream));
+    }
+  }
+
+  unsigned int n_islands = 0;
+  {
+    const NvtxRange range{"label"};
+    // An empty mask labels no island, so the count also tells whether anything passed the filters.
+    gpu_label_islands(workspace.mask, plane.n_y, plane.n_x, workspace.labels, workspace.label_count,
+                      workspace.label_scratch, stream);
+    n_islands = read_count(workspace.label_count, stream);
+  }
   result.label_count = n_islands;
   if (n_islands == 0)
   {
@@ -132,50 +145,53 @@ bool gpu_process_band(const GpuPlaneInput &plane, const GpuBand &band, GpuBandWo
   workspace.island_scratch.ensure(n_islands);
   result.ensure(n_islands, histogram_bins);
 
-  gpu_label_stats(workspace.labels, workspace.snr, workspace.noise_map, n_pixels, plane.n_x, n_islands,
-                  result.islands.peak_value, result.islands.peak_local_noise, result.islands.peak_y,
-                  result.islands.peak_x, result.islands.island_size, workspace.island_scratch, stream);
-
-  // The donut around each peak, with the inner box zeroed, and the beam window, kept whole: both read in place.
-  const StampWindows donut{
-      .plane = workspace.plane,
-      .n_y = plane.n_y,
-      .n_x = plane.n_x,
-      .peak_y = result.islands.peak_y,
-      .peak_x = result.islands.peak_x,
-      .radius = plane.boxsize / 2,
-      .inner_half = plane.inner_boxsize,
-  };
-  gpu_stamp_abs_extreme(donut, n_islands, result.islands.stamp_extreme, stream);
-  gpu_donut_std(donut, n_islands, result.islands.donut_std, stream);
-  gpu_donut_median_abs(donut, n_islands, 1.4826F, result.islands.donut_lmad, stream);
-
-  if (band.beam_kernel != nullptr)
   {
-    StampWindows beam = donut;
-    beam.radius = band.beam_halfsize;
-    beam.inner_half = -1;
-    gpu_stamp_beam_chi2(beam, band.beam_kernel, band.beam_kernel_sum, n_islands, result.islands.stamp_extreme,
-                        1.F / plane.max_to_std_ratio, result.islands.beam_chi2, stream);
-  }
-  else
-  {
-    CHECK_GPU(cudaMemsetAsync(result.islands.beam_chi2, 0, n_islands * sizeof(float), stream));
-  }
+    const NvtxRange range{"island stats"};
+    gpu_label_stats(workspace.labels, workspace.snr, workspace.noise_map, n_pixels, plane.n_x, n_islands,
+                    result.islands.peak_value, result.islands.peak_local_noise, result.islands.peak_y,
+                    result.islands.peak_x, result.islands.island_size, workspace.island_scratch, stream);
 
-  gpu_gather_at_peaks(
-      workspace.plane, workspace.noise_map, plane.use_rms_noise_estimator ? workspace.rms_map.data() : nullptr,
-      plane.selfnoise_raw, plane.n_x, result.islands.peak_y, result.islands.peak_x, n_islands, result.islands.flux,
-      result.islands.noise_at_peak, result.islands.rms_at_peak, result.islands.selfnoise_at_peak, stream);
+    // The donut around each peak, with the inner box zeroed, and the beam window, kept whole: both read in place.
+    const StampWindows donut{
+        .plane = workspace.plane,
+        .n_y = plane.n_y,
+        .n_x = plane.n_x,
+        .peak_y = result.islands.peak_y,
+        .peak_x = result.islands.peak_x,
+        .radius = plane.boxsize / 2,
+        .inner_half = plane.inner_boxsize,
+    };
+    gpu_stamp_abs_extreme(donut, n_islands, result.islands.stamp_extreme, stream);
+    gpu_donut_std(donut, n_islands, result.islands.donut_std, stream);
+    gpu_donut_median_abs(donut, n_islands, 1.4826F, result.islands.donut_lmad, stream);
 
-  if (plane.baseline_flux != nullptr)
-  {
-    gpu_island_boost(workspace.labels, plane.baseline_flux, n_pixels, n_islands, result.islands.flux,
-                     result.islands.boost, workspace.island_scratch, stream);
-  }
-  else
-  {
-    CHECK_GPU(cudaMemsetAsync(result.islands.boost, 0, n_islands * sizeof(float), stream));
+    if (band.beam_kernel != nullptr)
+    {
+      StampWindows beam = donut;
+      beam.radius = band.beam_halfsize;
+      beam.inner_half = -1;
+      gpu_stamp_beam_chi2(beam, band.beam_kernel, band.beam_kernel_sum, n_islands, result.islands.stamp_extreme,
+                          1.F / plane.max_to_std_ratio, result.islands.beam_chi2, stream);
+    }
+    else
+    {
+      CHECK_GPU(cudaMemsetAsync(result.islands.beam_chi2, 0, n_islands * sizeof(float), stream));
+    }
+
+    gpu_gather_at_peaks(
+        workspace.plane, workspace.noise_map, plane.use_rms_noise_estimator ? workspace.rms_map.data() : nullptr,
+        plane.selfnoise_raw, plane.n_x, result.islands.peak_y, result.islands.peak_x, n_islands, result.islands.flux,
+        result.islands.noise_at_peak, result.islands.rms_at_peak, result.islands.selfnoise_at_peak, stream);
+
+    if (plane.baseline_flux != nullptr)
+    {
+      gpu_island_boost(workspace.labels, plane.baseline_flux, n_pixels, n_islands, result.islands.flux,
+                       result.islands.boost, workspace.island_scratch, stream);
+    }
+    else
+    {
+      CHECK_GPU(cudaMemsetAsync(result.islands.boost, 0, n_islands * sizeof(float), stream));
+    }
   }
 
   return true;
@@ -206,6 +222,7 @@ void GpuBandResult::ensure(const std::size_t n_islands, const std::size_t histog
 
 void copy_band_result(const GpuBandResult &source, GpuBandHostResult &destination, cudaStream_t stream)
 {
+  const NvtxRange range{"copy result"};
   const std::size_t count = source.label_count;
   destination.label_count = count;
   const auto host_columns = destination.islands.tie();

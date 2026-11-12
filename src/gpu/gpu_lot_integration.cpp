@@ -14,6 +14,7 @@ std::vector<ProcessPlaneResult> run_batch_core_gpu(std::vector<PlaneBatchItem> &
                                                    const std::vector<PlaneBatchGroup> &groups,
                                                    const PlaneConfig &config)
 {
+  const NvtxRange range{"batch"};
   validate_plane_inputs(items, groups, config);
   std::vector<ProcessPlaneResult> results(items.size());
   if (items.empty())

@@ -4,6 +4,7 @@
 #include <functional>
 #include <limits>
 #include <optional>
+#include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -19,6 +20,7 @@ namespace breifast::gpu
 void append_band_result(const GpuBandHostResult &band, const GpuBandLabels &labels, float max_to_std_ratio,
                         bool use_rms_noise_estimator, breifast::ProcessPlaneResult &result)
 {
+  const NvtxRange range{"append detections"};
   assert(max_to_std_ratio >= 0.F);
 
   const std::array<const std::vector<unsigned long long> *, 3> histograms{&band.histogram0, &band.histogram1,
@@ -114,35 +116,40 @@ SpectralVarianceStats spectral_variance_stats(GpuSlot &slot, const GpuPlaneInput
 ProcessPlaneResult gpu_process_plane(GpuSlot &slot, const PlaneBatchItem &item, const PlaneBatchGroup &group,
                                      const PlaneConfig &config)
 {
+  const NvtxRange range{"plane"};
   const std::size_t n_channels = item.stokes_cube.shape(0);
   const std::size_t n_y = item.stokes_cube.shape(1);
   const std::size_t n_x = item.stokes_cube.shape(2);
 
   auto &inputs = slot.inputs;
-  const GpuPlaneInput plane{
-      .cube = upload(inputs.cube, item.stokes_cube, slot.stream),
-      .weights = upload(inputs.weights, item.weights, slot.stream),
-      .accept_mask = upload(inputs.accept_mask, group.accept_mask, slot.stream),
-      .mean_image = config.subtract_mean ? upload(inputs.mean_image, group.mean_image, slot.stream) : nullptr,
-      .selfnoise_offset = upload(inputs.selfnoise_offset, group.selfnoise_offset, slot.stream),
-      .selfnoise_raw = upload(inputs.selfnoise_raw, group.selfnoise_raw, slot.stream),
-      .dde_noise = upload(inputs.dde_noise, group.dde_noise, slot.stream),
-      .snr_cutoff = upload(inputs.snr_cutoff, group.snr_cutoff, slot.stream),
-      .flux_cutoff = upload(inputs.flux_cutoff, group.flux_cutoff, slot.stream),
-      .baseline_flux = upload(inputs.baseline_flux, config.baseline_flux, slot.stream),
-      .n_y = n_y,
-      .n_x = n_x,
-      .n_channels = n_channels,
-      .boxsize = config.boxsize,
-      .inner_boxsize = config.inner_boxsize,
-      .histogram_detail = config.histogram_detail,
-      .max_sigma_bin = config.max_sigma_bin,
-      .ddenoise_scaling_factor = config.ddenoise_scaling_factor,
-      .reject_noise_threshold = config.reject_noise_threshold,
-      .threshold = config.threshold,
-      .max_to_std_ratio = config.max_to_std_ratio_value(),
-      .use_rms_noise_estimator = config.use_rms_noise_estimator,
-  };
+  const GpuPlaneInput plane = [&]
+  {
+    const NvtxRange upload_range{"upload"};
+    return GpuPlaneInput{
+        .cube = upload(inputs.cube, item.stokes_cube, slot.stream),
+        .weights = upload(inputs.weights, item.weights, slot.stream),
+        .accept_mask = upload(inputs.accept_mask, group.accept_mask, slot.stream),
+        .mean_image = config.subtract_mean ? upload(inputs.mean_image, group.mean_image, slot.stream) : nullptr,
+        .selfnoise_offset = upload(inputs.selfnoise_offset, group.selfnoise_offset, slot.stream),
+        .selfnoise_raw = upload(inputs.selfnoise_raw, group.selfnoise_raw, slot.stream),
+        .dde_noise = upload(inputs.dde_noise, group.dde_noise, slot.stream),
+        .snr_cutoff = upload(inputs.snr_cutoff, group.snr_cutoff, slot.stream),
+        .flux_cutoff = upload(inputs.flux_cutoff, group.flux_cutoff, slot.stream),
+        .baseline_flux = upload(inputs.baseline_flux, config.baseline_flux, slot.stream),
+        .n_y = n_y,
+        .n_x = n_x,
+        .n_channels = n_channels,
+        .boxsize = config.boxsize,
+        .inner_boxsize = config.inner_boxsize,
+        .histogram_detail = config.histogram_detail,
+        .max_sigma_bin = config.max_sigma_bin,
+        .ddenoise_scaling_factor = config.ddenoise_scaling_factor,
+        .reject_noise_threshold = config.reject_noise_threshold,
+        .threshold = config.threshold,
+        .max_to_std_ratio = config.max_to_std_ratio_value(),
+        .use_rms_noise_estimator = config.use_rms_noise_estimator,
+    };
+  }();
 
   ProcessPlaneResult result;
   // Same order as the CPU process_plane: the last band first.
@@ -153,6 +160,8 @@ ProcessPlaneResult gpu_process_plane(GpuSlot &slot, const PlaneBatchItem &item, 
     {
       continue;
     }
+    const std::string band_name = "band " + slice->label;
+    const NvtxRange band_range{band_name};
     const auto beam = beam_kernel_for_band(item, *slice, config);
     const auto beam_halfsize = static_cast<long>(beam.halfsize);
     const GpuBand band{
@@ -175,6 +184,7 @@ ProcessPlaneResult gpu_process_plane(GpuSlot &slot, const PlaneBatchItem &item, 
   // After the bands, as on the CPU: the single-channel bands have written their SNR into the cube.
   if (n_channels > 1)
   {
+    const NvtxRange variance_range{"variance"};
     result.variance_stats = spectral_variance_stats(slot, plane, item);
   }
   return result;

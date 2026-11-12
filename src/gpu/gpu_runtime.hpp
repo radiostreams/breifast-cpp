@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cuda_runtime.h>
+#include <nvtx3/nvToolsExt.h>
 
 #include <cassert>
 #include <cstddef>
@@ -11,6 +12,39 @@
 
 namespace breifast::gpu
 {
+/// NVTX domain of the GPU pipeline's ranges, so that Nsight Systems groups and filters them.
+inline nvtxDomainHandle_t nvtx_domain()
+{
+  static const nvtxDomainHandle_t domain = nvtxDomainCreateA("breifast");
+  return domain;
+}
+
+/// A range on the calling thread's timeline, from construction to destruction. Without a profiler attached, NVTX
+/// calls return at once.
+class NvtxRange
+{
+public:
+  explicit NvtxRange(const char *name)
+  {
+    nvtxEventAttributes_t attributes{};
+    attributes.version = NVTX_VERSION;
+    attributes.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE;
+    attributes.messageType = NVTX_MESSAGE_TYPE_ASCII;
+    attributes.message.ascii = name;
+    nvtxDomainRangePushEx(nvtx_domain(), &attributes);
+  }
+  explicit NvtxRange(const std::string &name) : NvtxRange(name.c_str())
+  {
+  }
+
+  NvtxRange(const NvtxRange &) = delete;
+  NvtxRange &operator=(const NvtxRange &) = delete;
+  ~NvtxRange()
+  {
+    nvtxDomainRangePop(nvtx_domain());
+  }
+};
+
 /// A CUDA runtime call that did not return cudaSuccess.
 class GpuError : public std::runtime_error
 {

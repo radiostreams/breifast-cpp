@@ -30,13 +30,14 @@
           cuda.cuda_nvcc
           cuda.cuda_cudart
           cuda.cuda_cccl
+          cuda.cuda_nvtx
         ];
         shellHook = ''
           export PKG_CONFIG_PATH="${pkgs.python3Packages.numpy}/${pkgs.python3.sitePackages}/numpy/_core/lib/pkgconfig:$PKG_CONFIG_PATH"
           export CC=/usr/bin/gcc
           export CXX=/usr/bin/g++
           # nvcc takes the nix CUDA headers and static runtime by flag, and links with the system ld and glibc.
-          export NVCC_APPEND_FLAGS="-Xcompiler -B/usr/bin -I${cuda.cuda_cudart}/include -I${cuda.cuda_cccl}/include -L${cuda.cuda_cudart}/lib"
+          export NVCC_APPEND_FLAGS="-Xcompiler -B/usr/bin -I${cuda.cuda_cudart}/include -I${cuda.cuda_cccl}/include -I${cuda.cuda_nvtx.include}/include -L${cuda.cuda_cudart}/lib"
           unset GCC_ROOT
         '';
       };
