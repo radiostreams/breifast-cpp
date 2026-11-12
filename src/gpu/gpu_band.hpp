@@ -100,8 +100,6 @@ struct GpuBandWorkspace
 {
   /// Grows the per-pixel buffers for a plane like `input`; the contents are unspecified after growing.
   void ensure(const GpuPlaneInput &input);
-  /// Grows the per-island buffers for `n_islands` islands of `band`; the contents are unspecified after growing.
-  void ensure_islands(const GpuPlaneInput &input, const GpuBand &band, std::size_t n_islands);
 
   DeviceVector<float> plane;
   DeviceVector<float> noise_map;
@@ -113,9 +111,6 @@ struct GpuBandWorkspace
   DeviceVector<unsigned int> labels;
   LabelScratch label_scratch;
   IslandScratch island_scratch;
-
-  DeviceVector<float> donut_stamps;
-  DeviceVector<float> beam_stamps;
 
   DeviceVector<int> any_flag{1};
   DeviceVector<unsigned int> label_count{1};

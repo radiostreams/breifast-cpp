@@ -11,16 +11,18 @@
 #include <numeric>
 #include <vector>
 
+#include "gpu_device_utils.cuh"
 #include "gpu_kernels.hpp"
 #include "gpu_test_utils.hpp"
 
 using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_donut_median_abs;
 using breifast::gpu::gpu_donut_std;
+using breifast::gpu::gpu_gather_at_peaks;
 using breifast::gpu::gpu_stamp_abs_extreme;
 using breifast::gpu::gpu_stamp_beam_chi2;
-using breifast::gpu::gpu_stamp_extract;
-using breifast::gpu::gpu_stamp_extract_no_zero;
+using breifast::gpu::Stamp;
+using breifast::gpu::StampWindows;
 using breifast::gpu::Stream;
 using breifast::gpu::test::download;
 using breifast::gpu::test::upload;
@@ -31,25 +33,65 @@ namespace
 {
 constexpr float lmad_scale = 1.4826F;
 
-// The stamps one after the other, as the wrappers take them.
-std::vector<float> flatten(const std::vector<std::vector<float>> &stamps)
+// Square stamps of odd side laid side by side on a plane, each window centred on its stamp and inside the plane, so
+// that the windows read exactly the stamps (inner_half -1: nothing zeroed).
+struct StampLayout
 {
-  std::vector<float> flat;
-  for (const auto &stamp : stamps)
+  DeviceVector<float> plane;
+  DeviceVector<long> peak_y;
+  DeviceVector<long> peak_x;
+  StampWindows windows;
+
+  explicit StampLayout(const std::vector<std::vector<float>> &stamps)
   {
-    flat.insert(flat.end(), stamp.begin(), stamp.end());
+    const size_t pixels = stamps.front().size();
+    const auto side = static_cast<size_t>(std::lround(std::sqrt(static_cast<double>(pixels))));
+    REQUIRE(side * side == pixels);
+    REQUIRE(side % 2 == 1);
+    const size_t n_x = side * stamps.size();
+    std::vector<float> host(side * n_x);
+    const std::vector<long> centre_y(stamps.size(), static_cast<long>(side / 2));
+    std::vector<long> centre_x(stamps.size());
+    for (size_t k = 0; k < stamps.size(); ++k)
+    {
+      REQUIRE(stamps[k].size() == pixels);
+      for (size_t row = 0; row < side; ++row)
+      {
+        for (size_t column = 0; column < side; ++column)
+        {
+          host[row * n_x + k * side + column] = stamps[k][row * side + column];
+        }
+      }
+      centre_x[k] = static_cast<long>(k * side + side / 2);
+    }
+    plane = upload(host);
+    peak_y = upload(centre_y);
+    peak_x = upload(centre_x);
+    windows = StampWindows{.plane = plane,
+                           .n_y = side,
+                           .n_x = n_x,
+                           .peak_y = peak_y,
+                           .peak_x = peak_x,
+                           .radius = static_cast<long>(side / 2),
+                           .inner_half = -1};
   }
-  return flat;
+};
+
+// Pads a short list of values with zeros to a 3x3 stamp.
+std::vector<float> pad_to_3x3(std::vector<float> values)
+{
+  values.resize(9, 0.F);
+  return values;
 }
 
 std::vector<float> run_donut(const std::vector<std::vector<float>> &stamps, float scale)
 {
   const auto n_stamps = static_cast<unsigned int>(stamps.size());
-  const auto device_stamps = upload(flatten(stamps));
+  const StampLayout layout(stamps);
   DeviceVector<float> device_out(n_stamps);
 
   const Stream stream;
-  gpu_donut_median_abs(device_stamps, n_stamps, stamps.front().size(), scale, device_out, stream);
+  gpu_donut_median_abs(layout.windows, n_stamps, scale, device_out, stream);
   return download(device_out, stream);
 }
 
@@ -115,11 +157,11 @@ std::vector<float> lcg_stamp(uint32_t seed, long inner_half)
 std::vector<float> run_abs_extreme(const std::vector<std::vector<float>> &stamps)
 {
   const auto n_stamps = static_cast<unsigned int>(stamps.size());
-  const auto device_stamps = upload(flatten(stamps));
+  const StampLayout layout(stamps);
   DeviceVector<float> device_out(n_stamps);
 
   const Stream stream;
-  gpu_stamp_abs_extreme(device_stamps, n_stamps, stamps.front().size(), device_out, stream);
+  gpu_stamp_abs_extreme(layout.windows, n_stamps, device_out, stream);
   return download(device_out, stream);
 }
 
@@ -128,26 +170,20 @@ float run_abs_extreme(const std::vector<float> &stamp)
   return run_abs_extreme(std::vector<std::vector<float>>{stamp})[0];
 }
 
-std::vector<float> run_stamp_extract(const std::vector<float> &plane, size_t n_y, size_t n_x,
-                                     const std::vector<long> &centre_y, const std::vector<long> &centre_x, long radius,
-                                     long inner_boxsize)
+// Copies the cells of each island's stamp out, to check what the stamp kernels read.
+__global__ void read_stamps_kernel(const StampWindows windows, float *stamps)
 {
-  const auto n_stamps = static_cast<unsigned int>(centre_y.size());
-  const size_t side = static_cast<size_t>(2 * radius + 1);
-  const auto device_plane = upload(plane);
-  const auto device_cy = upload(centre_y);
-  const auto device_cx = upload(centre_x);
-  DeviceVector<float> device_stamps(n_stamps * side * side);
-
-  const Stream stream;
-  gpu_stamp_extract(device_plane, n_y, n_x, device_cy, device_cx, n_stamps, radius, inner_boxsize, device_stamps,
-                    stream);
-  return download(device_stamps, stream);
+  const Stamp stamp(windows, blockIdx.x);
+  float *const out = stamps + blockIdx.x * stamp.size();
+  for (size_t i = threadIdx.x; i < stamp.size(); i += blockDim.x)
+  {
+    out[i] = stamp[i];
+  }
 }
 
-std::vector<float> run_stamp_extract_no_zero(const std::vector<float> &plane, size_t n_y, size_t n_x,
-                                             const std::vector<long> &centre_y, const std::vector<long> &centre_x,
-                                             long radius)
+std::vector<float> read_stamps(const std::vector<float> &plane, size_t n_y, size_t n_x,
+                               const std::vector<long> &centre_y, const std::vector<long> &centre_x, long radius,
+                               long inner_half)
 {
   const auto n_stamps = static_cast<unsigned int>(centre_y.size());
   const size_t side = static_cast<size_t>(2 * radius + 1);
@@ -155,20 +191,27 @@ std::vector<float> run_stamp_extract_no_zero(const std::vector<float> &plane, si
   const auto device_cy = upload(centre_y);
   const auto device_cx = upload(centre_x);
   DeviceVector<float> device_stamps(n_stamps * side * side);
+  const StampWindows windows{.plane = device_plane,
+                             .n_y = n_y,
+                             .n_x = n_x,
+                             .peak_y = device_cy,
+                             .peak_x = device_cx,
+                             .radius = radius,
+                             .inner_half = inner_half};
 
   const Stream stream;
-  gpu_stamp_extract_no_zero(device_plane, n_y, n_x, device_cy, device_cx, n_stamps, radius, device_stamps, stream);
+  breifast::gpu::launch_per_island(read_stamps_kernel, n_stamps, stream, windows, device_stamps.data());
   return download(device_stamps, stream);
 }
 
 std::vector<float> run_donut_std(const std::vector<std::vector<float>> &stamps)
 {
   const auto n_stamps = static_cast<unsigned int>(stamps.size());
-  const auto device_stamps = upload(flatten(stamps));
+  const StampLayout layout(stamps);
   DeviceVector<float> device_out(n_stamps);
 
   const Stream stream;
-  gpu_donut_std(device_stamps, n_stamps, stamps.front().size(), device_out, stream);
+  gpu_donut_std(layout.windows, n_stamps, device_out, stream);
   return download(device_out, stream);
 }
 
@@ -211,14 +254,14 @@ std::vector<float> run_beam_chi2(const std::vector<std::vector<float>> &stamps, 
   }
   const float kernel_sum = std::accumulate(kernel.begin(), kernel.end(), 0.F);
 
-  const auto device_stamps = upload(flatten(stamps));
+  const StampLayout layout(stamps);
   const auto device_kernel = upload(kernel);
   const auto device_extreme = upload(extreme);
   DeviceVector<float> device_out(n_stamps);
 
   const Stream stream;
-  gpu_stamp_beam_chi2(device_stamps, device_kernel, kernel_sum, n_stamps, stamps.front().size(), device_extreme,
-                      inv_max_to_std_ratio, device_out, stream);
+  gpu_stamp_beam_chi2(layout.windows, device_kernel, kernel_sum, n_stamps, device_extreme, inv_max_to_std_ratio,
+                      device_out, stream);
   return download(device_out, stream);
 }
 
@@ -323,9 +366,9 @@ TEST_CASE("gpu_stamp_abs_extreme matches numpy's max(abs(min), abs(max)) on a se
 
 TEST_CASE("gpu_stamp_abs_extreme takes the larger of the two sides and 0 for a zero stamp", "[gpu][island_stamps]")
 {
-  CHECK_THAT(run_abs_extreme(std::vector<float>{-5.F, 2.F, 3.F}), WithinRel(5.F));
-  CHECK_THAT(run_abs_extreme(std::vector<float>{-2.F, 1.F, 4.F}), WithinRel(4.F));
-  CHECK_THAT(run_abs_extreme(std::vector<float>{-4.F, 1.F, 4.F}), WithinRel(4.F));
+  CHECK_THAT(run_abs_extreme(pad_to_3x3({-5.F, 2.F, 3.F})), WithinRel(5.F));
+  CHECK_THAT(run_abs_extreme(pad_to_3x3({-2.F, 1.F, 4.F})), WithinRel(4.F));
+  CHECK_THAT(run_abs_extreme(pad_to_3x3({-4.F, 1.F, 4.F})), WithinRel(4.F));
   CHECK_THAT(run_abs_extreme(std::vector<float>{-3.F}), WithinRel(3.F));
   CHECK_THAT(run_abs_extreme(std::vector<float>(49, 0.F)), WithinRel(0.F));
 }
@@ -336,10 +379,10 @@ TEST_CASE("gpu_stamp_abs_extreme ignores NaN pixels and reports FLT_MAX when not
   const float nan = std::numeric_limits<float>::quiet_NaN();
   const float inf = std::numeric_limits<float>::infinity();
 
-  CHECK_THAT(run_abs_extreme(std::vector<float>{nan, -7.F, 2.F, nan}), WithinRel(7.F));
-  CHECK_THAT(run_abs_extreme(std::vector<float>(2, nan)), WithinRel(std::numeric_limits<float>::max()));
-  CHECK_THAT(run_abs_extreme(std::vector<float>{1.F, -inf, 3.F}), WithinRel(inf));
-  CHECK_THAT(run_abs_extreme(std::vector<float>{1.F, inf, nan}), WithinRel(inf));
+  CHECK_THAT(run_abs_extreme(pad_to_3x3({nan, -7.F, 2.F, nan})), WithinRel(7.F));
+  CHECK_THAT(run_abs_extreme(std::vector<float>(9, nan)), WithinRel(std::numeric_limits<float>::max()));
+  CHECK_THAT(run_abs_extreme(pad_to_3x3({1.F, -inf, 3.F})), WithinRel(inf));
+  CHECK_THAT(run_abs_extreme(pad_to_3x3({1.F, inf, nan})), WithinRel(inf));
 }
 
 TEST_CASE("gpu_stamp_abs_extreme computes each stamp independently, one block per stamp", "[gpu][island_stamps]")
@@ -375,7 +418,7 @@ TEST_CASE("gpu_stamp_abs_extreme covers a stamp larger than a block against a ho
   CHECK_THAT(run_abs_extreme(stamp), WithinRel(expected));
 }
 
-TEST_CASE("gpu_stamp_extract copies the window and zeros the inner box on a 7x7 plane", "[gpu][island_stamps]")
+TEST_CASE("A stamp reads the window of the plane and zeros the inner box on a 7x7 plane", "[gpu][island_stamps]")
 {
   std::vector<float> plane(49);
   for (size_t i = 0; i < plane.size(); ++i)
@@ -383,7 +426,7 @@ TEST_CASE("gpu_stamp_extract copies the window and zeros the inner box on a 7x7 
     plane[i] = static_cast<float>(i + 1);
   }
 
-  const auto stamps = run_stamp_extract(plane, 7, 7, {3L}, {3L}, 3, 1);
+  const auto stamps = read_stamps(plane, 7, 7, {3L}, {3L}, 3, 1);
 
   // numpy: a[2:5, 2:5] = 0 for inner_boxsize 1, the 3x3 block around the centre pixel.
   const std::vector<float> expected = {
@@ -397,11 +440,11 @@ TEST_CASE("gpu_stamp_extract copies the window and zeros the inner box on a 7x7 
   CHECK_THAT(stamps, Equals(expected));
 }
 
-TEST_CASE("gpu_stamp_extract zeros the cells outside the plane", "[gpu][island_stamps]")
+TEST_CASE("A stamp reads 0 outside the plane", "[gpu][island_stamps]")
 {
   // Corner (0, 0): 16 of 25 cells fall outside the plane. The centre cell (100 in the pure-extract reference) is the
   // fused inner-box zero.
-  const auto corner = run_stamp_extract(stamp_plane, stamp_plane_n_y, stamp_plane_n_x, {0L}, {0L}, 2, 0);
+  const auto corner = read_stamps(stamp_plane, stamp_plane_n_y, stamp_plane_n_x, {0L}, {0L}, 2, 0);
   const std::vector<float> expected_corner = {
       0.F,   0.F,   0.F,   0.F,   0.F,
       0.F,   0.F,   0.F,   0.F,   0.F,
@@ -412,7 +455,7 @@ TEST_CASE("gpu_stamp_extract zeros the cells outside the plane", "[gpu][island_s
   CHECK_THAT(corner, Equals(expected_corner));
 
   // Opposite corner (5, 6): the window sticks out to the right and below.
-  const auto far = run_stamp_extract(stamp_plane, stamp_plane_n_y, stamp_plane_n_x, {5L}, {6L}, 2, 0);
+  const auto far = read_stamps(stamp_plane, stamp_plane_n_y, stamp_plane_n_x, {5L}, {6L}, 2, 0);
   const std::vector<float> expected_far = {
       134.F, 135.F, 136.F, 0.F, 0.F,
       144.F, 145.F, 146.F, 0.F, 0.F,
@@ -423,10 +466,10 @@ TEST_CASE("gpu_stamp_extract zeros the cells outside the plane", "[gpu][island_s
   CHECK_THAT(far, Equals(expected_far));
 }
 
-TEST_CASE("gpu_stamp_extract clips the inner box to the radius", "[gpu][island_stamps]")
+TEST_CASE("A stamp clips the inner box to the radius", "[gpu][island_stamps]")
 {
   // inner_boxsize 0 zeroes only the centre cell of the 5x5 window around (3, 3).
-  const auto centre_only = run_stamp_extract(stamp_plane, stamp_plane_n_y, stamp_plane_n_x, {3L}, {3L}, 2, 0);
+  const auto centre_only = read_stamps(stamp_plane, stamp_plane_n_y, stamp_plane_n_x, {3L}, {3L}, 2, 0);
   const std::vector<float> expected_centre_only = {
       111.F, 112.F, 113.F, 114.F, 115.F,
       121.F, 122.F, 123.F, 124.F, 125.F,
@@ -437,20 +480,20 @@ TEST_CASE("gpu_stamp_extract clips the inner box to the radius", "[gpu][island_s
   CHECK_THAT(centre_only, Equals(expected_centre_only));
 
   // inner_boxsize at the radius or wider zeroes the whole stamp.
-  CHECK_THAT(run_stamp_extract(stamp_plane, stamp_plane_n_y, stamp_plane_n_x, {3L}, {3L}, 2, 2),
+  CHECK_THAT(read_stamps(stamp_plane, stamp_plane_n_y, stamp_plane_n_x, {3L}, {3L}, 2, 2),
              Equals(std::vector<float>(25, 0.F)));
-  CHECK_THAT(run_stamp_extract(stamp_plane, stamp_plane_n_y, stamp_plane_n_x, {3L}, {3L}, 2, 100),
+  CHECK_THAT(read_stamps(stamp_plane, stamp_plane_n_y, stamp_plane_n_x, {3L}, {3L}, 2, 100),
              Equals(std::vector<float>(25, 0.F)));
 
   // radius 0: a one-pixel stamp, the centre zeroed by any inner_boxsize.
-  CHECK_THAT(run_stamp_extract(stamp_plane, stamp_plane_n_y, stamp_plane_n_x, {0L}, {0L}, 0, 0),
+  CHECK_THAT(read_stamps(stamp_plane, stamp_plane_n_y, stamp_plane_n_x, {0L}, {0L}, 0, 0),
              Equals(std::vector<float>{0.F}));
 }
 
-TEST_CASE("gpu_stamp_extract extracts each island's stamp independently", "[gpu][island_stamps]")
+TEST_CASE("Each island reads its own stamp", "[gpu][island_stamps]")
 {
   // Two islands on the 6x7 plane, radius 2, inner_boxsize 0, so each stamp has its centre cell zeroed.
-  const auto stamps = run_stamp_extract(stamp_plane, stamp_plane_n_y, stamp_plane_n_x, {1L, 4L}, {2L, 1L}, 2, 0);
+  const auto stamps = read_stamps(stamp_plane, stamp_plane_n_y, stamp_plane_n_x, {1L, 4L}, {2L, 1L}, 2, 0);
 
   REQUIRE(stamps.size() == 50);
 
@@ -472,7 +515,7 @@ TEST_CASE("gpu_stamp_extract extracts each island's stamp independently", "[gpu]
   CHECK_THAT(std::vector<float>(stamps.begin() + 25, stamps.end()), Equals(expected1));
 }
 
-TEST_CASE("gpu_stamp_extract_no_zero copies the window without zeroing the centre", "[gpu][island_stamps]")
+TEST_CASE("A stamp without an inner box keeps the centre", "[gpu][island_stamps]")
 {
   std::vector<float> plane(49);
   for (size_t i = 0; i < plane.size(); ++i)
@@ -480,7 +523,7 @@ TEST_CASE("gpu_stamp_extract_no_zero copies the window without zeroing the centr
     plane[i] = static_cast<float>(i + 1);
   }
 
-  const auto stamps = run_stamp_extract_no_zero(plane, 7, 7, {3L}, {3L}, 3);
+  const auto stamps = read_stamps(plane, 7, 7, {3L}, {3L}, 3, -1);
 
   std::vector<float> expected(49);
   for (size_t i = 0; i < expected.size(); ++i)
@@ -490,9 +533,9 @@ TEST_CASE("gpu_stamp_extract_no_zero copies the window without zeroing the centr
   CHECK_THAT(stamps, Equals(expected));
 }
 
-TEST_CASE("gpu_stamp_extract_no_zero still zeros cells outside the plane", "[gpu][island_stamps]")
+TEST_CASE("A stamp without an inner box still reads 0 outside the plane", "[gpu][island_stamps]")
 {
-  const auto corner = run_stamp_extract_no_zero(stamp_plane, stamp_plane_n_y, stamp_plane_n_x, {0L}, {0L}, 2);
+  const auto corner = read_stamps(stamp_plane, stamp_plane_n_y, stamp_plane_n_x, {0L}, {0L}, 2, -1);
   const std::vector<float> expected_corner = {
       0.F,   0.F,   0.F,   0.F,   0.F,
       0.F,   0.F,   0.F,   0.F,   0.F,
@@ -503,11 +546,40 @@ TEST_CASE("gpu_stamp_extract_no_zero still zeros cells outside the plane", "[gpu
   CHECK_THAT(corner, Equals(expected_corner));
 }
 
-TEST_CASE("gpu_stamp_extract_no_zero gathers single values at radius zero", "[gpu][island_stamps]")
+TEST_CASE("gpu_gather_at_peaks reads four maps at each peak, and 0 without an RMS map", "[gpu][island_stamps]")
 {
-  const auto values =
-      run_stamp_extract_no_zero(stamp_plane, stamp_plane_n_y, stamp_plane_n_x, {0L, 0L, 3L}, {0L, 2L, 3L}, 0);
-  CHECK_THAT(values, Equals(std::vector<float>{100.F, 102.F, 133.F}));
+  // The noise, RMS and self-noise maps are the plane plus 1000, 2000 and 3000, so each value names its map and pixel.
+  std::vector<float> noise_map(stamp_plane);
+  std::vector<float> rms_map(stamp_plane);
+  std::vector<float> selfnoise(stamp_plane);
+  for (size_t i = 0; i < stamp_plane.size(); ++i)
+  {
+    noise_map[i] += 1000.F;
+    rms_map[i] += 2000.F;
+    selfnoise[i] += 3000.F;
+  }
+  const auto device_plane = upload(stamp_plane);
+  const auto device_noise = upload(noise_map);
+  const auto device_rms = upload(rms_map);
+  const auto device_selfnoise = upload(selfnoise);
+  const auto device_peak_y = upload(std::vector<long>{0L, 0L, 3L});
+  const auto device_peak_x = upload(std::vector<long>{0L, 2L, 3L});
+  DeviceVector<float> flux(3);
+  DeviceVector<float> noise_at_peak(3);
+  DeviceVector<float> rms_at_peak(3);
+  DeviceVector<float> selfnoise_at_peak(3);
+
+  const Stream stream;
+  gpu_gather_at_peaks(device_plane, device_noise, device_rms, device_selfnoise, stamp_plane_n_x, device_peak_y,
+                      device_peak_x, 3, flux, noise_at_peak, rms_at_peak, selfnoise_at_peak, stream);
+  CHECK_THAT(download(flux, stream), Equals(std::vector<float>{100.F, 102.F, 133.F}));
+  CHECK_THAT(download(noise_at_peak, stream), Equals(std::vector<float>{1100.F, 1102.F, 1133.F}));
+  CHECK_THAT(download(rms_at_peak, stream), Equals(std::vector<float>{2100.F, 2102.F, 2133.F}));
+  CHECK_THAT(download(selfnoise_at_peak, stream), Equals(std::vector<float>{3100.F, 3102.F, 3133.F}));
+
+  gpu_gather_at_peaks(device_plane, device_noise, nullptr, device_selfnoise, stamp_plane_n_x, device_peak_y,
+                      device_peak_x, 3, flux, noise_at_peak, rms_at_peak, selfnoise_at_peak, stream);
+  CHECK_THAT(download(rms_at_peak, stream), Equals(std::vector<float>{0.F, 0.F, 0.F}));
 }
 
 TEST_CASE("gpu_donut_std matches numpy's population standard deviation on the seeded 9x9 stamp",

@@ -178,20 +178,33 @@ void gpu_median(const float *values, size_t n, float *out_median, MedianScratch 
 void gpu_median_abs(const float *values, size_t n, float *out_median, float scale, MedianScratch &scratch,
                     cudaStream_t stream = nullptr);
 
+/// Where each island's stamp is read from: the (2 * radius + 1)^2 window of `plane` centred on the island's peak, read
+/// in place (device Stamp, gpu_device_utils.cuh). A cell outside the plane reads 0, and so does a cell of the central
+/// (2 * inner_half + 1)^2 box when inner_half >= 0 (clipped to radius); inner_half < 0 keeps the centre.
+struct StampWindows
+{
+  const float *plane = nullptr; ///< [n_y, n_x], row major
+  size_t n_y = 0;
+  size_t n_x = 0;
+  const long *peak_y = nullptr; ///< [n_islands]
+  const long *peak_x = nullptr; ///< [n_islands]
+  long radius = 0;
+  long inner_half = -1;
+};
+
 /**
  * @brief Scaled median absolute value of the nonzero pixels of each stamp: the `lmad` of stamp_donut_stats.
  *
  * One block per stamp. The block keeps the pixels with `value != 0`, takes the median of `abs(value)` with a
  * block-level digit select (the even-count average of the two middle ranks), and writes `scale * median`, or 0 when
  * the stamp has no nonzero pixel. Device pointers; the work is enqueued on `stream`.
- * @param stamps `[n_islands, stamp_pixels]` floats, row major, one stamp per row.
- * @param n_islands Number of stamps, at least 1.
- * @param stamp_pixels `(2 * radius + 1)^2`.
+ * @param stamps The stamp of each island.
+ * @param n_islands Number of islands, at least 1.
  * @param scale Multiplier applied to the median, `1.4826` for the donut.
  * @param out_lmad `[n_islands]` floats, written.
  */
-void gpu_donut_median_abs(const float *stamps, unsigned int n_islands, size_t stamp_pixels, float scale,
-                          float *out_lmad, cudaStream_t stream = nullptr);
+void gpu_donut_median_abs(const StampWindows &stamps, unsigned int n_islands, float scale, float *out_lmad,
+                          cudaStream_t stream = nullptr);
 
 /**
  * @brief Population standard deviation of the nonzero pixels of each stamp: the `stddev` of stamp_donut_stats.
@@ -199,58 +212,23 @@ void gpu_donut_median_abs(const float *stamps, unsigned int n_islands, size_t st
  * One block per stamp. Over the nonzero pixels (count `m`) it reduces `sum` and `sumsq` in double and writes
  * `sqrt(sumsq/m - (sum/m)^2)`, or 0 when the stamp has no nonzero pixel. Population (divide by `m`), matching
  * `xt::stddev`. Device pointers; the work is enqueued on `stream`.
- * @param stamps `[n_islands, stamp_pixels]` floats, row major, one stamp per row.
- * @param n_islands Number of stamps, at least 1.
- * @param stamp_pixels `(2 * radius + 1)^2`.
+ * @param stamps The stamp of each island.
+ * @param n_islands Number of islands, at least 1.
  * @param out_std `[n_islands]` floats, written.
  */
-void gpu_donut_std(const float *stamps, unsigned int n_islands, size_t stamp_pixels, float *out_std,
-                   cudaStream_t stream = nullptr);
+void gpu_donut_std(const StampWindows &stamps, unsigned int n_islands, float *out_std, cudaStream_t stream = nullptr);
 
 /**
  * @brief `max(|min|, |max|)` over each stamp, the local-noise extreme of stamp_abs_extreme.
  *
  * One block per stamp, min and max reduced over the stamp and combined into one number per stamp. NaN pixels are
  * ignored, and a stamp with no other value gives `FLT_MAX`. Device pointers; the work is enqueued on `stream`.
- * @param stamps `[n_islands, stamp_pixels]` floats, row major, one stamp per row.
- * @param n_islands Number of stamps, at least 1.
- * @param stamp_pixels `(2 * radius + 1)^2`.
+ * @param stamps The stamp of each island.
+ * @param n_islands Number of islands, at least 1.
  * @param out_extreme `[n_islands]` floats, written.
  */
-void gpu_stamp_abs_extreme(const float *stamps, unsigned int n_islands, size_t stamp_pixels, float *out_extreme,
+void gpu_stamp_abs_extreme(const StampWindows &stamps, unsigned int n_islands, float *out_extreme,
                            cudaStream_t stream = nullptr);
-
-/**
- * @brief Extract the `(2 * radius + 1)^2` window around each island's peak into a stamp, with the inner box zeroed.
- *
- * One block per stamp. A stamp cell is the plane value where the window is inside the plane, else 0, and every cell of
- * the `(2 * inner_boxsize + 1)^2` block at the centre is 0 (stamp_zero_inner_box fused in). Device pointers; the work
- * is enqueued on `stream`.
- * @param plane `[n_y, n_x]` floats, row major.
- * @param centre_y,centre_x `[n_islands]` peak row and column per island.
- * @param n_islands Number of stamps, at least 1.
- * @param radius Half-width of the window.
- * @param inner_boxsize Half-width of the zeroed centre, clipped to `radius`.
- * @param stamps `[n_islands, (2 * radius + 1)^2]` floats, written.
- */
-void gpu_stamp_extract(const float *plane, size_t n_y, size_t n_x, const long *centre_y, const long *centre_x,
-                       unsigned int n_islands, long radius, long inner_boxsize, float *stamps,
-                       cudaStream_t stream = nullptr);
-
-/**
- * @brief Extract the `(2 * radius + 1)^2` window around each island's peak into a stamp, without zeroing anything.
- *
- * Same clipping behaviour as gpu_stamp_extract(): cells outside the plane are 0, in-plane cells keep the plane value
- * (including the centre). Use this for beam stamps and for gathering per-island values with `radius = 0`. Device
- * pointers; the work is enqueued on `stream`.
- * @param plane `[n_y, n_x]` floats, row major.
- * @param centre_y,centre_x `[n_islands]` peak row and column per island.
- * @param n_islands Number of stamps, at least 1.
- * @param radius Half-width of the window.
- * @param stamps `[n_islands, (2 * radius + 1)^2]` floats, written.
- */
-void gpu_stamp_extract_no_zero(const float *plane, size_t n_y, size_t n_x, const long *centre_y, const long *centre_x,
-                               unsigned int n_islands, long radius, float *stamps, cudaStream_t stream = nullptr);
 
 /**
  * @brief Reduced chi2 of each stamp against the beam kernel, over the nonzero stamp pixels.
@@ -259,17 +237,32 @@ void gpu_stamp_extract_no_zero(const float *plane, size_t n_y, size_t n_x, const
  * `sum((stamp[i] - scale * kernel[i])^2) / (adjacent_noise^2 * count)` over the nonzero pixels, and 0 when there
  * is no nonzero pixel or `adjacent_noise` is 0. `adjacent_noise` is computed on the fly as
  * `stamp_extreme[i] * inv_max_to_std_ratio`. Device pointers; the work is enqueued on `stream`.
- * @param stamps `[n_islands, stamp_pixels]` floats, row major, one beam stamp per row.
- * @param kernel `[stamp_pixels]` floats, the band's beam kernel, shared by every stamp.
+ * @param stamps The beam stamp of each island, `radius` the beam halfsize.
+ * @param kernel `[(2 * radius + 1)^2]` floats, the band's beam kernel, shared by every stamp.
  * @param kernel_sum Sum of `kernel`, computed on the host (beam_kernel_sum).
- * @param n_islands Number of stamps, at least 1.
- * @param stamp_pixels `(2 * halfsize + 1)^2`.
+ * @param n_islands Number of islands, at least 1.
  * @param stamp_extreme `[n_islands]` floats, the per-island `stamp_abs_extreme` values.
  * @param inv_max_to_std_ratio `1 / max_to_std_ratio_value`.
  * @param out_chi2 `[n_islands]` floats, written.
  */
-void gpu_stamp_beam_chi2(const float *stamps, const float *kernel, float kernel_sum, unsigned int n_islands,
-                         size_t stamp_pixels, const float *stamp_extreme, float inv_max_to_std_ratio, float *out_chi2,
+void gpu_stamp_beam_chi2(const StampWindows &stamps, const float *kernel, float kernel_sum, unsigned int n_islands,
+                         const float *stamp_extreme, float inv_max_to_std_ratio, float *out_chi2,
+                         cudaStream_t stream = nullptr);
+
+/**
+ * @brief The values of four maps at each island's peak: the `radius = 0` reads of the detection record.
+ *
+ * One thread per island. Device pointers; the work is enqueued on `stream`.
+ * @param plane,noise_map,selfnoise_raw `[n_y, n_x]` floats, row major.
+ * @param rms_map `[n_y, n_x]` floats, or null in the global MAD mode, which writes 0.
+ * @param n_x Row width.
+ * @param peak_y,peak_x `[n_islands]` peak row and column per island, inside the maps.
+ * @param n_islands Number of islands, at least 1.
+ * @param flux,noise_at_peak,rms_at_peak,selfnoise_at_peak `[n_islands]` floats, written.
+ */
+void gpu_gather_at_peaks(const float *plane, const float *noise_map, const float *rms_map, const float *selfnoise_raw,
+                         size_t n_x, const long *peak_y, const long *peak_x, unsigned int n_islands, float *flux,
+                         float *noise_at_peak, float *rms_at_peak, float *selfnoise_at_peak,
                          cudaStream_t stream = nullptr);
 
 /**

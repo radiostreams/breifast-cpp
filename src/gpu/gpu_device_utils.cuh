@@ -11,6 +11,7 @@
 #include <cub/block/block_reduce.cuh>
 #include <cuda_runtime.h>
 
+#include "gpu_kernels.hpp"
 #include "gpu_runtime.hpp"
 
 namespace breifast::gpu
@@ -146,4 +147,47 @@ void launch_cooperative(void (*kernel)(Params...), const std::size_t n, cudaStre
   config.numAttrs = 1;
   CHECK_GPU(cudaLaunchKernelEx(&config, kernel, std::forward<Args>(args)...));
 }
+
+/// One island's stamp, read in place from the plane as StampWindows describes it: cell i of the (2 * radius + 1)^2
+/// window, row major, is the plane value, or 0 outside the plane or inside the inner box.
+class Stamp
+{
+public:
+  __device__ Stamp(const StampWindows &windows, const unsigned int island)
+      : plane_{windows.plane}, n_y_{static_cast<long>(windows.n_y)}, n_x_{static_cast<long>(windows.n_x)},
+        first_y_{windows.peak_y[island] - windows.radius}, first_x_{windows.peak_x[island] - windows.radius},
+        radius_{windows.radius}, side_{2 * windows.radius + 1},
+        half_{windows.inner_half < windows.radius ? windows.inner_half : windows.radius}
+  {
+  }
+
+  __device__ std::size_t size() const
+  {
+    return static_cast<std::size_t>(side_ * side_);
+  }
+
+  __device__ float operator[](const std::size_t i) const
+  {
+    const long row = static_cast<long>(i / static_cast<std::size_t>(side_));
+    const long column = static_cast<long>(i % static_cast<std::size_t>(side_));
+    const long y = first_y_ + row;
+    const long x = first_x_ + column;
+    const bool inside = y >= 0 && y < n_y_ && x >= 0 && x < n_x_;
+    const long dr = row - radius_;
+    const long dc = column - radius_;
+    // half_ < 0 (no inner box) makes this false for every cell.
+    const bool inner = dr >= -half_ && dr <= half_ && dc >= -half_ && dc <= half_;
+    return inside && !inner ? plane_[y * n_x_ + x] : 0.F;
+  }
+
+private:
+  const float *plane_;
+  long n_y_;
+  long n_x_;
+  long first_y_;
+  long first_x_;
+  long radius_;
+  long side_;
+  long half_;
+};
 } // namespace breifast::gpu

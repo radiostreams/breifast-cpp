@@ -12,10 +12,11 @@ namespace breifast::gpu
 {
 namespace
 {
-__global__ void donut_median_abs_kernel(const float *stamps, size_t stamp_pixels, float scale, float *out_lmad)
+__global__ void donut_median_abs_kernel(const StampWindows windows, float scale, float *out_lmad)
 {
   const auto i_stamp = blockIdx.x;
-  const auto stamp = stamps + i_stamp * stamp_pixels;
+  const Stamp stamp(windows, i_stamp);
+  const size_t stamp_pixels = stamp.size();
 
   __shared__ uint32_t histogram[radix_bins];
   __shared__ uint32_t non_zero_count;
@@ -99,10 +100,11 @@ __global__ void donut_median_abs_kernel(const float *stamps, size_t stamp_pixels
   }
 }
 
-__global__ void stamp_abs_extreme_kernel(const float *stamps, size_t stamp_pixels, float *out_extreme)
+__global__ void stamp_abs_extreme_kernel(const StampWindows windows, float *out_extreme)
 {
   const size_t i_stamp = blockIdx.x;
-  const float *stamp = stamps + i_stamp * stamp_pixels;
+  const Stamp stamp(windows, blockIdx.x);
+  const size_t stamp_pixels = stamp.size();
 
   float min_value = FLT_MAX;
   float max_value = -FLT_MAX;
@@ -122,31 +124,21 @@ __global__ void stamp_abs_extreme_kernel(const float *stamps, size_t stamp_pixel
   }
 }
 
-template <bool skip_inner>
-__global__ void stamp_extract_kernel(const float *plane, size_t n_y, size_t n_x, const long *centre_y,
-                                     const long *centre_x, long radius, long inner_boxsize, size_t stamp_pixels,
-                                     float *stamps)
+__global__ void gather_at_peaks_kernel(const float *plane, const float *noise_map, const float *rms_map,
+                                       const float *selfnoise_raw, size_t n_x, const long *peak_y, const long *peak_x,
+                                       unsigned int n_islands, float *flux, float *noise_at_peak, float *rms_at_peak,
+                                       float *selfnoise_at_peak)
 {
-  const size_t stamp_id = blockIdx.x;
-  const long side = 2 * radius + 1;
-  const long half = skip_inner ? (inner_boxsize < radius ? inner_boxsize : radius) : -1;
-  const long first_y = centre_y[stamp_id] - radius;
-  const long first_x = centre_x[stamp_id] - radius;
-  float *const out = stamps + stamp_id * stamp_pixels;
-
-  for (size_t i = threadIdx.x; i < stamp_pixels; i += blockDim.x)
+  const auto island = global_index();
+  if (island >= n_islands)
   {
-    const long row = static_cast<long>(i / static_cast<size_t>(side));
-    const long col = static_cast<long>(i % static_cast<size_t>(side));
-    const long plane_y = first_y + row;
-    const long plane_x = first_x + col;
-    const bool inside =
-        plane_y >= 0 && plane_y < static_cast<long>(n_y) && plane_x >= 0 && plane_x < static_cast<long>(n_x);
-    const long dr = row - radius;
-    const long dc = col - radius;
-    const bool inner = skip_inner && dr >= -half && dr <= half && dc >= -half && dc <= half;
-    out[i] = inside && !inner ? plane[static_cast<size_t>(plane_y) * n_x + static_cast<size_t>(plane_x)] : 0.F;
+    return;
   }
+  const auto pixel = static_cast<size_t>(peak_y[island]) * n_x + static_cast<size_t>(peak_x[island]);
+  flux[island] = plane[pixel];
+  noise_at_peak[island] = noise_map[pixel];
+  rms_at_peak[island] = rms_map != nullptr ? rms_map[pixel] : 0.F;
+  selfnoise_at_peak[island] = selfnoise_raw[pixel];
 }
 
 /// Sum, sum of squares and count of the nonzero pixels of a stamp.
@@ -162,9 +154,10 @@ __host__ __device__ Moments operator+(const Moments &a, const Moments &b)
   return {a.sum + b.sum, a.sumsq + b.sumsq, a.count + b.count};
 }
 
-__global__ void donut_std_kernel(const float *stamps, const size_t stamps_pixels, float *out_std)
+__global__ void donut_std_kernel(const StampWindows windows, float *out_std)
 {
-  const float *stamp = stamps + blockIdx.x * stamps_pixels;
+  const Stamp stamp(windows, blockIdx.x);
+  const size_t stamps_pixels = stamp.size();
 
   Moments moments{0.0, 0.0, 0U};
   for (size_t i_pixel = threadIdx.x; i_pixel < stamps_pixels; i_pixel += blockDim.x)
@@ -194,14 +187,14 @@ __global__ void donut_std_kernel(const float *stamps, const size_t stamps_pixels
   }
 }
 
-__global__ void stamp_beam_chi2_kernel(const float *stamps, const float *kernel, const float kernel_sum,
-                                       const float *stamp_extreme, float inv_max_to_std_ratio, size_t stamp_pixels,
-                                       float *out_chi2)
+__global__ void stamp_beam_chi2_kernel(const StampWindows windows, const float *kernel, const float kernel_sum,
+                                       const float *stamp_extreme, float inv_max_to_std_ratio, float *out_chi2)
 {
   const auto i_stamp = blockIdx.x;
   const float adjacent_noise = stamp_extreme[i_stamp] * inv_max_to_std_ratio;
 
-  const float *stamp = stamps + i_stamp * stamp_pixels;
+  const Stamp stamp(windows, i_stamp);
+  const size_t stamp_pixels = stamp.size();
 
   float stamp_sum = 0.F;
   for (size_t i = threadIdx.x; i < stamp_pixels; i += blockDim.x)
@@ -234,58 +227,36 @@ __global__ void stamp_beam_chi2_kernel(const float *stamps, const float *kernel,
 }
 } // namespace
 
-void gpu_donut_median_abs(const float *stamps, unsigned int n_islands, size_t stamp_pixels, float scale,
-                          float *out_lmad, cudaStream_t stream)
+void gpu_donut_median_abs(const StampWindows &stamps, unsigned int n_islands, float scale, float *out_lmad,
+                          cudaStream_t stream)
 {
-  assert(stamp_pixels > 0);
-  launch_per_island(donut_median_abs_kernel, n_islands, stream, stamps, stamp_pixels, scale, out_lmad);
+  launch_per_island(donut_median_abs_kernel, n_islands, stream, stamps, scale, out_lmad);
 }
 
-void gpu_donut_std(const float *stamps, unsigned int n_islands, size_t stamp_pixels, float *out_std,
-                   cudaStream_t stream)
+void gpu_donut_std(const StampWindows &stamps, unsigned int n_islands, float *out_std, cudaStream_t stream)
 {
-  assert(stamp_pixels > 0);
-  launch_per_island(donut_std_kernel, n_islands, stream, stamps, stamp_pixels, out_std);
+  launch_per_island(donut_std_kernel, n_islands, stream, stamps, out_std);
 }
 
-void gpu_stamp_abs_extreme(const float *stamps, unsigned int n_islands, size_t stamp_pixels, float *out_extreme,
-                           cudaStream_t stream)
+void gpu_stamp_abs_extreme(const StampWindows &stamps, unsigned int n_islands, float *out_extreme, cudaStream_t stream)
 {
-  assert(stamp_pixels > 0);
-  launch_per_island(stamp_abs_extreme_kernel, n_islands, stream, stamps, stamp_pixels, out_extreme);
+  launch_per_island(stamp_abs_extreme_kernel, n_islands, stream, stamps, out_extreme);
 }
 
-void gpu_stamp_extract(const float *plane, size_t n_y, size_t n_x, const long *centre_y, const long *centre_x,
-                       unsigned int n_islands, long radius, long inner_boxsize, float *stamps, cudaStream_t stream)
+void gpu_stamp_beam_chi2(const StampWindows &stamps, const float *kernel, const float kernel_sum,
+                         unsigned int n_islands, const float *stamp_extreme, float inv_max_to_std_ratio,
+                         float *out_chi2, cudaStream_t stream)
 {
-  assert(n_y > 0 && n_x > 0);
-  assert(radius >= 0);
-  assert(inner_boxsize >= 0);
-
-  const size_t side = static_cast<size_t>(2 * radius + 1);
-  const size_t stamp_pixels = side * side;
-  launch_per_island(stamp_extract_kernel<true>, n_islands, stream, plane, n_y, n_x, centre_y, centre_x, radius,
-                    inner_boxsize, stamp_pixels, stamps);
-}
-
-void gpu_stamp_extract_no_zero(const float *plane, size_t n_y, size_t n_x, const long *centre_y, const long *centre_x,
-                               unsigned int n_islands, long radius, float *stamps, cudaStream_t stream)
-{
-  assert(n_y > 0 && n_x > 0);
-  assert(radius >= 0);
-
-  const size_t side = static_cast<size_t>(2 * radius + 1);
-  const size_t stamp_pixels = side * side;
-  launch_per_island(stamp_extract_kernel<false>, n_islands, stream, plane, n_y, n_x, centre_y, centre_x, radius, 0,
-                    stamp_pixels, stamps);
-}
-
-void gpu_stamp_beam_chi2(const float *stamps, const float *kernel, const float kernel_sum, unsigned int n_islands,
-                         size_t stamp_pixels, const float *stamp_extreme, float inv_max_to_std_ratio, float *out_chi2,
-                         cudaStream_t stream)
-{
-  assert(stamp_pixels > 0);
   launch_per_island(stamp_beam_chi2_kernel, n_islands, stream, stamps, kernel, kernel_sum, stamp_extreme,
-                    inv_max_to_std_ratio, stamp_pixels, out_chi2);
+                    inv_max_to_std_ratio, out_chi2);
+}
+
+void gpu_gather_at_peaks(const float *plane, const float *noise_map, const float *rms_map, const float *selfnoise_raw,
+                         size_t n_x, const long *peak_y, const long *peak_x, unsigned int n_islands, float *flux,
+                         float *noise_at_peak, float *rms_at_peak, float *selfnoise_at_peak, cudaStream_t stream)
+{
+  assert(n_islands > 0);
+  launch_per_element(gather_at_peaks_kernel, n_islands, stream, plane, noise_map, rms_map, selfnoise_raw, n_x, peak_y,
+                     peak_x, n_islands, flux, noise_at_peak, rms_at_peak, selfnoise_at_peak);
 }
 } // namespace breifast::gpu
