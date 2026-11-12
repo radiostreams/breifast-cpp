@@ -1,0 +1,629 @@
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
+#include <catch2/matchers/catch_matchers_vector.hpp>
+
+#include <cuda_runtime.h>
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <string>
+#include <vector>
+
+#include "gpu_kernels.hpp"
+#include "gpu_test_utils.hpp"
+
+namespace mask_or_tests
+{
+using breifast::gpu::DeviceVector;
+using breifast::gpu::gpu_mask_or;
+using breifast::gpu::Stream;
+using breifast::gpu::test::download;
+using breifast::gpu::test::download_scalar;
+using breifast::gpu::test::upload;
+using Catch::Matchers::Equals;
+
+namespace
+{
+struct Result
+{
+  bool any;
+  std::string mask; // one '0' or '1' per pixel
+};
+
+// Runs gpu_mask_or on channel-major masks given as one string of '0' and '1' per channel. `out_any` is pre-filled with
+// a nonzero sentinel, so the call's own zeroing is exercised too.
+Result run_gpu_mask_or(const std::vector<std::string> &channels, int band_start, int band_stop)
+{
+  const size_t n_pixels = channels.front().size();
+  const size_t n_channels = channels.size();
+
+  std::vector<bool> host_mask(n_channels * n_pixels);
+  for (size_t i_channel = 0; i_channel < n_channels; ++i_channel)
+  {
+    for (size_t i_pixel = 0; i_pixel < n_pixels; ++i_pixel)
+    {
+      host_mask[i_channel * n_pixels + i_pixel] = channels[i_channel][i_pixel] == '1';
+    }
+  }
+
+  const auto device_mask = upload(host_mask);
+  DeviceVector<bool> device_out(n_pixels);
+  auto device_any = upload(std::vector<int>{-1}); // nonzero sentinel: the call must zero it itself
+
+  const Stream stream;
+  gpu_mask_or(device_mask, n_pixels, band_start, band_stop, device_out, device_any, stream);
+  const auto out = download(device_out, stream);
+  const int any = download_scalar(device_any.data(), stream);
+
+  std::string mask;
+  mask.reserve(n_pixels);
+  for (const bool value : out)
+  {
+    mask += value ? '1' : '0';
+  }
+  return {any != 0, mask};
+}
+} // namespace
+
+TEST_CASE("gpu_mask_or matches a fixed 4x37 mask with a band that skips channel 0", "[gpu][mask_or]")
+{
+  // Same mask and expected output as the CPU or_accept_masks case (numpy seed 42, p(true) = 0.15):
+  // np.any(mask[1:4], axis=0). 37 pixels is not a multiple of the 256-thread block.
+  const std::vector<std::string> channels = {
+      "0000100010000000010000000001000000001",
+      "0000000000001010000001100000000100000",
+      "1000000000110000000000011000000000100",
+      "0000000000010100110000001000100000000",
+  };
+  const std::string expected = "1000000000111110110001111000100100100";
+
+  const Result result = run_gpu_mask_or(channels, 1, 4);
+
+  CHECK(result.any);
+  CHECK_THAT(result.mask, Equals(expected));
+}
+
+TEST_CASE("gpu_mask_or ignores channels outside the band and zeroes a stale out_any", "[gpu][mask_or]")
+{
+  // The channels around the band [1, 3) are all true, and out_any starts nonzero (the harness pre-fills it with a
+  // sentinel). Neither may leak into the result.
+  const std::vector<std::string> channels = {
+      "1111111111111111111",
+      "0000000000000000000",
+      "0000000000000000000",
+      "1111111111111111111",
+  };
+
+  const Result result = run_gpu_mask_or(channels, 1, 3);
+
+  CHECK(result.any == false);
+  CHECK_THAT(result.mask, Equals("0000000000000000000"));
+}
+
+TEST_CASE("gpu_mask_or handles a single-channel band", "[gpu][mask_or]")
+{
+  // band [2, 3) is one channel: the result is exactly channel 2, and the true pixels of the other channels are ignored.
+  const std::vector<std::string> channels = {
+      "1111111111111111",
+      "0000111100001111",
+      "0010000000000100",
+      "1111000000000000",
+  };
+
+  const Result result = run_gpu_mask_or(channels, 2, 3);
+
+  CHECK(result.any);
+  CHECK_THAT(result.mask, Equals("0010000000000100"));
+}
+
+TEST_CASE("gpu_mask_or covers the partial last block of a 1000-pixel plane", "[gpu][mask_or]")
+{
+  // 1000 pixels is 3 full 256-thread blocks plus a tail of 232. The only true pixels are in the last block, one of
+  // them the very last pixel of the channel.
+  constexpr size_t n_pixels = 1000;
+  std::string channel0(n_pixels, '0');
+  std::string channel1(n_pixels, '0');
+  std::string channel2(n_pixels, '0');
+  channel0[5] = '1';
+  channel1[256] = '1';
+  channel2[n_pixels - 1] = '1';
+
+  std::string expected(n_pixels, '0');
+  expected[5] = '1';
+  expected[256] = '1';
+  expected[n_pixels - 1] = '1';
+
+  const Result result = run_gpu_mask_or({channel0, channel1, channel2}, 0, 3);
+
+  CHECK(result.any);
+  CHECK_THAT(result.mask, Equals(expected));
+}
+
+TEST_CASE("gpu_mask_or covers a plane that is an exact multiple of the block size", "[gpu][mask_or]")
+{
+  // 512 pixels is exactly 2 blocks, so there is no partial tail block. The true pixels sit in different channels.
+  constexpr size_t n_pixels = 512;
+  std::string channel0(n_pixels, '0');
+  std::string channel1(n_pixels, '0');
+  channel0[n_pixels - 1] = '1';
+  channel1[256] = '1';
+
+  std::string expected(n_pixels, '0');
+  expected[256] = '1';
+  expected[n_pixels - 1] = '1';
+
+  const Result result = run_gpu_mask_or({channel0, channel1}, 0, 2);
+
+  CHECK(result.any);
+  CHECK_THAT(result.mask, Equals(expected));
+}
+
+TEST_CASE("gpu_mask_or covers a plane spanning many blocks", "[gpu][mask_or]")
+{
+  // 70001 pixels is 273 blocks plus a tail, so the atomic OR into out_any is fed by many blocks.
+  constexpr size_t n_pixels = 70001;
+  std::string channel0(n_pixels, '0');
+  std::string channel1(n_pixels, '0');
+  channel0[n_pixels - 1] = '1';
+  channel1[0] = '1';
+
+  std::string expected(n_pixels, '0');
+  expected[0] = '1';
+  expected[n_pixels - 1] = '1';
+
+  const Result result = run_gpu_mask_or({channel0, channel1}, 0, 2);
+
+  CHECK(result.any);
+  CHECK_THAT(result.mask, Equals(expected));
+}
+} // namespace mask_or_tests
+
+namespace weighted_band_image_tests
+{
+using breifast::gpu::gpu_weighted_band_image;
+using breifast::gpu::Stream;
+using breifast::gpu::test::download;
+using breifast::gpu::test::upload;
+using Catch::Approx;
+using Catch::Matchers::Equals;
+
+namespace
+{
+constexpr size_t n_pixels = 23;
+
+// Cube and mean image generated by numpy (default_rng seed 42, standard normal, the mean image scaled by 0.1), cast to
+// float32. Four channels of 23 pixels, channel major. Same values as the CPU test_weighted_band_image case.
+const std::vector<float> cube = {
+    0.304717094F,  -1.03998411F,  0.750451207F,  0.940564692F,  -1.95103514F,  -1.30217946F,  0.1278404F,
+    -0.316242605F, -0.016801158F, -0.853043914F, 0.879397988F,  0.777791917F,  0.066030696F,  1.12724125F,
+    0.467509329F,  -0.859292448F, 0.368750781F,  -0.95888263F,  0.878450274F,  -0.0499259122F, -0.18486236F,
+    -0.680929542F, 1.22254133F,
+    -0.154529482F, -0.428327829F, -0.352133542F, 0.532309175F,  0.365444064F,  0.412732601F,  0.430821002F,
+    2.14164758F,   -0.406415015F, -0.512242734F, -0.813772738F, 0.615979433F,  1.12897229F,   -0.113947459F,
+    -0.840156496F, -0.824481189F, 0.650592804F,  0.743254185F,  0.54315424F,   -0.665509701F, 0.232161328F,
+    0.116685808F,  0.218688592F,
+    0.871428788F,  0.223595545F,  0.678913534F,  0.0675790682F, 0.289119393F,  0.63128823F,   -1.45715582F,
+    -0.319671214F, -0.470372647F, -0.638877869F, -0.275142252F, 1.49494135F,   -0.865831137F, 0.968278348F,
+    -1.68286979F,  -0.334885031F, 0.16275306F,   0.586222351F,  0.711226583F,  0.793347239F,  -0.34872508F,
+    -0.462351799F, 0.8579759F,
+    -0.191304326F, -1.27568626F,  -1.13328719F,  -0.91945231F,  0.497160733F,  0.142425731F,  0.690485358F,
+    -0.42725265F,  0.158539698F,  0.625590384F,  -0.309346527F, 0.456775248F,  -0.661925912F, -0.363053858F,
+    -0.381737888F, -1.19583964F,  0.486972481F,  -0.469402343F, 0.0124941189F, 0.480746657F,  0.446531177F,
+    0.665385127F,  -0.0984854847F,
+};
+const std::vector<float> mean_image = {
+    -0.0423298329F, -0.00797182135F, -0.168733448F,  -0.144711241F,  -0.132269964F,  -0.0997246802F, 0.0399774238F,
+    -0.0905479044F, -0.0378162563F,  0.129922837F,   -0.0356263965F, 0.0737515539F,  -0.0933617651F, -0.020543756F,
+    -0.0950022042F, -0.0339033082F,  0.0840308145F,  -0.17273204F,   0.0434423648F,  0.0237735603F,  -0.059414994F,
+    -0.144605786F,  0.00721295085F,
+    -0.0529492721F, 0.0232676212F,   0.00218521454F, 0.160177886F,   -0.023935562F,  -0.102349751F,  0.0179275628F,
+    0.0219996683F,  0.135918751F,    0.0835111216F,  0.0356871076F,  0.146330282F,   -0.118876308F,  -0.0639751554F,
+    -0.0926575959F, -0.0389809795F,  -0.13766861F,   0.0635150969F,  -0.0222222693F, -0.14708063F,   -0.10155791F,
+    0.0313513838F,  0.083812654F,
+    0.199673086F,   0.291386247F,    0.0414409451F,  -0.0989538133F, -0.213204622F,  0.0267711468F,  -0.0812941119F,
+    -0.0415357277F, -0.0612096786F,  -0.0140790883F, 0.10659802F,    0.0157048572F,  -0.0158634838F, -0.103565373F,
+    -0.167468295F,  -0.0486307926F,  -0.00537825515F, 0.176792994F,  0.0130274519F,  0.0982739478F,  -0.0499295592F,
+    -0.118494377F,  -0.0965116769F,
+    -0.072522603F,  0.212846979F,    -0.082138665F,  0.0838489234F,  -0.0902927145F, 0.0931572989F,  0.0384950973F,
+    -0.0156637896F, -0.00407625269F, -0.0654787719F, 0.0446072184F,  -0.0454983488F, -0.122560576F,  -0.127793759F,
+    0.0172587913F,  0.157909125F,    0.0159991607F,  -0.0118638324F, 0.0285826139F,  0.130600169F,   0.0219382495F,
+    -0.0410927236F, 0.110628873F,
+};
+const std::vector<float> weights = {0.5F, 1.F, 2.F, 1.5F};
+
+// numpy reference for band [1, 4), in float64: sum(cube[1:4] * w[1:4, None]) / sum(w[1:4]) - sum(mean[1:4]) / 3. The
+// band skips channel 0 and the weights are indexed by the absolute channel.
+const std::vector<float> expected_with_mean = {
+    0.264459953F, -0.596870535F, -0.141437445F, -0.2065157F,   0.484571844F, 0.413906581F,  -0.31343454F,
+    0.203161322F, -0.270066665F, -0.190565064F, -0.468536789F, 0.914715517F, -0.268806288F, 0.382451085F,
+    -0.980933836F, -0.754101499F, 0.421584267F, 0.19309533F,   0.434503753F, 0.337692118F,  0.0886292805F,
+    0.0849807722F, 0.364448309F,
+};
+
+// Same cube, weights and band, no subtraction: sum(cube[1:4] * w[1:4, None]) / sum(w[1:4]).
+const std::vector<float> expected_without_mean = {
+    0.28919369F,  -0.421036919F, -0.154274947F, -0.158158034F, 0.375427544F,  0.419766146F, -0.321725024F,
+    0.191428039F, -0.246522392F, -0.18924731F,  -0.406239341F, 0.953561114F,  -0.354573078F, 0.284006322F,
+    -1.06188954F, -0.730669048F, 0.379235033F,  0.269243416F,  0.440966352F,  0.364956614F,  0.0454462071F,
+    0.0422355334F, 0.397091592F,
+};
+
+// Runs gpu_weighted_band_image with the inverse band size a caller derives from the band. `mean_values` empty means no
+// subtraction (a null pointer). `out_plane` starts filled with `prefill` on the device, like per-thread scratch that
+// still holds the previous band.
+std::vector<float> run_gpu_weighted_band_image(const std::vector<float> &cube_values,
+                                               const std::vector<float> &weights_values,
+                                               const std::vector<float> &mean_values, size_t n_plane_pixels,
+                                               int band_start, int band_stop, float prefill = 0.F)
+{
+  const auto device_cube = upload(cube_values);
+  const auto device_weights = upload(weights_values);
+  const auto device_mean = upload(mean_values);
+  auto device_out = upload(std::vector<float>(n_plane_pixels, prefill));
+
+  const Stream stream;
+  gpu_weighted_band_image(device_cube, device_weights, mean_values.empty() ? nullptr : device_mean.data(), device_out,
+                          n_plane_pixels, band_start, band_stop, 1.F / static_cast<float>(band_stop - band_start),
+                          stream);
+  return download(device_out, stream);
+}
+
+// A deterministic three-channel plane and its 0.1x mean image, for the coverage cases where a hand-written expected
+// array would be unwieldy. Values live in [-3.5, 3.25].
+std::vector<float> make_pattern_cube(size_t n_plane_pixels)
+{
+  std::vector<float> values(3 * n_plane_pixels);
+  for (size_t i_channel = 0; i_channel < 3; ++i_channel)
+  {
+    for (size_t i_pixel = 0; i_pixel < n_plane_pixels; ++i_pixel)
+    {
+      const auto code = static_cast<int>((i_channel * 7 + i_pixel * 13) % 29);
+      values[i_channel * n_plane_pixels + i_pixel] = 0.25F * static_cast<float>(code - 14);
+    }
+  }
+  return values;
+}
+
+std::vector<float> scaled_by(const std::vector<float> &values, float factor)
+{
+  std::vector<float> out(values.size());
+  for (size_t i = 0; i < values.size(); ++i)
+  {
+    out[i] = values[i] * factor;
+  }
+  return out;
+}
+
+const std::vector<float> pattern_weights = {0.5F, 1.F, 2.F};
+
+// Reference computed on the host with the documented formula, independent of the kernel.
+std::vector<float> host_weighted_band_image(const std::vector<float> &c, const std::vector<float> &w,
+                                            const std::vector<float> &m, size_t n_plane_pixels, int band_start,
+                                            int band_stop)
+{
+  float weights_sum = 0.F;
+  for (int i_channel = band_start; i_channel < band_stop; ++i_channel)
+  {
+    weights_sum += w[i_channel];
+  }
+  const float inv_weights_sum = 1.F / weights_sum;
+  const float inv_band_size = 1.F / static_cast<float>(band_stop - band_start);
+
+  std::vector<float> out(n_plane_pixels);
+  for (size_t i_pixel = 0; i_pixel < n_plane_pixels; ++i_pixel)
+  {
+    float result = 0.F;
+    for (int i_channel = band_start; i_channel < band_stop; ++i_channel)
+    {
+      result += c[i_channel * n_plane_pixels + i_pixel] * w[i_channel] * inv_weights_sum;
+      if (!m.empty())
+      {
+        result -= m[i_channel * n_plane_pixels + i_pixel] * inv_band_size;
+      }
+    }
+    out[i_pixel] = result;
+  }
+  return out;
+}
+
+void check_plane_matches_host(size_t n_plane_pixels)
+{
+  const std::vector<float> pattern = make_pattern_cube(n_plane_pixels);
+  const std::vector<float> pattern_mean = scaled_by(pattern, 0.1F);
+
+  const auto expected = host_weighted_band_image(pattern, pattern_weights, pattern_mean, n_plane_pixels, 0, 3);
+  const auto out = run_gpu_weighted_band_image(pattern, pattern_weights, pattern_mean, n_plane_pixels, 0, 3);
+
+  REQUIRE(out.size() == n_plane_pixels);
+  CHECK_THAT(out, Catch::Matchers::Approx(expected).epsilon(1e-5).margin(1e-5));
+}
+} // namespace
+
+TEST_CASE("gpu_weighted_band_image matches the numpy reference with a mean image", "[gpu][weighted_band_image]")
+{
+  const auto out = run_gpu_weighted_band_image(cube, weights, mean_image, n_pixels, 1, 4);
+
+  REQUIRE(out.size() == n_pixels);
+  CHECK_THAT(out, Catch::Matchers::Approx(expected_with_mean).epsilon(1e-5).margin(1e-6));
+}
+
+TEST_CASE("gpu_weighted_band_image without a mean image matches the numpy reference", "[gpu][weighted_band_image]")
+{
+  const auto out = run_gpu_weighted_band_image(cube, weights, {}, n_pixels, 1, 4);
+
+  REQUIRE(out.size() == n_pixels);
+  CHECK_THAT(out, Catch::Matchers::Approx(expected_without_mean).epsilon(1e-5).margin(1e-6));
+}
+
+TEST_CASE("gpu_weighted_band_image on a one-channel band reads that channel and its weight",
+          "[gpu][weighted_band_image]")
+{
+  // Band [2, 3): the weight is weights[2] = 2, so the scale 2 * (1 / 2) is exact and the result is cube[2] - mean[2].
+  // Reading weights[0] (0.5) or the first channel instead would change every pixel.
+  const auto out = run_gpu_weighted_band_image(cube, weights, mean_image, n_pixels, 2, 3);
+
+  std::vector<float> expected(n_pixels);
+  for (size_t i_pixel = 0; i_pixel < n_pixels; ++i_pixel)
+  {
+    expected[i_pixel] = cube[2 * n_pixels + i_pixel] - mean_image[2 * n_pixels + i_pixel];
+  }
+
+  REQUIRE(out.size() == n_pixels);
+  CHECK_THAT(out, Catch::Matchers::Approx(expected).epsilon(1e-6));
+}
+
+TEST_CASE("gpu_weighted_band_image ignores channels outside the band", "[gpu][weighted_band_image]")
+{
+  // Channel 0 is outside band [1, 4). Flooding it with huge values may not leak into the result.
+  std::vector<float> poisoned = cube;
+  for (size_t i_pixel = 0; i_pixel < n_pixels; ++i_pixel)
+  {
+    poisoned[i_pixel] = 1.0e30F;
+  }
+
+  const auto out = run_gpu_weighted_band_image(poisoned, weights, mean_image, n_pixels, 1, 4);
+
+  REQUIRE(out.size() == n_pixels);
+  CHECK_THAT(out, Catch::Matchers::Approx(expected_with_mean).epsilon(1e-5).margin(1e-6));
+}
+
+TEST_CASE("gpu_weighted_band_image overwrites the stale values of out_plane", "[gpu][weighted_band_image]")
+{
+  // out_plane is per-thread scratch that still holds the previous band: the result may not depend on it.
+  const auto from_nan =
+      run_gpu_weighted_band_image(cube, weights, mean_image, n_pixels, 0, 3, std::numeric_limits<float>::quiet_NaN());
+  const auto from_garbage = run_gpu_weighted_band_image(cube, weights, mean_image, n_pixels, 0, 3, 1.0e30F);
+  const auto from_zero = run_gpu_weighted_band_image(cube, weights, mean_image, n_pixels, 0, 3, 0.F);
+
+  CHECK_THAT(from_nan, Equals(from_zero));
+  CHECK_THAT(from_garbage, Equals(from_zero));
+}
+
+TEST_CASE("gpu_weighted_band_image covers the partial last block of a 1000-pixel plane", "[gpu][weighted_band_image]")
+{
+  // 1000 pixels is 3 full 256-thread blocks plus a tail of 232.
+  check_plane_matches_host(1000);
+}
+
+TEST_CASE("gpu_weighted_band_image covers a plane that is an exact multiple of the block size",
+          "[gpu][weighted_band_image]")
+{
+  // 512 pixels is exactly 2 blocks, so there is no partial tail block.
+  check_plane_matches_host(512);
+}
+
+TEST_CASE("gpu_weighted_band_image covers a plane spanning many blocks", "[gpu][weighted_band_image]")
+{
+  // 70001 pixels is 273 blocks plus a tail.
+  check_plane_matches_host(70001);
+}
+} // namespace weighted_band_image_tests
+
+namespace spectral_variance_moments_tests
+{
+using breifast::gpu::gpu_spectral_variance_moments;
+using breifast::gpu::Stream;
+using breifast::gpu::test::download;
+using breifast::gpu::test::upload;
+using Catch::Matchers::Equals;
+using Catch::Approx;
+
+namespace
+{
+constexpr size_t n_pixels = 19;
+constexpr size_t n_channels = 4;
+
+// Three channels generated by numpy (default_rng seed 42, standard normal, float32), 19 pixels each. The cube puts them
+// in channels 0, 2 and 3; channel 1 is all NaN and flagged false, so reading it would poison every sum. Same values as
+// the CPU test_spectral_variance_moments case.
+const std::vector<float> channel0 = {
+    0.304717094F, -1.03998411F, 0.750451207F, 0.940564692F, -1.95103514F, -1.30217946F, 0.1278404F,
+    -0.316242605F, -0.016801158F, -0.853043914F, 0.879397988F, 0.777791917F, 0.066030696F, 1.12724125F,
+    0.467509329F, -0.859292448F, 0.368750781F, -0.95888263F, 0.878450274F,
+};
+const std::vector<float> channel2 = {
+    -0.824481189F, 0.650592804F, 0.743254185F, 0.54315424F, -0.665509701F, 0.232161328F, 0.116685808F,
+    0.218688592F, 0.871428788F, 0.223595545F, 0.678913534F, 0.0675790682F, 0.289119393F, 0.63128823F,
+    -1.45715582F, -0.319671214F, -0.470372647F, -0.638877869F, -0.275142252F,
+};
+const std::vector<float> channel3 = {
+    1.49494135F, -0.865831137F, 0.968278348F, -1.68286979F, -0.334885031F, 0.16275306F, 0.586222351F,
+    0.711226583F, 0.793347239F, -0.34872508F, -0.462351799F, 0.8579759F, -0.191304326F, -1.27568626F,
+    -1.13328719F, -0.91945231F, 0.497160733F, 0.142425731F, 0.690485358F,
+};
+
+std::vector<float> make_cube()
+{
+  std::vector<float> cube(channel0);
+  cube.insert(cube.end(), n_pixels, std::numeric_limits<float>::quiet_NaN());
+  cube.insert(cube.end(), channel2.begin(), channel2.end());
+  cube.insert(cube.end(), channel3.begin(), channel3.end());
+  return cube;
+}
+
+const std::array<uint8_t, n_channels> channel_flags = {1, 0, 1, 1};
+
+struct Sums
+{
+  std::vector<float> sum2;
+  std::vector<float> sum3;
+  std::vector<float> sum4;
+};
+
+// Runs gpu_spectral_variance_moments on a channel-major cube with one flag per channel. The three device outputs start
+// filled with `prefill`, like per-thread scratch holding an earlier plane.
+Sums run_gpu_spectral_variance_moments(const std::vector<float> &cube_values, const std::vector<uint8_t> &flags,
+                                       size_t n_plane_pixels, size_t n_plane_channels, float prefill = 0.F)
+{
+  const auto device_cube = upload(cube_values);
+  const auto device_flags = upload(std::vector<bool>(flags.begin(), flags.end()));
+  auto device_sum2 = upload(std::vector<float>(n_plane_pixels, prefill));
+  auto device_sum3 = upload(std::vector<float>(n_plane_pixels, prefill));
+  auto device_sum4 = upload(std::vector<float>(n_plane_pixels, prefill));
+
+  const Stream stream;
+  gpu_spectral_variance_moments(device_cube, device_flags, device_sum2, device_sum3, device_sum4, n_plane_pixels,
+                                static_cast<int>(n_plane_channels), stream);
+  return {download(device_sum2, stream), download(device_sum3, stream), download(device_sum4, stream)};
+}
+
+// A deterministic three-channel plane for the coverage cases, where a hand-written expected array would be unwieldy.
+// Channels 0 and 2 hold IEEE-exact quarter-integer values in [-3.5, 3.25]; channel 1 is all NaN and flagged false, so a
+// kernel that reads it before checking the flag poisons every sum at scale.
+std::vector<float> make_pattern_cube(size_t n_plane_pixels)
+{
+  std::vector<float> values(3 * n_plane_pixels);
+  for (size_t i_pixel = 0; i_pixel < n_plane_pixels; ++i_pixel)
+  {
+    values[0 * n_plane_pixels + i_pixel] = 0.25F * static_cast<float>(static_cast<int>((i_pixel * 13) % 29) - 14);
+    values[1 * n_plane_pixels + i_pixel] = std::numeric_limits<float>::quiet_NaN();
+    values[2 * n_plane_pixels + i_pixel] = 0.25F * static_cast<float>(static_cast<int>((i_pixel * 7) % 29) - 14);
+  }
+  return values;
+}
+
+const std::vector<uint8_t> pattern_flags = {1, 0, 1};
+
+// Reference computed on the host with the documented formula, adding the flagged channels in channel order. Independent
+// of the kernel.
+Sums host_spectral_variance_moments(const std::vector<float> &cube, const std::vector<uint8_t> &flags,
+                                    size_t n_plane_pixels, size_t n_plane_channels)
+{
+  Sums sums{std::vector<float>(n_plane_pixels, 0.F), std::vector<float>(n_plane_pixels, 0.F),
+            std::vector<float>(n_plane_pixels, 0.F)};
+  for (size_t i_channel = 0; i_channel < n_plane_channels; ++i_channel)
+  {
+    if (flags[i_channel] == 0)
+    {
+      continue;
+    }
+    for (size_t i_pixel = 0; i_pixel < n_plane_pixels; ++i_pixel)
+    {
+      const float value = cube[i_channel * n_plane_pixels + i_pixel];
+      const float value2 = value * value;
+      const float value3 = value2 * value;
+      const float value4 = value3 * value;
+      sums.sum2[i_pixel] += value2;
+      sums.sum3[i_pixel] += value3;
+      sums.sum4[i_pixel] += value4;
+    }
+  }
+  return sums;
+}
+
+void check_sums_match_host(size_t n_plane_pixels)
+{
+  const std::vector<float> pattern = make_pattern_cube(n_plane_pixels);
+
+  const auto expected = host_spectral_variance_moments(pattern, pattern_flags, n_plane_pixels, 3);
+  const auto sums = run_gpu_spectral_variance_moments(pattern, pattern_flags, n_plane_pixels, 3);
+
+  REQUIRE(sums.sum2.size() == n_plane_pixels);
+  CHECK_THAT(sums.sum2, Catch::Matchers::Approx(expected.sum2).epsilon(1e-5).margin(1e-5));
+  CHECK_THAT(sums.sum3, Catch::Matchers::Approx(expected.sum3).epsilon(1e-5).margin(1e-5));
+  CHECK_THAT(sums.sum4, Catch::Matchers::Approx(expected.sum4).epsilon(1e-5).margin(1e-5));
+}
+} // namespace
+
+TEST_CASE("gpu_spectral_variance_moments matches a seeded-random cube against a numpy reference and never reads a "
+          "skipped channel",
+          "[gpu][spectral_variance_moments]")
+{
+  // numpy in float64: sum over the flagged channels 0, 2 and 3 of cube^k for k = 2, 3, 4. Channel 1 is NaN.
+  const std::vector<float> expected2 = {
+      3.00747139F, 2.2545015F,   2.05316676F, 4.0117292F,  4.36158927F, 1.77605878F, 0.37361539F,
+      0.653677338F, 1.38907025F, 0.899288068F, 1.44803359F, 1.34564984F, 0.124547421F, 3.29657312F,
+      3.62620793F, 1.68596574F,  0.60439636F,  1.34790592F, 1.32414817F,
+  };
+  const std::vector<float> expected3 = {
+      2.80880597F,   -1.49851742F, 1.7410523F,  -3.77365137F, -7.75900268F, -2.19124405F, 0.205137268F,
+      0.338600655F,  1.16108056F,  -0.651975858F, 0.894165056F, 1.10241732F, 0.0174541636F, -0.392081616F,
+      -4.44732822F,  -1.44445261F, 0.0689541457F, -1.13952871F, 0.986251574F,
+  };
+  const std::vector<float> expected4 = {
+      5.46526076F, 1.91094084F, 1.501368F,   8.89017288F, 14.6984729F, 2.87890801F, 0.118552372F,
+      0.268166474F, 0.972814576F, 0.546812176F, 0.856203844F, 0.90787433F, 0.00834566771F, 4.42178235F,
+      6.20571555F, 1.2703415F,   0.128533946F, 1.01240924F, 0.828522773F,
+  };
+
+  const std::vector<uint8_t> flags(channel_flags.begin(), channel_flags.end());
+  const auto sums = run_gpu_spectral_variance_moments(make_cube(), flags, n_pixels, n_channels);
+
+  REQUIRE(sums.sum2.size() == n_pixels);
+  CHECK_THAT(sums.sum2, Catch::Matchers::Approx(expected2).epsilon(1e-5).margin(1e-6));
+  CHECK_THAT(sums.sum3, Catch::Matchers::Approx(expected3).epsilon(1e-5).margin(1e-6));
+  CHECK_THAT(sums.sum4, Catch::Matchers::Approx(expected4).epsilon(1e-5).margin(1e-6));
+}
+
+TEST_CASE("gpu_spectral_variance_moments overwrites the stale values of the sums", "[gpu][spectral_variance_moments]")
+{
+  // The sums are per-thread scratch holding the previous plane: the result may not depend on them.
+  const std::vector<uint8_t> flags(channel_flags.begin(), channel_flags.end());
+  const std::vector<float> cube = make_cube();
+
+  const auto from_zero = run_gpu_spectral_variance_moments(cube, flags, n_pixels, n_channels);
+  for (const float prefill : {std::numeric_limits<float>::quiet_NaN(), 1.0e30F})
+  {
+    const auto sums = run_gpu_spectral_variance_moments(cube, flags, n_pixels, n_channels, prefill);
+    CHECK_THAT(sums.sum2, Equals(from_zero.sum2));
+    CHECK_THAT(sums.sum3, Equals(from_zero.sum3));
+    CHECK_THAT(sums.sum4, Equals(from_zero.sum4));
+  }
+}
+
+TEST_CASE("gpu_spectral_variance_moments leaves every sum at 0 when no channel is flagged",
+          "[gpu][spectral_variance_moments]")
+{
+  const std::vector<uint8_t> none(n_channels, 0);
+
+  const auto sums = run_gpu_spectral_variance_moments(make_cube(), none, n_pixels, n_channels, 1.0e30F);
+
+  const std::vector<float> zeros(n_pixels, 0.F);
+  CHECK_THAT(sums.sum2, Equals(zeros));
+  CHECK_THAT(sums.sum3, Equals(zeros));
+  CHECK_THAT(sums.sum4, Equals(zeros));
+}
+
+TEST_CASE("gpu_spectral_variance_moments covers the partial last block of a 1000-pixel plane",
+          "[gpu][spectral_variance_moments]")
+{
+  // 1000 pixels is 3 full 256-thread blocks plus a tail of 232.
+  check_sums_match_host(1000);
+}
+
+TEST_CASE("gpu_spectral_variance_moments covers a plane that is an exact multiple of the block size",
+          "[gpu][spectral_variance_moments]")
+{
+  // 512 pixels is exactly 2 blocks, so there is no partial tail block.
+  check_sums_match_host(512);
+}
+
+TEST_CASE("gpu_spectral_variance_moments covers a plane spanning many blocks", "[gpu][spectral_variance_moments]")
+{
+  // 70001 pixels is 273 blocks plus a tail.
+  check_sums_match_host(70001);
+}
+} // namespace spectral_variance_moments_tests
