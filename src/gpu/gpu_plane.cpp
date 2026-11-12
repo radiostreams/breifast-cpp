@@ -5,6 +5,7 @@
 #include <limits>
 #include <optional>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include <xtensor/containers/xadapt.hpp>
@@ -12,7 +13,6 @@
 
 #include "gpu_band.hpp"
 #include "gpu_plane.hpp"
-#include "gpu_spectral_variance.hpp"
 
 namespace breifast::gpu
 {
@@ -60,37 +60,6 @@ void append_band_result(const GpuBandHostResult &band, const GpuBandLabels &labe
   }
 }
 
-breifast::SpectralVarianceStats assemble_spectral_variance_stats(const GpuSpectralVarianceHostResult &host, size_t n_y,
-                                                                 size_t n_x, size_t n_channels)
-{
-  assert(n_y > 0 && n_x > 0 && n_channels > 0);
-  [[maybe_unused]] const size_t n_pixels = n_y * n_x;
-  assert(host.sum_pow2.size() == n_pixels && host.sum_pow3.size() == n_pixels && host.sum_pow4.size() == n_pixels);
-  assert(host.nonzero_channels_mask.size() == n_channels);
-
-  breifast::SpectralVarianceStats stats;
-  stats.sum_pow2.resize({n_y, n_x});
-  stats.sum_pow3.resize({n_y, n_x});
-  stats.sum_pow4.resize({n_y, n_x});
-  stats.nonzero_channels_mask.resize({n_channels});
-
-  std::copy(host.sum_pow2.begin(), host.sum_pow2.end(), stats.sum_pow2.begin());
-  std::copy(host.sum_pow3.begin(), host.sum_pow3.end(), stats.sum_pow3.begin());
-  std::copy(host.sum_pow4.begin(), host.sum_pow4.end(), stats.sum_pow4.begin());
-  std::transform(host.nonzero_channels_mask.begin(), host.nonzero_channels_mask.end(),
-                 stats.nonzero_channels_mask.begin(), [](const unsigned char value) { return value != 0; });
-  return stats;
-}
-
-breifast::SpectralVarianceStats gpu_compute_spectral_variance_stats(const float *cube, const bool *nonzero_channels,
-                                                                    size_t n_y, size_t n_x, size_t n_channels,
-                                                                    cudaStream_t stream)
-{
-  GpuSpectralVarianceHostResult host;
-  gpu_spectral_variance_stats_host(cube, nonzero_channels, n_y, n_x, n_channels, host, stream);
-  return assemble_spectral_variance_stats(host, n_y, n_x, n_channels);
-}
-
 namespace
 {
 /// Sum of a (2 * halfsize + 1)^2 beam kernel, with the same xtensor expression as the CPU stamp_beam_chi2, so that both
@@ -112,6 +81,32 @@ template <typename T, typename Array> T *upload(DeviceVector<T> &buffer, const A
 template <typename T, typename Array> T *upload(DeviceVector<T> &buffer, const std::optional<Array> &array)
 {
   return array ? upload(buffer, *array) : nullptr;
+}
+
+/// Spectral variance moments of the slot's cube, after the bands, as the CPU compute_spectral_variance_stats computes
+/// them: copied from the slot's buffers straight into the result.
+SpectralVarianceStats spectral_variance_stats(GpuSlot &slot, const GpuPlaneInput &plane, const PlaneBatchItem &item)
+{
+  assert(plane.n_channels <= static_cast<std::size_t>(std::numeric_limits<int>::max()));
+  const std::size_t n_pixels = plane.n_pixels();
+  const bool *const nonzero_channels = upload(slot.inputs.nonzero_channels, item.nonzero_channels);
+  slot.sum_pow2.ensure(n_pixels);
+  slot.sum_pow3.ensure(n_pixels);
+  slot.sum_pow4.ensure(n_pixels);
+  gpu_spectral_variance_moments(plane.cube, nonzero_channels, slot.sum_pow2, slot.sum_pow3, slot.sum_pow4, n_pixels,
+                                static_cast<int>(plane.n_channels), slot.stream);
+
+  SpectralVarianceStats stats;
+  for (auto [host, device] : {std::pair{&stats.sum_pow2, &slot.sum_pow2}, std::pair{&stats.sum_pow3, &slot.sum_pow3},
+                              std::pair{&stats.sum_pow4, &slot.sum_pow4}})
+  {
+    host->resize({plane.n_y, plane.n_x});
+    CHECK_GPU(
+        cudaMemcpyAsync(host->data(), device->data(), n_pixels * sizeof(float), cudaMemcpyDeviceToHost, slot.stream));
+  }
+  slot.stream.synchronize();
+  stats.nonzero_channels_mask = item.nonzero_channels;
+  return stats;
 }
 } // namespace
 
@@ -181,9 +176,7 @@ ProcessPlaneResult gpu_process_plane(GpuSlot &slot, const PlaneBatchItem &item, 
   // After the bands, as on the CPU: the single-channel bands have written their SNR into the cube.
   if (n_channels > 1)
   {
-    const bool *const nonzero_channels = upload(inputs.nonzero_channels, item.nonzero_channels);
-    result.variance_stats =
-        gpu_compute_spectral_variance_stats(plane.cube, nonzero_channels, n_y, n_x, n_channels, slot.stream);
+    result.variance_stats = spectral_variance_stats(slot, plane, item);
   }
   return result;
 }

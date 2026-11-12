@@ -1,5 +1,4 @@
 #include <cassert>
-#include <limits>
 
 #include "gpu_runtime.hpp"
 #include "gpu_kernels.hpp"
@@ -115,38 +114,5 @@ void gpu_spectral_variance_moments(const float *cube, const bool *nonzero_channe
   assert(n_pixels > 0);
   launch_per_element(spectral_variance_moments_kernel, n_pixels, stream, cube, nonzero_channels, out_sum2, out_sum3,
                      out_sum4, n_pixels, n_channels);
-}
-
-void gpu_spectral_variance_stats_host(const float *cube, const bool *nonzero_channels, size_t n_y, size_t n_x,
-                                      size_t n_channels, GpuSpectralVarianceHostResult &result, cudaStream_t stream)
-{
-  assert(n_y > 0 && n_x > 0 && n_channels > 0);
-  assert(cube != nullptr && nonzero_channels != nullptr);
-  assert(n_y <= std::numeric_limits<size_t>::max() / n_x);
-  assert(n_channels <= static_cast<size_t>(std::numeric_limits<int>::max()));
-
-  const size_t n_pixels = n_y * n_x;
-
-  // Per plane, not per band; the slot owns them in Phase 4.
-  DeviceVector<float> sum_pow2(n_pixels);
-  DeviceVector<float> sum_pow3(n_pixels);
-  DeviceVector<float> sum_pow4(n_pixels);
-  gpu_spectral_variance_moments(cube, nonzero_channels, sum_pow2, sum_pow3, sum_pow4, n_pixels,
-                                static_cast<int>(n_channels), stream);
-
-  result.sum_pow2.resize(n_pixels);
-  result.sum_pow3.resize(n_pixels);
-  result.sum_pow4.resize(n_pixels);
-  result.nonzero_channels_mask.resize(n_channels);
-
-  CHECK_GPU(cudaMemcpyAsync(result.sum_pow2.data(), sum_pow2.data(), n_pixels * sizeof(float), cudaMemcpyDeviceToHost,
-                            stream));
-  CHECK_GPU(cudaMemcpyAsync(result.sum_pow3.data(), sum_pow3.data(), n_pixels * sizeof(float), cudaMemcpyDeviceToHost,
-                            stream));
-  CHECK_GPU(cudaMemcpyAsync(result.sum_pow4.data(), sum_pow4.data(), n_pixels * sizeof(float), cudaMemcpyDeviceToHost,
-                            stream));
-  CHECK_GPU(cudaMemcpyAsync(result.nonzero_channels_mask.data(), nonzero_channels, n_channels * sizeof(bool),
-                            cudaMemcpyDeviceToHost, stream));
-  CHECK_GPU(cudaStreamSynchronize(stream));
 }
 } // namespace breifast::gpu

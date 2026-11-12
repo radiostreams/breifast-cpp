@@ -206,6 +206,10 @@ struct GpuSlot
   GpuBandWorkspace workspace;
   GpuBandResult result;
   GpuBandHostResult host;
+  // Spectral variance moments of the plane, per pixel.
+  DeviceVector<float> sum_pow2;
+  DeviceVector<float> sum_pow3;
+  DeviceVector<float> sum_pow4;
   // Declared last: destroyed first, it waits for the work on the buffers above.
   Stream stream;
 };

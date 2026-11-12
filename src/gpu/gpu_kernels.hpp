@@ -89,18 +89,6 @@ void gpu_weighted_band_image(const float *cube, const float *weights, const floa
 void gpu_spectral_variance_moments(const float *cube, const bool *nonzero_channels, float *out_sum2, float *out_sum3,
                                    float *out_sum4, size_t n_pixels, int n_channels, cudaStream_t stream = nullptr);
 
-struct GpuSpectralVarianceHostResult
-{
-  std::vector<float> sum_pow2;
-  std::vector<float> sum_pow3;
-  std::vector<float> sum_pow4;
-  std::vector<unsigned char> nonzero_channels_mask;
-};
-
-void gpu_spectral_variance_stats_host(const float *cube, const bool *nonzero_channels, size_t n_y, size_t n_x,
-                                      size_t n_channels, GpuSpectralVarianceHostResult &result,
-                                      cudaStream_t stream = nullptr);
-
 /**
  * @brief Noise map: `out[p] = sqrt(base[p]^2 + selfnoise_scale * selfnoise_offset[p] + dde_scale * dde_noise[p])`.
  *
