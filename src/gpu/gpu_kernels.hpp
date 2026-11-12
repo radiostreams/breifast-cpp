@@ -352,9 +352,8 @@ void gpu_label_stats(const unsigned int *labels, const float *image, const float
  *        `flux_per_label[label - 1] / baseline_flux[p]` over the pixels carrying that label, with the first pixel in
  *        raster order winning a tie.
  *
- * Device pointers. The work is enqueued on `stream`; `boost` and `found` are written for all `capacity` slots.
- * `n_pixels == 0`, `active_count == nullptr`, or `capacity == 0` throws. `capacity` must be at least
- * `*active_count`.
+ * Device pointers. The work is enqueued on `stream`; `boost` is written for all `capacity` slots. `n_pixels` and
+ * `capacity` must be positive, and `capacity` at least `*active_count`.
  * @param labels_per_pixel `[n_pixels]` labels, row major.
  * @param baseline_flux `[n_pixels]` floats, row major.
  * @param n_pixels Number of pixels.
@@ -362,10 +361,9 @@ void gpu_label_stats(const unsigned int *labels, const float *image, const float
  * @param capacity Maximum number of labels the output arrays can hold.
  * @param flux_per_label `[capacity]` floats, one numerator per label slot.
  * @param boost `[capacity]` floats, written completely; 0 when a label has no pixel.
- * @param found `[capacity]` bools, written completely.
  * @param scratch Grown to at least `capacity` islands.
  */
 void gpu_island_boost(const unsigned int *labels_per_pixel, const float *baseline_flux, size_t n_pixels,
                       const unsigned int *active_count, unsigned int capacity, const float *flux_per_label,
-                      float *boost, bool *found, IslandScratch &scratch, GpuStream stream = nullptr);
+                      float *boost, IslandScratch &scratch, GpuStream stream = nullptr);
 } // namespace breifast::gpu

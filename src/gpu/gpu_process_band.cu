@@ -40,18 +40,16 @@ bool gpu_process_band(const GpuPlaneInput &plane, const GpuBand &band, GpuBandWo
   assert(plane.cube != nullptr && plane.weights != nullptr && plane.accept_mask != nullptr &&
          plane.selfnoise_offset != nullptr && plane.selfnoise_raw != nullptr && plane.dde_noise != nullptr);
   assert(band.beam_kernel == nullptr || (band.beam_halfsize >= 0 && plane.max_to_std_ratio > 0.F));
-  [[maybe_unused]] const auto sizes = band_workspace_sizes(plane, band);
-  assert(workspace.sizes.n_pixels == sizes.n_pixels && workspace.sizes.stamp_pixels == sizes.stamp_pixels &&
-         workspace.sizes.beam_stamp_pixels == sizes.beam_stamp_pixels);
-  assert(result.n_pixels == n_pixels && result.histogram_bins == sizes.histogram_bins);
 
   const long radius = plane.boxsize / 2;
-  const std::size_t stamp_pixels = workspace.sizes.stamp_pixels;
-  const std::size_t beam_stamp_pixels = workspace.sizes.beam_stamp_pixels;
+  const auto stamp_side = static_cast<std::size_t>(2 * radius + 1);
+  const std::size_t stamp_pixels = stamp_side * stamp_side;
+  const auto beam_side = static_cast<std::size_t>(2 * band.beam_halfsize + 1);
+  const std::size_t beam_stamp_pixels = beam_side * beam_side;
   const float inv_band_size = 1.F / static_cast<float>(band.stop - band.start);
-  const unsigned int island_capacity =
-      static_cast<unsigned int>(std::min(workspace.sizes.stamp_capacity, result.n_pixels));
-  assert(island_capacity > 0);
+  const auto island_capacity = static_cast<unsigned int>(std::min(n_pixels, max_stamp_capacity));
+  workspace.ensure(plane, band);
+  result.ensure(island_capacity, static_cast<std::size_t>(2 * plane.max_sigma_bin));
 
   gpu_mask_or(plane.accept_mask, n_pixels, band.start, band.stop, workspace.mask, workspace.any_flag, stream);
   if (read_flag(workspace.any_flag, stream) == 0)
@@ -115,56 +113,57 @@ bool gpu_process_band(const GpuPlaneInput &plane, const GpuBand &band, GpuBandWo
   result.label_count = label_count;
 
   gpu_label_stats(workspace.labels, workspace.snr, workspace.noise_map, n_pixels, plane.n_x, workspace.label_count,
-                  island_capacity, result.peak_value, result.peak_local_noise, result.peak_y, result.peak_x,
-                  result.island_size, workspace.island_scratch, stream);
+                  island_capacity, result.islands.peak_value, result.islands.peak_local_noise, result.islands.peak_y,
+                  result.islands.peak_x, result.islands.island_size, workspace.island_scratch, stream);
 
-  gpu_stamp_extract(workspace.plane, plane.n_y, plane.n_x, result.peak_y, result.peak_x, workspace.label_count,
-                    island_capacity, radius, plane.inner_boxsize, workspace.donut_stamps, stream);
+  gpu_stamp_extract(workspace.plane, plane.n_y, plane.n_x, result.islands.peak_y, result.islands.peak_x,
+                    workspace.label_count, island_capacity, radius, plane.inner_boxsize, workspace.donut_stamps,
+                    stream);
   gpu_stamp_abs_extreme(workspace.donut_stamps, workspace.label_count, island_capacity, stamp_pixels,
-                        result.stamp_extreme, stream);
-  gpu_donut_std(workspace.donut_stamps, workspace.label_count, island_capacity, stamp_pixels, result.donut_std, stream);
+                        result.islands.stamp_extreme, stream);
+  gpu_donut_std(workspace.donut_stamps, workspace.label_count, island_capacity, stamp_pixels, result.islands.donut_std,
+                stream);
   gpu_donut_median_abs(workspace.donut_stamps, workspace.label_count, island_capacity, stamp_pixels, 1.4826F,
-                       result.donut_lmad, stream);
+                       result.islands.donut_lmad, stream);
 
   if (band.beam_kernel != nullptr)
   {
-    gpu_stamp_extract_no_zero(workspace.plane, plane.n_y, plane.n_x, result.peak_y, result.peak_x,
+    gpu_stamp_extract_no_zero(workspace.plane, plane.n_y, plane.n_x, result.islands.peak_y, result.islands.peak_x,
                               workspace.label_count, island_capacity, band.beam_halfsize, workspace.beam_stamps,
                               stream);
     gpu_stamp_beam_chi2(workspace.beam_stamps, band.beam_kernel, band.beam_kernel_sum, workspace.label_count,
-                        island_capacity, beam_stamp_pixels, result.stamp_extreme, 1.F / plane.max_to_std_ratio,
-                        result.beam_chi2, stream);
+                        island_capacity, beam_stamp_pixels, result.islands.stamp_extreme, 1.F / plane.max_to_std_ratio,
+                        result.islands.beam_chi2, stream);
   }
   else
   {
-    CHECK_GPU(cudaMemsetAsync(result.beam_chi2, 0, island_capacity * sizeof(float), stream));
+    CHECK_GPU(cudaMemsetAsync(result.islands.beam_chi2, 0, island_capacity * sizeof(float), stream));
   }
 
-  gpu_stamp_extract_no_zero(workspace.plane, plane.n_y, plane.n_x, result.peak_y, result.peak_x, workspace.label_count,
-                            island_capacity, 0, result.flux, stream);
-  gpu_stamp_extract_no_zero(workspace.noise_map, plane.n_y, plane.n_x, result.peak_y, result.peak_x,
-                            workspace.label_count, island_capacity, 0, result.noise_at_peak, stream);
+  gpu_stamp_extract_no_zero(workspace.plane, plane.n_y, plane.n_x, result.islands.peak_y, result.islands.peak_x,
+                            workspace.label_count, island_capacity, 0, result.islands.flux, stream);
+  gpu_stamp_extract_no_zero(workspace.noise_map, plane.n_y, plane.n_x, result.islands.peak_y, result.islands.peak_x,
+                            workspace.label_count, island_capacity, 0, result.islands.noise_at_peak, stream);
   if (plane.use_rms_noise_estimator)
   {
-    gpu_stamp_extract_no_zero(workspace.rms_map, plane.n_y, plane.n_x, result.peak_y, result.peak_x,
-                              workspace.label_count, island_capacity, 0, result.rms_at_peak, stream);
+    gpu_stamp_extract_no_zero(workspace.rms_map, plane.n_y, plane.n_x, result.islands.peak_y, result.islands.peak_x,
+                              workspace.label_count, island_capacity, 0, result.islands.rms_at_peak, stream);
   }
   else
   {
-    CHECK_GPU(cudaMemsetAsync(result.rms_at_peak, 0, island_capacity * sizeof(float), stream));
+    CHECK_GPU(cudaMemsetAsync(result.islands.rms_at_peak, 0, island_capacity * sizeof(float), stream));
   }
-  gpu_stamp_extract_no_zero(plane.selfnoise_raw, plane.n_y, plane.n_x, result.peak_y, result.peak_x,
-                            workspace.label_count, island_capacity, 0, result.selfnoise_at_peak, stream);
+  gpu_stamp_extract_no_zero(plane.selfnoise_raw, plane.n_y, plane.n_x, result.islands.peak_y, result.islands.peak_x,
+                            workspace.label_count, island_capacity, 0, result.islands.selfnoise_at_peak, stream);
 
   if (plane.baseline_flux != nullptr)
   {
     gpu_island_boost(workspace.labels, plane.baseline_flux, n_pixels, workspace.label_count, island_capacity,
-                     result.flux, result.boost, result.boost_found, workspace.island_scratch, stream);
+                     result.islands.flux, result.islands.boost, workspace.island_scratch, stream);
   }
   else
   {
-    CHECK_GPU(cudaMemsetAsync(result.boost, 0, island_capacity * sizeof(float), stream));
-    CHECK_GPU(cudaMemsetAsync(result.boost_found, 0, island_capacity * sizeof(bool), stream));
+    CHECK_GPU(cudaMemsetAsync(result.islands.boost, 0, island_capacity * sizeof(float), stream));
   }
 
   return true;

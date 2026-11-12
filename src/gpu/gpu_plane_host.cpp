@@ -2,6 +2,7 @@
 #include <array>
 #include <cassert>
 #include <functional>
+#include <tuple>
 #include <limits>
 #include <optional>
 #include <vector>
@@ -36,30 +37,26 @@ void append_band_result(const GpuBandHostResult &band, const GpuBandLabels &labe
   }
 
   const size_t count = band.label_count;
-  [[maybe_unused]] const auto has_count = [count](const auto &values) { return values.size() >= count; };
-  assert(has_count(band.peak_value) && has_count(band.peak_local_noise) && has_count(band.peak_y) &&
-         has_count(band.peak_x) && has_count(band.island_size) && has_count(band.stamp_extreme) &&
-         has_count(band.donut_std) && has_count(band.donut_lmad) && has_count(band.beam_chi2) && has_count(band.flux) &&
-         has_count(band.boost) && has_count(band.noise_at_peak) && has_count(band.rms_at_peak) &&
-         has_count(band.selfnoise_at_peak));
+  const auto &islands = band.islands;
+  assert(std::apply([count](const auto &...column) { return ((column.size() >= count) && ...); }, islands.tie()));
 
   auto &detections = result.detections;
   detections.reserve(detections.size() + count);
   for (size_t j = 0; j < count; ++j)
   {
-    const float flux = band.flux[j];
-    const float rms = band.donut_std[j];
-    const float lmad = band.donut_lmad[j];
-    const float adjacent_noise = band.stamp_extreme[j] / max_to_std_ratio;
+    const float flux = islands.flux[j];
+    const float rms = islands.donut_std[j];
+    const float lmad = islands.donut_lmad[j];
+    const float adjacent_noise = islands.stamp_extreme[j] / max_to_std_ratio;
     const float noisemap0_at_peak =
-        use_rms_noise_estimator ? std::max(band.rms_at_peak[j], band.rms_floor) : band.global_mad;
+        use_rms_noise_estimator ? std::max(islands.rms_at_peak[j], band.rms_floor) : band.global_mad;
 
-    detections.add(band.peak_y[j], band.peak_x[j], static_cast<long>(band.island_size[j]), labels.stokes_label,
-                   labels.band_label, flux, band.peak_local_noise[j], band.peak_local_noise[j] / band.median_noise,
-                   band.peak_value[j], rms != 0.F ? flux / rms : 0.F,
-                   adjacent_noise != 0.F ? flux / adjacent_noise : 0.F, lmad != 0.F ? flux / lmad : 0.F,
-                   flux / band.global_mad, band.selfnoise_at_peak[j], band.noise_at_peak[j] / noisemap0_at_peak,
-                   band.beam_chi2[j], band.boost[j]);
+    detections.add(islands.peak_y[j], islands.peak_x[j], static_cast<long>(islands.island_size[j]), labels.stokes_label,
+                   labels.band_label, flux, islands.peak_local_noise[j],
+                   islands.peak_local_noise[j] / band.median_noise, islands.peak_value[j],
+                   rms != 0.F ? flux / rms : 0.F, adjacent_noise != 0.F ? flux / adjacent_noise : 0.F,
+                   lmad != 0.F ? flux / lmad : 0.F, flux / band.global_mad, islands.selfnoise_at_peak[j],
+                   islands.noise_at_peak[j] / noisemap0_at_peak, islands.beam_chi2[j], islands.boost[j]);
   }
 }
 
@@ -193,9 +190,12 @@ ProcessPlaneResult gpu_process_plane_batch(const PlaneBatchItem &item, const Pla
         gpu_compute_spectral_variance_stats(buffers.cube, buffers.nonzero_channels, n_y, n_x, n_channels);
   }
 
-  // Same order as the CPU process_plane: the last band first.
-  const Stream stream;
+  // Same order as the CPU process_plane: the last band first. The workspace and result grow to the largest band.
+  GpuBandWorkspace workspace;
+  GpuBandResult band_result;
   GpuBandHostResult host;
+  // Declared after the buffers: destroyed first, it waits for their work.
+  const Stream stream;
   const bool *const nonzero = item.nonzero_channels.data();
   for (auto slice = config.band_slices.rbegin(); slice != config.band_slices.rend(); ++slice)
   {
@@ -218,8 +218,6 @@ ProcessPlaneResult gpu_process_plane_batch(const PlaneBatchItem &item, const Pla
         .beam_halfsize = beam_halfsize,
         .beam_kernel_sum = beam.kernel ? beam_kernel_sum(beam.kernel->data(), beam_halfsize) : 0.F,
     };
-    GpuBandWorkspace workspace(band_workspace_sizes(plane, band)); // allocated per band, as before, until 13c
-    GpuBandResult band_result(plane.n_pixels(), band_workspace_sizes(plane, band).histogram_bins);
     if (!gpu_process_band(plane, band, workspace, band_result, stream.get()))
     {
       continue;

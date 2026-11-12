@@ -17,36 +17,34 @@ using Catch::Matchers::Equals;
 
 TEST_CASE("copy_band_result copies per-island arrays, histograms and scalars", "[gpu][band_result]")
 {
-  constexpr std::size_t n_pixels = 4;
   constexpr std::size_t histogram_bins = 3;
   constexpr unsigned int label_count = 2;
 
-  GpuBandResult source(n_pixels, histogram_bins);
+  GpuBandResult source;
+  source.ensure(label_count, histogram_bins);
   source.label_count = label_count;
 
   const std::vector<float> floats = {1.F, 2.F};
   const std::vector<long> coordinates = {3L, 4L};
   const std::vector<unsigned int> sizes = {5U, 6U};
-  const std::vector<unsigned char> found = {1U, 0U};
   const std::vector<unsigned long long> histogram0 = {10ULL, 11ULL, 12ULL};
   const std::vector<unsigned long long> histogram1 = {20ULL, 21ULL, 22ULL};
   const std::vector<unsigned long long> histogram2 = {30ULL, 31ULL, 32ULL};
 
-  source.peak_value = upload(floats);
-  source.peak_local_noise = upload(floats);
-  source.peak_y = upload(coordinates);
-  source.peak_x = upload(coordinates);
-  source.island_size = upload(sizes);
-  source.stamp_extreme = upload(floats);
-  source.donut_std = upload(floats);
-  source.donut_lmad = upload(floats);
-  source.beam_chi2 = upload(floats);
-  source.flux = upload(floats);
-  source.boost = upload(floats);
-  source.boost_found = upload(std::vector<bool>(found.begin(), found.end()));
-  source.noise_at_peak = upload(floats);
-  source.rms_at_peak = upload(floats);
-  source.selfnoise_at_peak = upload(floats);
+  source.islands.peak_value = upload(floats);
+  source.islands.peak_local_noise = upload(floats);
+  source.islands.peak_y = upload(coordinates);
+  source.islands.peak_x = upload(coordinates);
+  source.islands.island_size = upload(sizes);
+  source.islands.stamp_extreme = upload(floats);
+  source.islands.donut_std = upload(floats);
+  source.islands.donut_lmad = upload(floats);
+  source.islands.beam_chi2 = upload(floats);
+  source.islands.flux = upload(floats);
+  source.islands.boost = upload(floats);
+  source.islands.noise_at_peak = upload(floats);
+  source.islands.rms_at_peak = upload(floats);
+  source.islands.selfnoise_at_peak = upload(floats);
   source.histogram0 = upload(histogram0);
   source.histogram1 = upload(histogram1);
   source.histogram2 = upload(histogram2);
@@ -67,21 +65,20 @@ TEST_CASE("copy_band_result copies per-island arrays, histograms and scalars", "
   copy_band_result(source, destination, stream.get());
 
   CHECK(destination.label_count == label_count);
-  CHECK_THAT(destination.peak_value, Equals(floats));
-  CHECK_THAT(destination.peak_local_noise, Equals(floats));
-  CHECK_THAT(destination.peak_y, Equals(coordinates));
-  CHECK_THAT(destination.peak_x, Equals(coordinates));
-  CHECK_THAT(destination.island_size, Equals(sizes));
-  CHECK_THAT(destination.stamp_extreme, Equals(floats));
-  CHECK_THAT(destination.donut_std, Equals(floats));
-  CHECK_THAT(destination.donut_lmad, Equals(floats));
-  CHECK_THAT(destination.beam_chi2, Equals(floats));
-  CHECK_THAT(destination.flux, Equals(floats));
-  CHECK_THAT(destination.boost, Equals(floats));
-  CHECK_THAT(destination.noise_at_peak, Equals(floats));
-  CHECK_THAT(destination.rms_at_peak, Equals(floats));
-  CHECK_THAT(destination.selfnoise_at_peak, Equals(floats));
-  CHECK(destination.boost_found == found);
+  CHECK_THAT(destination.islands.peak_value, Equals(floats));
+  CHECK_THAT(destination.islands.peak_local_noise, Equals(floats));
+  CHECK_THAT(destination.islands.peak_y, Equals(coordinates));
+  CHECK_THAT(destination.islands.peak_x, Equals(coordinates));
+  CHECK_THAT(destination.islands.island_size, Equals(sizes));
+  CHECK_THAT(destination.islands.stamp_extreme, Equals(floats));
+  CHECK_THAT(destination.islands.donut_std, Equals(floats));
+  CHECK_THAT(destination.islands.donut_lmad, Equals(floats));
+  CHECK_THAT(destination.islands.beam_chi2, Equals(floats));
+  CHECK_THAT(destination.islands.flux, Equals(floats));
+  CHECK_THAT(destination.islands.boost, Equals(floats));
+  CHECK_THAT(destination.islands.noise_at_peak, Equals(floats));
+  CHECK_THAT(destination.islands.rms_at_peak, Equals(floats));
+  CHECK_THAT(destination.islands.selfnoise_at_peak, Equals(floats));
   CHECK_THAT(destination.histogram0, Equals(histogram0));
   CHECK_THAT(destination.histogram1, Equals(histogram1));
   CHECK_THAT(destination.histogram2, Equals(histogram2));

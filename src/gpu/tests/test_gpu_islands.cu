@@ -28,7 +28,8 @@ std::vector<unsigned int> run_label(const std::vector<unsigned char> &mask, size
   const auto device_mask = upload(std::vector<bool>(mask.begin(), mask.end()));
   DeviceVector<unsigned int> device_labels(n);
   DeviceVector<unsigned int> device_count(1);
-  LabelScratch scratch(n);
+  LabelScratch scratch;
+  scratch.ensure(n);
 
   const Stream stream;
   gpu_label_islands(device_mask, n_y, n_x, device_labels, device_count, scratch, stream.get());

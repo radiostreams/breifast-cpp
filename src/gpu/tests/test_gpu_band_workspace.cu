@@ -1,91 +1,102 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstddef>
+#include <tuple>
+
 #include "gpu_band_workspace.cuh"
 
+using breifast::gpu::GpuBand;
 using breifast::gpu::GpuBandResult;
 using breifast::gpu::GpuBandWorkspace;
-using breifast::gpu::GpuBandWorkspaceSizes;
+using breifast::gpu::GpuPlaneInput;
 using breifast::gpu::max_stamp_capacity;
 
 namespace
 {
-GpuBandWorkspaceSizes make_sizes()
+// A 64 x 128 plane (more pixels than the island capacity) with 5 x 5 stamps. ensure only reads the sizes, so the
+// pointers stay null.
+constexpr std::size_t n_pixels = 64 * 128;
+constexpr std::size_t island_capacity = max_stamp_capacity;
+
+GpuPlaneInput make_plane()
 {
-  return GpuBandWorkspaceSizes{
-      .n_pixels = 1024,
-      .stamp_capacity = 8,
-      .stamp_pixels = 25,
-      .beam_stamp_pixels = 49,
-      .histogram_bins = 10,
-  };
+  return GpuPlaneInput{.n_y = 64, .n_x = 128, .n_channels = 1, .boxsize = 5, .max_sigma_bin = 5};
+}
+
+// A band with a 7 x 7 beam kernel. ensure only tests whether the kernel pointer is null.
+GpuBand make_band(const float *beam_kernel)
+{
+  return GpuBand{.start = 0, .stop = 1, .beam_kernel = beam_kernel, .beam_halfsize = 3};
+}
+
+template <typename Columns> bool all_columns_hold(const Columns &columns, std::size_t size)
+{
+  return std::apply([size](const auto &...column) { return ((column.size() == size) && ...); }, columns.tie());
 }
 } // namespace
 
-TEST_CASE("GpuBandWorkspace allocates every scratch buffer", "[gpu][band_workspace]")
+TEST_CASE("GpuBandWorkspace grows every buffer to what the band needs", "[gpu][band_workspace]")
 {
-  const auto sizes = make_sizes();
-  const GpuBandWorkspace workspace(sizes);
+  const float kernel = 0.F;
+  GpuBandWorkspace workspace;
+  workspace.ensure(make_plane(), make_band(&kernel));
 
-  CHECK(workspace.sizes.n_pixels == sizes.n_pixels);
-  CHECK(workspace.sizes.stamp_capacity == sizes.stamp_capacity);
-  CHECK(workspace.sizes.stamp_pixels == sizes.stamp_pixels);
-  CHECK(workspace.sizes.beam_stamp_pixels == sizes.beam_stamp_pixels);
-  CHECK(workspace.sizes.histogram_bins == sizes.histogram_bins);
-
-  CHECK(workspace.plane.size() == sizes.n_pixels);
-  CHECK(workspace.noise_map.size() == sizes.n_pixels);
-  CHECK(workspace.snr.size() == sizes.n_pixels);
-  CHECK(workspace.mask.size() == sizes.n_pixels);
-  CHECK(workspace.row_sums.size() == sizes.n_pixels);
-  CHECK(workspace.rms_map.size() == sizes.n_pixels);
-  CHECK(workspace.labels.size() == sizes.n_pixels);
-  CHECK(workspace.label_scratch.root_ranks.size() == sizes.n_pixels);
-  CHECK(workspace.donut_stamps.size() == sizes.stamp_capacity * sizes.stamp_pixels);
-  CHECK(workspace.beam_stamps.size() == sizes.stamp_capacity * sizes.beam_stamp_pixels);
+  CHECK(workspace.plane.size() == n_pixels);
+  CHECK(workspace.noise_map.size() == n_pixels);
+  CHECK(workspace.snr.size() == n_pixels);
+  CHECK(workspace.mask.size() == n_pixels);
+  CHECK(workspace.row_sums.size() == n_pixels);
+  CHECK(workspace.rms_map.size() == n_pixels);
+  CHECK(workspace.labels.size() == n_pixels);
+  CHECK(workspace.label_scratch.root_ranks.size() == n_pixels);
+  CHECK(workspace.label_scratch.scan_storage.empty() == false);
+  CHECK(workspace.island_scratch.value_keys.size() == island_capacity);
+  CHECK(workspace.donut_stamps.size() == island_capacity * 25);
+  CHECK(workspace.beam_stamps.size() == island_capacity * 49);
   CHECK(workspace.any_flag.size() == 1);
   CHECK(workspace.label_count.size() == 1);
 }
 
-TEST_CASE("GpuBandWorkspace skips beam stamps when beam is disabled", "[gpu][band_workspace]")
+TEST_CASE("GpuBandWorkspace leaves the beam stamps empty without a beam kernel", "[gpu][band_workspace]")
 {
-  auto sizes = make_sizes();
-  sizes.beam_stamp_pixels = 0;
-
-  const GpuBandWorkspace workspace(sizes);
+  GpuBandWorkspace workspace;
+  workspace.ensure(make_plane(), make_band(nullptr));
   CHECK(workspace.donut_stamps.empty() == false);
   CHECK(workspace.beam_stamps.empty() == true);
 }
 
-TEST_CASE("GpuBandResult allocates every output buffer", "[gpu][band_workspace]")
+TEST_CASE("GpuBandResult grows every output buffer", "[gpu][band_workspace]")
 {
-  constexpr std::size_t n_pixels = 64;
-  constexpr std::size_t histogram_bins = 10;
+  GpuBandResult result;
+  result.ensure(64, 10);
 
-  const GpuBandResult result(n_pixels, histogram_bins);
-
-  CHECK(result.n_pixels == n_pixels);
-  CHECK(result.histogram_bins == histogram_bins);
-  CHECK(result.peak_value.size() == n_pixels);
-  CHECK(result.peak_local_noise.size() == n_pixels);
-  CHECK(result.peak_y.size() == n_pixels);
-  CHECK(result.peak_x.size() == n_pixels);
-  CHECK(result.island_size.size() == n_pixels);
-  CHECK(result.stamp_extreme.size() == n_pixels);
-  CHECK(result.donut_std.size() == n_pixels);
-  CHECK(result.donut_lmad.size() == n_pixels);
-  CHECK(result.beam_chi2.size() == n_pixels);
-  CHECK(result.flux.size() == n_pixels);
-  CHECK(result.boost.size() == n_pixels);
-  CHECK(result.boost_found.size() == n_pixels);
-  CHECK(result.noise_at_peak.size() == n_pixels);
-  CHECK(result.rms_at_peak.size() == n_pixels);
-  CHECK(result.selfnoise_at_peak.size() == n_pixels);
-  CHECK(result.histogram0.size() == histogram_bins);
-  CHECK(result.histogram1.size() == histogram_bins);
-  CHECK(result.histogram2.size() == histogram_bins);
+  CHECK(result.histogram_bins == 10);
+  CHECK(all_columns_hold(result.islands, 64));
+  CHECK(result.histogram0.size() == 10);
+  CHECK(result.histogram1.size() == 10);
+  CHECK(result.histogram2.size() == 10);
   CHECK(result.min_sigma.size() == 1);
   CHECK(result.max_sigma.size() == 1);
   CHECK(result.median_noise.size() == 1);
   CHECK(result.rms_floor.size() == 1);
   CHECK(result.global_mad.size() == 1);
+}
+
+TEST_CASE("GpuBandWorkspace and GpuBandResult keep their buffers for a smaller band", "[gpu][band_workspace]")
+{
+  const float kernel = 0.F;
+  GpuBandWorkspace workspace;
+  workspace.ensure(make_plane(), make_band(&kernel));
+  workspace.ensure(GpuPlaneInput{.n_y = 8, .n_x = 8, .n_channels = 1, .boxsize = 1, .max_sigma_bin = 5},
+                   make_band(nullptr));
+  CHECK(workspace.plane.size() == n_pixels);
+  CHECK(workspace.donut_stamps.size() == island_capacity * 25);
+  CHECK(workspace.beam_stamps.size() == island_capacity * 49);
+
+  GpuBandResult result;
+  result.ensure(64, 10);
+  result.ensure(8, 4);
+  CHECK(result.histogram_bins == 4); // the valid count follows the band, the buffers do not shrink
+  CHECK(all_columns_hold(result.islands, 64));
+  CHECK(result.histogram0.size() == 10);
 }

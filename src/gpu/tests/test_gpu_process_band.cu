@@ -1,6 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
-#include <catch2/matchers/catch_matchers_string.hpp>
 #include <cuda_runtime.h>
 
 #include <cstddef>
@@ -16,13 +15,11 @@ using breifast::gpu::gpu_process_band;
 using breifast::gpu::GpuBand;
 using breifast::gpu::GpuBandResult;
 using breifast::gpu::GpuBandWorkspace;
-using breifast::gpu::GpuBandWorkspaceSizes;
 using breifast::gpu::GpuPlaneInput;
 using breifast::gpu::Stream;
 using breifast::gpu::test::download;
 using breifast::gpu::test::download_scalar;
 using breifast::gpu::test::upload;
-using Catch::Matchers::ContainsSubstring;
 using Catch::Matchers::WithinRel;
 
 namespace
@@ -49,18 +46,7 @@ struct Fixture
   // Declared after the buffers: destroyed first, it waits for their work.
   Stream stream;
 
-  static GpuBandWorkspaceSizes workspace_sizes()
-  {
-    return GpuBandWorkspaceSizes{
-        .n_pixels = n_pixels,
-        .stamp_capacity = 1,
-        .stamp_pixels = 1,
-        .beam_stamp_pixels = 0,
-        .histogram_bins = histogram_bins,
-    };
-  }
-
-  Fixture(bool accept_value, bool use_rms) : workspace(workspace_sizes()), result(n_pixels, histogram_bins)
+  Fixture(bool accept_value, bool use_rms)
   {
     cube = upload(std::vector<float>(n_pixels * n_channels, 1.F));
     weights = upload(std::vector<float>(n_channels, 1.F));
@@ -134,22 +120,7 @@ TEST_CASE("gpu_process_band runs the MAD noise stage and reports no detections",
   CHECK_THAT(download_scalar(fixture.result.median_noise.data(), fixture.stream), WithinRel(1.4826F, 1e-6));
 }
 
-TEST_CASE("gpu_process_band errors when island count exceeds stamp_capacity", "[gpu][process_band]")
-{
-  Fixture fixture(true, true);
-  fixture.plane.threshold = 0.5F;
-
-  std::vector<bool> mask(Fixture::n_pixels * Fixture::n_channels, false);
-  mask[0] = true;
-  mask[Fixture::n_pixels - 1] = true;
-  set_accept_mask(fixture, mask);
-
-  CHECK_THROWS_WITH(
-      gpu_process_band(fixture.plane, fixture.band, fixture.workspace, fixture.result, fixture.stream.get()),
-      ContainsSubstring("exceeds island capacity"));
-}
-
-TEST_CASE("gpu_process_band reaches the detection stage when capacity is sufficient", "[gpu][process_band]")
+TEST_CASE("gpu_process_band reaches the detection stage", "[gpu][process_band]")
 {
   Fixture fixture(true, true);
   fixture.plane.threshold = 0.5F;

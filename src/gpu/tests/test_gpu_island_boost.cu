@@ -1,6 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
-#include <catch2/matchers/catch_matchers_string.hpp>
 #include <cuda_runtime.h>
 
 #include <algorithm>
@@ -39,20 +38,12 @@ float run_boost(const std::vector<unsigned int> &labels, const std::vector<float
   const auto device_count = upload(std::vector<unsigned int>{active_count});
   const auto device_flux = upload(host_flux);
   DeviceVector<float> device_boost(capacity);
-  DeviceVector<bool> device_found(capacity);
   scratch.ensure(capacity);
 
   const Stream stream;
   gpu_island_boost(device_labels, device_baseline, labels.size(), device_count, capacity, device_flux, device_boost,
-                   device_found, scratch, stream.get());
-  const float boost = download_scalar(device_boost.data() + (label - 1U), stream);
-  const bool found = download_scalar(device_found.data() + (label - 1U), stream);
-
-  if (!found)
-  {
-    throw std::runtime_error("no pixel carries the label");
-  }
-  return boost;
+                   scratch, stream.get());
+  return download_scalar(device_boost.data() + (label - 1U), stream);
 }
 
 float run_boost(const std::vector<unsigned int> &labels, const std::vector<float> &baseline_flux,
@@ -143,12 +134,11 @@ TEST_CASE("gpu_island_boost is the plain ratio for a one-pixel island and infini
   CHECK(run_boost(image, flux_baseline, 3, -6.F) == -std::numeric_limits<float>::infinity());
 }
 
-TEST_CASE("gpu_island_boost with a label that has no pixel throws", "[gpu][island_boost]")
+TEST_CASE("gpu_island_boost gives a zero boost to a label with no pixel", "[gpu][island_boost]")
 {
-  const std::vector<unsigned int> image = {1, 0, 1, 0};
-  using Catch::Matchers::ContainsSubstring;
-  CHECK_THROWS_WITH(run_boost(image, std::vector<float>{1.F, 1.F, 1.F, 1.F}, 2, 1.F),
-                    ContainsSubstring("no pixel carries the label"));
+  // Label 2 is below the label count (3) but no pixel carries it.
+  const std::vector<unsigned int> image = {1, 0, 3, 0};
+  CHECK(run_boost(image, std::vector<float>{1.F, 1.F, 1.F, 1.F}, 2, 1.F) == 0.F);
 }
 
 TEST_CASE("gpu_island_boost matches a host reference across many blocks", "[gpu][island_boost]")

@@ -1,8 +1,8 @@
 #pragma once
 
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <tuple>
 
 #include "device_vector.hpp"
 #include "gpu_kernels.hpp"
@@ -59,28 +59,36 @@ struct GpuBand
   float beam_kernel_sum = 0.F; ///< summed on the host, as the CPU does
 };
 
-struct GpuBandWorkspaceSizes
+/// The per-island outputs of a band, declared once: IslandColumns<DeviceVector> on the device and
+/// IslandColumns<std::vector> on the host. tie() lists every column, for the code that treats them all alike.
+template <template <class...> class Vector> struct IslandColumns
 {
-  std::size_t n_pixels = 0;
-  std::size_t stamp_capacity = 0;
-  std::size_t stamp_pixels = 0;
-  std::size_t beam_stamp_pixels = 0;
-  std::size_t histogram_bins = 0;
-};
+  Vector<float> peak_value;
+  Vector<float> peak_local_noise;
+  Vector<long> peak_y;
+  Vector<long> peak_x;
+  Vector<unsigned int> island_size;
+  Vector<float> stamp_extreme;
+  Vector<float> donut_std;
+  Vector<float> donut_lmad;
+  Vector<float> beam_chi2;
+  Vector<float> flux;
+  Vector<float> boost;
+  Vector<float> noise_at_peak;
+  Vector<float> rms_at_peak;
+  Vector<float> selfnoise_at_peak;
 
-/// The workspace a band needs.
-inline GpuBandWorkspaceSizes band_workspace_sizes(const GpuPlaneInput &plane, const GpuBand &band)
-{
-  const auto stamp_side = static_cast<std::size_t>(2 * (plane.boxsize / 2) + 1);
-  const auto beam_side = static_cast<std::size_t>(2 * band.beam_halfsize + 1);
-  return GpuBandWorkspaceSizes{
-      .n_pixels = plane.n_pixels(),
-      .stamp_capacity = std::min(plane.n_pixels(), max_stamp_capacity),
-      .stamp_pixels = stamp_side * stamp_side,
-      .beam_stamp_pixels = band.beam_kernel != nullptr ? beam_side * beam_side : 0,
-      .histogram_bins = static_cast<std::size_t>(2 * plane.max_sigma_bin),
-  };
-}
+  auto tie()
+  {
+    return std::tie(peak_value, peak_local_noise, peak_y, peak_x, island_size, stamp_extreme, donut_std, donut_lmad,
+                    beam_chi2, flux, boost, noise_at_peak, rms_at_peak, selfnoise_at_peak);
+  }
+  auto tie() const
+  {
+    return std::tie(peak_value, peak_local_noise, peak_y, peak_x, island_size, stamp_extreme, donut_std, donut_lmad,
+                    beam_chi2, flux, boost, noise_at_peak, rms_at_peak, selfnoise_at_peak);
+  }
+};
 
 /// Device scratch of gpu_median and gpu_median_abs: the 256-bin digit histogram, then the radix-select state (count
 /// below the prefix, prefix, coverage) and the largest key below the median.
@@ -91,11 +99,11 @@ struct MedianScratch
 };
 
 /// Device scratch of gpu_label_islands: the per-pixel root ranks, the convergence flag, and the temporary storage of
-/// the rank scan (cub::DeviceScan), sized once for n_pixels.
+/// the rank scan (cub::DeviceScan).
 struct LabelScratch
 {
-  LabelScratch() = default;
-  explicit LabelScratch(std::size_t n_pixels); // in gpu_islands.cu, where CUB is available
+  /// Grows every array for a plane of `n_pixels`; the contents are unspecified after growing.
+  void ensure(std::size_t n_pixels); // in gpu_islands.cu, where CUB is available
 
   DeviceVector<unsigned int> root_ranks;
   DeviceVector<unsigned int> changed{1};
@@ -120,17 +128,11 @@ struct IslandScratch
   DeviceVector<unsigned long long> boost_keys;
 };
 
+/// Device buffers of gpu_process_band, grown to what each band needs and reused from band to band.
 struct GpuBandWorkspace
 {
-  explicit GpuBandWorkspace(const GpuBandWorkspaceSizes &sizes);
-
-  GpuBandWorkspace(const GpuBandWorkspace &) = delete;
-  GpuBandWorkspace &operator=(const GpuBandWorkspace &) = delete;
-  GpuBandWorkspace(GpuBandWorkspace &&) noexcept;
-  GpuBandWorkspace &operator=(GpuBandWorkspace &&) noexcept;
-  ~GpuBandWorkspace();
-
-  GpuBandWorkspaceSizes sizes;
+  /// Grows every buffer to what `band` of `input` needs; the contents are unspecified after growing.
+  void ensure(const GpuPlaneInput &input, const GpuBand &band);
 
   DeviceVector<float> plane;
   DeviceVector<float> noise_map;
@@ -146,52 +148,33 @@ struct GpuBandWorkspace
   DeviceVector<float> donut_stamps;
   DeviceVector<float> beam_stamps;
 
-  DeviceVector<int> any_flag;
-  DeviceVector<unsigned int> label_count;
+  DeviceVector<int> any_flag{1};
+  DeviceVector<unsigned int> label_count{1};
 
   MedianScratch median_scratch;
 };
 
+/// Device outputs of gpu_process_band, grown as needed and reused from band to band; the counts say how much of each
+/// buffer is valid.
 struct GpuBandResult
 {
-  GpuBandResult(std::size_t n_pixels, std::size_t histogram_bins);
+  /// Grows every buffer for `island_capacity` islands and `histogram_bins` bins, and sets histogram_bins; the contents
+  /// are unspecified after growing.
+  void ensure(std::size_t island_capacity, std::size_t histogram_bins);
 
-  GpuBandResult(const GpuBandResult &) = delete;
-  GpuBandResult &operator=(const GpuBandResult &) = delete;
-  GpuBandResult(GpuBandResult &&) noexcept;
-  GpuBandResult &operator=(GpuBandResult &&) noexcept;
-  ~GpuBandResult();
+  unsigned int label_count = 0;   ///< valid entries of every island column
+  std::size_t histogram_bins = 0; ///< valid entries of every histogram
 
-  std::size_t n_pixels = 0;
-  std::size_t histogram_bins = 0;
-  unsigned int label_count = 0;
-
-  DeviceVector<float> peak_value;
-  DeviceVector<float> peak_local_noise;
-  DeviceVector<long> peak_y;
-  DeviceVector<long> peak_x;
-  DeviceVector<unsigned int> island_size;
-
-  DeviceVector<float> stamp_extreme;
-  DeviceVector<float> donut_std;
-  DeviceVector<float> donut_lmad;
-  DeviceVector<float> beam_chi2;
-  DeviceVector<float> flux;
-  DeviceVector<float> boost;
-  DeviceVector<bool> boost_found;
-
-  DeviceVector<float> noise_at_peak;
-  DeviceVector<float> rms_at_peak;
-  DeviceVector<float> selfnoise_at_peak;
+  IslandColumns<DeviceVector> islands;
 
   DeviceVector<unsigned long long> histogram0;
   DeviceVector<unsigned long long> histogram1;
   DeviceVector<unsigned long long> histogram2;
 
-  DeviceVector<float> min_sigma;
-  DeviceVector<float> max_sigma;
-  DeviceVector<float> median_noise;
-  DeviceVector<float> rms_floor;
-  DeviceVector<float> global_mad;
+  DeviceVector<float> min_sigma{1};
+  DeviceVector<float> max_sigma{1};
+  DeviceVector<float> median_noise{1};
+  DeviceVector<float> rms_floor{1};
+  DeviceVector<float> global_mad{1};
 };
 } // namespace breifast::gpu

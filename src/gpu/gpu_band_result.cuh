@@ -8,27 +8,12 @@
 
 namespace breifast::gpu
 {
+/// Host copy of a GpuBandResult: every island column holds label_count entries.
 struct GpuBandHostResult
 {
   std::size_t label_count = 0;
 
-  std::vector<float> peak_value;
-  std::vector<float> peak_local_noise;
-  std::vector<long> peak_y;
-  std::vector<long> peak_x;
-  std::vector<unsigned int> island_size;
-
-  std::vector<float> stamp_extreme;
-  std::vector<float> donut_std;
-  std::vector<float> donut_lmad;
-  std::vector<float> beam_chi2;
-  std::vector<float> flux;
-  std::vector<float> boost;
-  std::vector<unsigned char> boost_found;
-
-  std::vector<float> noise_at_peak;
-  std::vector<float> rms_at_peak;
-  std::vector<float> selfnoise_at_peak;
+  IslandColumns<std::vector> islands;
 
   std::vector<unsigned long long> histogram0;
   std::vector<unsigned long long> histogram1;

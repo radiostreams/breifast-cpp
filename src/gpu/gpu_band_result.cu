@@ -1,157 +1,93 @@
 #include "gpu_band_result.cuh"
 
+#include <algorithm>
 #include <cassert>
+#include <tuple>
+#include <utility>
+#include <vector>
 
 #include "gpu_runtime.hpp"
 
 namespace breifast::gpu
 {
-GpuBandWorkspace::GpuBandWorkspace(const GpuBandWorkspaceSizes &sizes) : sizes(sizes)
+namespace
 {
-  assert(this->sizes.n_pixels > 0);
-  assert(this->sizes.stamp_pixels > 0);
-  assert(this->sizes.stamp_capacity > 0 && this->sizes.stamp_capacity <= max_stamp_capacity);
-
-  plane.ensure(this->sizes.n_pixels);
-  noise_map.ensure(this->sizes.n_pixels);
-  snr.ensure(this->sizes.n_pixels);
-  mask.ensure(this->sizes.n_pixels);
-  row_sums.ensure(this->sizes.n_pixels);
-  rms_map.ensure(this->sizes.n_pixels);
-
-  labels.ensure(this->sizes.n_pixels);
-  label_scratch = LabelScratch(this->sizes.n_pixels);
-  island_scratch.ensure(this->sizes.stamp_capacity);
-
-  donut_stamps.ensure(this->sizes.stamp_capacity * this->sizes.stamp_pixels);
-  if (this->sizes.beam_stamp_pixels > 0)
+/// Resizes `host` to `count` and copies the first `count` entries of `device` into it, on `stream`.
+template <typename T>
+void copy_column(const DeviceVector<T> &device, std::vector<T> &host, std::size_t count, GpuStream stream)
+{
+  assert(count <= device.size());
+  host.resize(count);
+  if (count > 0)
   {
-    beam_stamps.ensure(this->sizes.stamp_capacity * this->sizes.beam_stamp_pixels);
+    CHECK_GPU(cudaMemcpyAsync(host.data(), device.data(), count * sizeof(T), cudaMemcpyDeviceToHost, stream));
   }
-
-  any_flag.ensure(1);
-  label_count.ensure(1);
 }
 
-GpuBandWorkspace::GpuBandWorkspace(GpuBandWorkspace &&) noexcept = default;
-GpuBandWorkspace &GpuBandWorkspace::operator=(GpuBandWorkspace &&) noexcept = default;
-GpuBandWorkspace::~GpuBandWorkspace() = default;
-
-GpuBandResult::GpuBandResult(std::size_t n_pixels, std::size_t histogram_bins)
-    : n_pixels(n_pixels), histogram_bins(histogram_bins)
+template <typename Device, typename Host, std::size_t... I>
+void copy_columns(const Device &device, const Host &host, std::size_t count, GpuStream stream,
+                  std::index_sequence<I...>)
 {
-  assert(n_pixels > 0);
-  assert(histogram_bins > 0);
+  (copy_column(std::get<I>(device), std::get<I>(host), count, stream), ...);
+}
 
-  peak_value.ensure(n_pixels);
-  peak_local_noise.ensure(n_pixels);
-  peak_y.ensure(n_pixels);
-  peak_x.ensure(n_pixels);
-  island_size.ensure(n_pixels);
+template <typename T> void copy_scalar(const DeviceVector<T> &device, T &host, GpuStream stream)
+{
+  CHECK_GPU(cudaMemcpyAsync(&host, device.data(), sizeof(T), cudaMemcpyDeviceToHost, stream));
+}
+} // namespace
 
-  stamp_extreme.ensure(n_pixels);
-  donut_std.ensure(n_pixels);
-  donut_lmad.ensure(n_pixels);
-  beam_chi2.ensure(n_pixels);
-  flux.ensure(n_pixels);
-  boost.ensure(n_pixels);
-  boost_found.ensure(n_pixels);
+void GpuBandWorkspace::ensure(const GpuPlaneInput &input, const GpuBand &band)
+{
+  const std::size_t n_pixels = input.n_pixels();
+  const std::size_t island_capacity = std::min(n_pixels, max_stamp_capacity);
+  const auto stamp_side = static_cast<std::size_t>(2 * (input.boxsize / 2) + 1);
 
-  noise_at_peak.ensure(n_pixels);
-  rms_at_peak.ensure(n_pixels);
-  selfnoise_at_peak.ensure(n_pixels);
+  plane.ensure(n_pixels);
+  noise_map.ensure(n_pixels);
+  snr.ensure(n_pixels);
+  mask.ensure(n_pixels);
+  row_sums.ensure(n_pixels);
+  rms_map.ensure(n_pixels);
 
+  labels.ensure(n_pixels);
+  label_scratch.ensure(n_pixels);
+  island_scratch.ensure(island_capacity);
+
+  donut_stamps.ensure(island_capacity * stamp_side * stamp_side);
+  if (band.beam_kernel != nullptr)
+  {
+    const auto beam_side = static_cast<std::size_t>(2 * band.beam_halfsize + 1);
+    beam_stamps.ensure(island_capacity * beam_side * beam_side);
+  }
+}
+
+void GpuBandResult::ensure(const std::size_t island_capacity, const std::size_t histogram_bins)
+{
+  std::apply([island_capacity](auto &...column) { (column.ensure(island_capacity), ...); }, islands.tie());
   histogram0.ensure(histogram_bins);
   histogram1.ensure(histogram_bins);
   histogram2.ensure(histogram_bins);
-
-  min_sigma.ensure(1);
-  max_sigma.ensure(1);
-  median_noise.ensure(1);
-  rms_floor.ensure(1);
-  global_mad.ensure(1);
+  this->histogram_bins = histogram_bins;
 }
-
-GpuBandResult::GpuBandResult(GpuBandResult &&) noexcept = default;
-GpuBandResult &GpuBandResult::operator=(GpuBandResult &&) noexcept = default;
-GpuBandResult::~GpuBandResult() = default;
 
 void copy_band_result(const GpuBandResult &source, GpuBandHostResult &destination, GpuStream stream)
 {
-  assert(source.label_count <= source.n_pixels);
-  assert(source.histogram_bins > 0);
-
-  destination.label_count = source.label_count;
   const std::size_t count = source.label_count;
-  const std::size_t bins = source.histogram_bins;
+  destination.label_count = count;
+  const auto host_columns = destination.islands.tie();
+  copy_columns(source.islands.tie(), host_columns, count, stream,
+               std::make_index_sequence<std::tuple_size_v<decltype(host_columns)>>{});
 
-  destination.peak_value.resize(count);
-  destination.peak_local_noise.resize(count);
-  destination.peak_y.resize(count);
-  destination.peak_x.resize(count);
-  destination.island_size.resize(count);
-  destination.stamp_extreme.resize(count);
-  destination.donut_std.resize(count);
-  destination.donut_lmad.resize(count);
-  destination.beam_chi2.resize(count);
-  destination.flux.resize(count);
-  destination.boost.resize(count);
-  destination.boost_found.resize(count);
-  destination.noise_at_peak.resize(count);
-  destination.rms_at_peak.resize(count);
-  destination.selfnoise_at_peak.resize(count);
+  copy_column(source.histogram0, destination.histogram0, source.histogram_bins, stream);
+  copy_column(source.histogram1, destination.histogram1, source.histogram_bins, stream);
+  copy_column(source.histogram2, destination.histogram2, source.histogram_bins, stream);
 
-  destination.histogram0.resize(bins);
-  destination.histogram1.resize(bins);
-  destination.histogram2.resize(bins);
-
-  if (count > 0)
-  {
-    CHECK_GPU(cudaMemcpyAsync(destination.peak_value.data(), source.peak_value, count * sizeof(float),
-                              cudaMemcpyDeviceToHost, stream));
-    CHECK_GPU(cudaMemcpyAsync(destination.peak_local_noise.data(), source.peak_local_noise, count * sizeof(float),
-                              cudaMemcpyDeviceToHost, stream));
-    CHECK_GPU(cudaMemcpyAsync(destination.peak_y.data(), source.peak_y, count * sizeof(long), cudaMemcpyDeviceToHost,
-                              stream));
-    CHECK_GPU(cudaMemcpyAsync(destination.peak_x.data(), source.peak_x, count * sizeof(long), cudaMemcpyDeviceToHost,
-                              stream));
-    CHECK_GPU(cudaMemcpyAsync(destination.island_size.data(), source.island_size, count * sizeof(unsigned int),
-                              cudaMemcpyDeviceToHost, stream));
-    CHECK_GPU(cudaMemcpyAsync(destination.stamp_extreme.data(), source.stamp_extreme, count * sizeof(float),
-                              cudaMemcpyDeviceToHost, stream));
-    CHECK_GPU(cudaMemcpyAsync(destination.donut_std.data(), source.donut_std, count * sizeof(float),
-                              cudaMemcpyDeviceToHost, stream));
-    CHECK_GPU(cudaMemcpyAsync(destination.donut_lmad.data(), source.donut_lmad, count * sizeof(float),
-                              cudaMemcpyDeviceToHost, stream));
-    CHECK_GPU(cudaMemcpyAsync(destination.beam_chi2.data(), source.beam_chi2, count * sizeof(float),
-                              cudaMemcpyDeviceToHost, stream));
-    CHECK_GPU(
-        cudaMemcpyAsync(destination.flux.data(), source.flux, count * sizeof(float), cudaMemcpyDeviceToHost, stream));
-    CHECK_GPU(
-        cudaMemcpyAsync(destination.boost.data(), source.boost, count * sizeof(float), cudaMemcpyDeviceToHost, stream));
-    CHECK_GPU(cudaMemcpyAsync(destination.boost_found.data(), source.boost_found, count * sizeof(bool),
-                              cudaMemcpyDeviceToHost, stream));
-    CHECK_GPU(cudaMemcpyAsync(destination.noise_at_peak.data(), source.noise_at_peak, count * sizeof(float),
-                              cudaMemcpyDeviceToHost, stream));
-    CHECK_GPU(cudaMemcpyAsync(destination.rms_at_peak.data(), source.rms_at_peak, count * sizeof(float),
-                              cudaMemcpyDeviceToHost, stream));
-    CHECK_GPU(cudaMemcpyAsync(destination.selfnoise_at_peak.data(), source.selfnoise_at_peak, count * sizeof(float),
-                              cudaMemcpyDeviceToHost, stream));
-  }
-
-  CHECK_GPU(cudaMemcpyAsync(destination.histogram0.data(), source.histogram0, bins * sizeof(unsigned long long),
-                            cudaMemcpyDeviceToHost, stream));
-  CHECK_GPU(cudaMemcpyAsync(destination.histogram1.data(), source.histogram1, bins * sizeof(unsigned long long),
-                            cudaMemcpyDeviceToHost, stream));
-  CHECK_GPU(cudaMemcpyAsync(destination.histogram2.data(), source.histogram2, bins * sizeof(unsigned long long),
-                            cudaMemcpyDeviceToHost, stream));
-
-  CHECK_GPU(cudaMemcpyAsync(&destination.min_sigma, source.min_sigma, sizeof(float), cudaMemcpyDeviceToHost, stream));
-  CHECK_GPU(cudaMemcpyAsync(&destination.max_sigma, source.max_sigma, sizeof(float), cudaMemcpyDeviceToHost, stream));
-  CHECK_GPU(
-      cudaMemcpyAsync(&destination.median_noise, source.median_noise, sizeof(float), cudaMemcpyDeviceToHost, stream));
-  CHECK_GPU(cudaMemcpyAsync(&destination.rms_floor, source.rms_floor, sizeof(float), cudaMemcpyDeviceToHost, stream));
-  CHECK_GPU(cudaMemcpyAsync(&destination.global_mad, source.global_mad, sizeof(float), cudaMemcpyDeviceToHost, stream));
+  copy_scalar(source.min_sigma, destination.min_sigma, stream);
+  copy_scalar(source.max_sigma, destination.max_sigma, stream);
+  copy_scalar(source.median_noise, destination.median_noise, stream);
+  copy_scalar(source.rms_floor, destination.rms_floor, stream);
+  copy_scalar(source.global_mad, destination.global_mad, stream);
 
   CHECK_GPU(cudaStreamSynchronize(stream));
 }

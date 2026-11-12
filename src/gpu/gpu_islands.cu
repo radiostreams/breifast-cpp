@@ -141,10 +141,9 @@ __global__ void island_boost_atomic_kernel(const unsigned int *const labels_per_
   atomicMax(&keys[label], key);
 }
 
-__global__ void island_boost_finalize_kernel(const unsigned long long *const keys,
-                                             const float *const baseline_flux, const unsigned int *const active_count,
-                                             const unsigned int capacity, const float *const flux_per_label,
-                                             float *const boost, bool *const found)
+__global__ void island_boost_finalize_kernel(const unsigned long long *const keys, const float *const baseline_flux,
+                                             const unsigned int *const active_count, const unsigned int capacity,
+                                             const float *const flux_per_label, float *const boost)
 {
   const auto slot = global_index();
   if (slot >= capacity)
@@ -156,21 +155,18 @@ __global__ void island_boost_finalize_kernel(const unsigned long long *const key
   if (label > *active_count)
   {
     boost[slot] = 0.F;
-    found[slot] = false;
     return;
   }
 
   const unsigned long long key = keys[label];
-  if (key == 0ULL)
+  if (key == 0ULL) // no pixel carries the label
   {
     boost[slot] = 0.F;
-    found[slot] = false;
     return;
   }
 
   const unsigned int index = 0xFFFFFFFFU - static_cast<unsigned int>(key & 0xFFFFFFFFULL);
   boost[slot] = flux_per_label[slot] / baseline_flux[index];
-  found[slot] = true;
 }
 
 __global__ void label_stats_init_kernel(const unsigned int capacity, unsigned long long *const value_keys,
@@ -252,13 +248,14 @@ __global__ void label_stats_finalize_kernel(const unsigned int *const active_cou
 }
 } // namespace
 
-LabelScratch::LabelScratch(const std::size_t n_pixels) : root_ranks(n_pixels)
+void LabelScratch::ensure(const std::size_t n_pixels)
 {
   assert(n_pixels <= static_cast<std::size_t>(INT_MAX));
+  root_ranks.ensure(n_pixels);
   std::size_t bytes = 0;
   CHECK_GPU(cub::DeviceScan::InclusiveSum(nullptr, bytes, root_ranks.data(), root_ranks.data(),
                                           static_cast<int>(n_pixels)));
-  scan_storage = DeviceVector<std::byte>(bytes);
+  scan_storage.ensure(bytes);
 }
 
 void gpu_label_islands(const bool *const mask, const size_t n_y, const size_t n_x, unsigned int *const labels,
@@ -282,8 +279,7 @@ void gpu_label_islands(const bool *const mask, const size_t n_y, const size_t n_
 
 void gpu_island_boost(const unsigned int *const labels_per_pixel, const float *const baseline_flux,
                       const size_t n_pixels, const unsigned int *const active_count, const unsigned int capacity,
-                      const float *const flux_per_label, float *const boost, bool *const found,
-                      IslandScratch &scratch, GpuStream stream)
+                      const float *const flux_per_label, float *const boost, IslandScratch &scratch, GpuStream stream)
 {
   assert(n_pixels > 0);
   assert(active_count != nullptr);
@@ -297,7 +293,7 @@ void gpu_island_boost(const unsigned int *const labels_per_pixel, const float *c
   launch_per_element(island_boost_atomic_kernel, n_pixels, stream, labels_per_pixel, n_pixels, baseline_flux,
                      active_count, capacity, flux_per_label, keys_ptr);
   launch_per_element(island_boost_finalize_kernel, capacity, stream, keys_ptr, baseline_flux, active_count, capacity,
-                     flux_per_label, boost, found);
+                     flux_per_label, boost);
 }
 
 void gpu_label_stats(const unsigned int *const labels, const float *const image, const float *const local_noise,

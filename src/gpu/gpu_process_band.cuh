@@ -5,8 +5,9 @@
 
 namespace breifast::gpu
 {
-/// Runs one band on `stream` and leaves its outputs in `result`. Returns false when the band's accept mask is empty:
-/// the band is skipped, as on the CPU. The caller has already skipped a band with no nonzero channel.
+/// Runs one band on `stream` and leaves its outputs in `result`, growing `workspace` and `result` to what the band
+/// needs. Returns false when the band's accept mask is empty: the band is skipped, as on the CPU. The caller has
+/// already skipped a band with no nonzero channel.
 bool gpu_process_band(const GpuPlaneInput &plane, const GpuBand &band, GpuBandWorkspace &workspace,
                       GpuBandResult &result, GpuStream stream);
 } // namespace breifast::gpu

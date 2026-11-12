@@ -4,6 +4,7 @@
 
 #include <limits>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "gpu_plane_detections.hpp"
@@ -31,21 +32,7 @@ GpuBandHostResult band_with(const std::size_t count, const float median_noise, c
 
 void resize_detection_vectors(GpuBandHostResult &band)
 {
-  const auto count = band.label_count;
-  band.peak_value.resize(count);
-  band.peak_local_noise.resize(count);
-  band.peak_y.resize(count);
-  band.peak_x.resize(count);
-  band.island_size.resize(count);
-  band.stamp_extreme.resize(count);
-  band.donut_std.resize(count);
-  band.donut_lmad.resize(count);
-  band.beam_chi2.resize(count);
-  band.flux.resize(count);
-  band.boost.resize(count);
-  band.noise_at_peak.resize(count);
-  band.rms_at_peak.resize(count);
-  band.selfnoise_at_peak.resize(count);
+  std::apply([&band](auto &...column) { (column.resize(band.label_count), ...); }, band.islands.tie());
 }
 } // namespace
 
@@ -53,37 +40,37 @@ TEST_CASE("append_band_result appends detections in the order the bands are appe
 {
   GpuBandHostResult low = band_with(1, 2.F, 0.5F, 4.F);
   resize_detection_vectors(low);
-  low.peak_value[0] = 5.F;
-  low.peak_local_noise[0] = 2.F;
-  low.peak_y[0] = 1;
-  low.peak_x[0] = 2;
-  low.island_size[0] = 3;
-  low.stamp_extreme[0] = 6.F;
-  low.donut_std[0] = 2.5F;
-  low.donut_lmad[0] = 1.5F;
-  low.beam_chi2[0] = 0.25F;
-  low.flux[0] = 10.F;
-  low.boost[0] = 1.5F;
-  low.noise_at_peak[0] = 3.F;
-  low.rms_at_peak[0] = 2.F;
-  low.selfnoise_at_peak[0] = 7.F;
+  low.islands.peak_value[0] = 5.F;
+  low.islands.peak_local_noise[0] = 2.F;
+  low.islands.peak_y[0] = 1;
+  low.islands.peak_x[0] = 2;
+  low.islands.island_size[0] = 3;
+  low.islands.stamp_extreme[0] = 6.F;
+  low.islands.donut_std[0] = 2.5F;
+  low.islands.donut_lmad[0] = 1.5F;
+  low.islands.beam_chi2[0] = 0.25F;
+  low.islands.flux[0] = 10.F;
+  low.islands.boost[0] = 1.5F;
+  low.islands.noise_at_peak[0] = 3.F;
+  low.islands.rms_at_peak[0] = 2.F;
+  low.islands.selfnoise_at_peak[0] = 7.F;
 
   GpuBandHostResult high = band_with(2, 5.F, 1.F, 10.F);
   resize_detection_vectors(high);
-  high.peak_value = {8.F, 1.F};
-  high.peak_local_noise = {4.F, 1.F};
-  high.peak_y = {3, 6};
-  high.peak_x = {4, 7};
-  high.island_size = {5, 8};
-  high.stamp_extreme = {0.F, 2.F};
-  high.donut_std = {0.F, 1.F};
-  high.donut_lmad = {0.F, 1.F};
-  high.beam_chi2 = {0.F, 0.5F};
-  high.flux = {20.F, 2.F};
-  high.boost = {0.F, 0.25F};
-  high.noise_at_peak = {8.F, 1.F};
-  high.rms_at_peak = {0.F, 4.F};
-  high.selfnoise_at_peak = {9.F, 3.F};
+  high.islands.peak_value = {8.F, 1.F};
+  high.islands.peak_local_noise = {4.F, 1.F};
+  high.islands.peak_y = {3, 6};
+  high.islands.peak_x = {4, 7};
+  high.islands.island_size = {5, 8};
+  high.islands.stamp_extreme = {0.F, 2.F};
+  high.islands.donut_std = {0.F, 1.F};
+  high.islands.donut_lmad = {0.F, 1.F};
+  high.islands.beam_chi2 = {0.F, 0.5F};
+  high.islands.flux = {20.F, 2.F};
+  high.islands.boost = {0.F, 0.25F};
+  high.islands.noise_at_peak = {8.F, 1.F};
+  high.islands.rms_at_peak = {0.F, 4.F};
+  high.islands.selfnoise_at_peak = {9.F, 3.F};
 
   // CPU order: the last band first.
   ProcessPlaneResult result;
