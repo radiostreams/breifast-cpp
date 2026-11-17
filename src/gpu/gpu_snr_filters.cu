@@ -1,4 +1,5 @@
 #include <cassert>
+#include <cuda/std/limits>
 
 #include "gpu_kernels.hpp"
 
@@ -17,80 +18,93 @@ __global__ void min_max_init(float *out_min_sigma, float *out_max_sigma)
 
 __global__ void snr_and_filters(const float *plane, const float *noise_map, const float *snr_cutoff,
                                 const float *flux_cutoff, const float *median_noise, const size_t n_pixels,
-                                const common::SnrFilterParams params,
-                                float *out_snr, bool *image_mask, unsigned long long *histogram0,
-                                unsigned long long *histogram1, unsigned long long *histogram2, float *out_min_sigma,
-                                float *out_max_sigma)
+                                const common::SnrFilterParams params, float *out_snr, bool *image_mask,
+                                unsigned long long *histogram0, unsigned long long *histogram1,
+                                unsigned long long *histogram2, float *out_min_sigma, float *out_max_sigma)
 {
   const auto i_pixel = global_index();
-  if (i_pixel < n_pixels)
+  const bool valid_index = i_pixel < n_pixels;
+
+  const auto noise = valid_index ? noise_map[i_pixel] : cuda::std::numeric_limits<float>::infinity();
+  const auto valid = valid_index && noise != 0.0f && std::isfinite(noise);
+  const auto plane_val = valid ? plane[i_pixel] : cuda::std::numeric_limits<float>::infinity();
+  const auto snr = valid ? plane_val / noise : 0.0f;
+
+  const bool snr_cutoff_enabled = snr_cutoff != nullptr;
+  const bool flux_cutoff_enabled = flux_cutoff != nullptr;
+  const bool noise_rejection_disabled = params.reject_noise_threshold == 0.F;
+  const float noise_rejection_threshold = median_noise[0] * params.reject_noise_threshold;
+
+  if (valid_index)
   {
-    const auto noise = noise_map[i_pixel];
-    const auto valid = noise != 0.0f && std::isfinite(noise);
-    const auto plane_val = plane[i_pixel];
-    const auto snr = valid ? plane_val / noise : 0.0f;
-
-    const bool snr_cutoff_enabled = snr_cutoff != nullptr;
-    const bool flux_cutoff_enabled = flux_cutoff != nullptr;
-    const bool noise_rejection_disabled = params.reject_noise_threshold == 0.F;
-    const float noise_rejection_threshold = median_noise[0] * params.reject_noise_threshold;
-
     image_mask[i_pixel] &= valid;
+  }
 
-    const auto mask0 = image_mask[i_pixel];
+  const auto mask0 = valid_index ? image_mask[i_pixel] : false;
 
-    float snr_cutoff_threshold = 0.0f;
-    if (snr_cutoff_enabled)
+  float snr_cutoff_threshold = 0.0f;
+  if (snr_cutoff_enabled && valid_index)
+  {
+    for (auto i_channel = params.band_start; i_channel < params.band_stop; ++i_channel)
     {
-      for (auto i_channel = params.band_start; i_channel < params.band_stop; ++i_channel)
-      {
-        snr_cutoff_threshold += snr_cutoff[i_channel * n_pixels + i_pixel];
-      }
-      snr_cutoff_threshold *= params.inv_band_size;
+      snr_cutoff_threshold += snr_cutoff[i_channel * n_pixels + i_pixel];
     }
+    snr_cutoff_threshold *= params.inv_band_size;
+  }
 
-    float flux_cutoff_threshold = 0.0f;
-    if (flux_cutoff_enabled)
+  float flux_cutoff_threshold = 0.0f;
+  if (flux_cutoff_enabled && valid_index)
+  {
+    for (auto i_channel = params.band_start; i_channel < params.band_stop; ++i_channel)
     {
-      for (auto i_channel = params.band_start; i_channel < params.band_stop; ++i_channel)
-      {
-        flux_cutoff_threshold += flux_cutoff[i_channel * n_pixels + i_pixel];
-      }
-      flux_cutoff_threshold *= params.inv_band_size;
+      flux_cutoff_threshold += flux_cutoff[i_channel * n_pixels + i_pixel];
     }
+    flux_cutoff_threshold *= params.inv_band_size;
+  }
 
-    const auto mask1 = mask0 && (!snr_cutoff_enabled || fabsf(snr) >= snr_cutoff_threshold);
-    const auto mask2 = mask1 && (!flux_cutoff_enabled || fabsf(plane_val) >= flux_cutoff_threshold);
-    const auto mask3 = mask2 && (noise_rejection_disabled || noise <= noise_rejection_threshold);
+  const auto mask1 = mask0 && (!snr_cutoff_enabled || fabsf(snr) >= snr_cutoff_threshold);
+  const auto mask2 = mask1 && (!flux_cutoff_enabled || fabsf(plane_val) >= flux_cutoff_threshold);
+  const auto mask3 = mask2 && (noise_rejection_disabled || noise <= noise_rejection_threshold);
 
+  if (valid_index)
+  {
     image_mask[i_pixel] = mask3;
+  }
 
-    auto bin_index = floorf(snr + params.max_sigma_bin);
-    bin_index -= (bin_index == 2 * params.max_sigma_bin ? 1.F : +0.F);
+  auto bin_index = floorf(snr + params.max_sigma_bin);
+  bin_index -= (bin_index == 2 * params.max_sigma_bin ? 1.F : +0.F);
 
-    if (0 <= bin_index && bin_index < 2 * params.max_sigma_bin)
+  if (0 <= bin_index && bin_index < 2 * params.max_sigma_bin)
+  {
+    if (mask0 && params.histogram_detail > 1)
     {
-      if (mask0 && params.histogram_detail > 1)
-      {
-        atomicAdd(&histogram0[static_cast<unsigned long long>(bin_index)], 1ULL);
-      }
-      if (mask1 && params.histogram_detail > 1)
-      {
-        atomicAdd(&histogram1[static_cast<unsigned long long>(bin_index)], 1ULL);
-      }
-      if (mask2 && params.histogram_detail > 0)
-      {
-        atomicAdd(&histogram2[static_cast<unsigned long long>(bin_index)], 1ULL);
-      }
+      atomicAdd(&histogram0[static_cast<unsigned long long>(bin_index)], 1ULL);
     }
-
-    if (mask3)
+    if (mask1 && params.histogram_detail > 1)
     {
-      atomic_update(out_min_sigma, snr, FloatMin{});
-      atomic_update(out_max_sigma, snr, FloatMax{});
+      atomicAdd(&histogram1[static_cast<unsigned long long>(bin_index)], 1ULL);
     }
+    if (mask2 && params.histogram_detail > 0)
+    {
+      atomicAdd(&histogram2[static_cast<unsigned long long>(bin_index)], 1ULL);
+    }
+  }
 
-    const float thresholded_abs_snr = mask3 ? fabsf(snr) : 0.0f;
+  const auto snr_min_val = mask3 ? snr : cuda::std::numeric_limits<float>::infinity();
+  const auto snr_max_val = mask3 ? snr : -cuda::std::numeric_limits<float>::infinity();
+
+  const auto min_snr_reduced = block_reduce(snr_min_val, FloatMin{});
+  const auto max_snr_reduced = block_reduce(snr_max_val, FloatMax{});
+
+  if (threadIdx.x == 0 && min_snr_reduced <= max_snr_reduced)
+  {
+    atomic_update(out_min_sigma, min_snr_reduced, FloatMin{});
+    atomic_update(out_max_sigma, max_snr_reduced, FloatMax{});
+  }
+
+  const float thresholded_abs_snr = mask3 ? fabsf(snr) : 0.0f;
+  if (valid_index)
+  {
     image_mask[i_pixel] = thresholded_abs_snr >= params.threshold;
     out_snr[i_pixel] = snr;
   }
