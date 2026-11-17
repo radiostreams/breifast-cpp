@@ -1,11 +1,12 @@
 // Standalone executable that replays one real process_lot()/run_batch_core() call. Loads a lot dumped by breifast.py's
 // BREIFAST_DUMP_LOT hook and converted to a manifest.json + raw-array directory by small_test/dump_lot_for_cpp.py.
 //
-// Usage: bench <manifest_dir> [num_threads] [repeat] [max_items] [gpu]
+// Usage: bench <manifest_dir> [num_threads] [repeat] [max_items] [gpu] [pinned]
 //   num_threads: number of threads to bused by compute loops, <=0 means automatic (all CPUs). Default 0.
 //   repeat: number of times to re-run run_batch_core().
 //   max_items: keep only the first max_items planes, <=0 means all. Default 0.
 //   gpu: run run_batch_core_gpu() instead of the CPU path. Only in the bench_gpu build (-DBREIFAST_BENCH_GPU).
+//   pinned: with gpu, page-lock the cubes before each timed call (outside the timer): the upper bound of pinned memory.
 
 #include <algorithm>
 #include <chrono>
@@ -27,6 +28,8 @@
 
 #include "plane_lot_dispatch.hpp"
 #ifdef BREIFAST_BENCH_GPU
+#include <cuda_runtime.h>
+
 #include "gpu/gpu_plane.hpp"
 #endif
 
@@ -199,7 +202,7 @@ int main(int argc, char **argv)
 {
   if (argc < 2)
   {
-    std::fprintf(stderr, "usage: %s <manifest_dir> [num_threads] [repeat] [max_items] [gpu]\n", argv[0]);
+    std::fprintf(stderr, "usage: %s <manifest_dir> [num_threads] [repeat] [max_items] [gpu] [pinned]\n", argv[0]);
     return 1;
   }
   const std::string base_dir = argv[1];
@@ -207,6 +210,7 @@ int main(int argc, char **argv)
   const int repeat = argc > 3 ? std::atoi(argv[3]) : 1;
   const int max_items = argc > 4 ? std::atoi(argv[4]) : 0;
   const bool use_gpu = argc > 5 && std::string(argv[5]) == "gpu";
+  const bool pin_cubes = argc > 6 && std::string(argv[6]) == "pinned";
 #ifndef BREIFAST_BENCH_GPU
   if (use_gpu)
   {
@@ -266,6 +270,17 @@ int main(int argc, char **argv)
   for (int i = 0; i < repeat; ++i)
   {
     LotBatch lot = base_lot;
+#ifdef BREIFAST_BENCH_GPU
+    // Upper bound of pinned host memory: the cubes are page-locked outside the timed region.
+    if (pin_cubes)
+    {
+      for (auto &plane : lot.planes)
+      {
+        (void)cudaHostRegister(plane.stokes_cube.data(), plane.stokes_cube.size() * sizeof(float),
+                               cudaHostRegisterDefault);
+      }
+    }
+#endif
     const auto counters_before = read_proc_counters();
     const auto t0 = std::chrono::steady_clock::now();
     __itt_resume();
@@ -289,6 +304,15 @@ int main(int argc, char **argv)
                 elapsed);
     print_proc_counters_delta(counters_before, counters_after, elapsed,
                               num_threads > 0 ? num_threads : tbb::info::default_concurrency());
+#ifdef BREIFAST_BENCH_GPU
+    if (pin_cubes)
+    {
+      for (auto &plane : lot.planes)
+      {
+        (void)cudaHostUnregister(plane.stokes_cube.data());
+      }
+    }
+#endif
   }
   std::printf("run_batch_core: %d iterations, total = %.3fs, mean = %.3fs\n", repeat, total, total / repeat);
 
