@@ -1,11 +1,11 @@
 {
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-  inputs.astro-nix.url = "git+file:///work/ska/hchouh/src/astro-nix";
+  inputs.astro-nix.url = "github:adevress/astro-nix/37460e9a0f35da16525ff8c79400fb51d9aa67b0";
 
   outputs = { self, nixpkgs, astro-nix }:
     let
       pkgs = nixpkgs.legacyPackages.x86_64-linux;
-      # CUDA 12.6 toolchain (unfree redistributables, the newest the kuma 560 driver supports) from the local astro-nix clone (github:adevress/astro-nix), cached on cache.astro-nix.space
+      # CUDA 12.6 toolchain (unfree redistributables, the newest the kuma 560 driver supports) from github:adevress/astro-nix (pinned in flake.lock), cached on cache.astro-nix.space
       cuda = astro-nix.legacyPackages.x86_64-linux.cudaPackages_12_6;
       pythonEnv = pkgs.python3.withPackages (ps: with ps; [
         pip
