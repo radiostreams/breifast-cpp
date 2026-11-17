@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cassert>
 #include <cuda/std/limits>
 
@@ -16,97 +17,121 @@ __global__ void min_max_init(float *out_min_sigma, float *out_max_sigma)
   *out_max_sigma = -__int_as_float(0x7f7fffff); // -FLT_MAX (lowest)
 }
 
+/// Upper bound on the grid of snr_and_filters: each block pays a fixed cost (zeroing and flushing its shared
+/// histograms, two block reductions, two global compare-and-swaps), so the threads loop over the pixels instead.
+constexpr unsigned int snr_max_blocks = 1024;
+
 __global__ void snr_and_filters(const float *plane, const float *noise_map, const float *snr_cutoff,
                                 const float *flux_cutoff, const float *median_noise, const size_t n_pixels,
                                 const common::SnrFilterParams params, float *out_snr, bool *image_mask,
                                 unsigned long long *histogram0, unsigned long long *histogram1,
                                 unsigned long long *histogram2, float *out_min_sigma, float *out_max_sigma)
 {
-  const auto i_pixel = global_index();
-  const bool valid_index = i_pixel < n_pixels;
-
-  const auto noise = valid_index ? noise_map[i_pixel] : cuda::std::numeric_limits<float>::infinity();
-  const auto valid = valid_index && noise != 0.0f && std::isfinite(noise);
-  const auto plane_val = valid ? plane[i_pixel] : cuda::std::numeric_limits<float>::infinity();
-  const auto snr = valid ? plane_val / noise : 0.0f;
-
+  constexpr float inf = cuda::std::numeric_limits<float>::infinity();
   const bool snr_cutoff_enabled = snr_cutoff != nullptr;
   const bool flux_cutoff_enabled = flux_cutoff != nullptr;
   const bool noise_rejection_disabled = params.reject_noise_threshold == 0.F;
   const float noise_rejection_threshold = median_noise[0] * params.reject_noise_threshold;
 
-  if (valid_index)
+  // The block's histograms, flushed to the global ones once at the end.
+  const auto n_bins = static_cast<size_t>(2 * params.max_sigma_bin);
+  extern __shared__ unsigned long long shared_histograms[];
+  auto *const shared_histogram0 = shared_histograms;
+  auto *const shared_histogram1 = shared_histograms + n_bins;
+  auto *const shared_histogram2 = shared_histograms + 2 * n_bins;
+  for (size_t i_bin = threadIdx.x; i_bin < 3 * n_bins; i_bin += blockDim.x)
   {
-    image_mask[i_pixel] &= valid;
+    shared_histograms[i_bin] = 0;
   }
+  __syncthreads();
 
-  const auto mask0 = valid_index ? image_mask[i_pixel] : false;
-
-  float snr_cutoff_threshold = 0.0f;
-  if (snr_cutoff_enabled && valid_index)
+  float local_min = inf;
+  float local_max = -inf;
+  for (size_t i_pixel = global_index(); i_pixel < n_pixels; i_pixel += size_t{gridDim.x} * blockDim.x)
   {
-    for (auto i_channel = params.band_start; i_channel < params.band_stop; ++i_channel)
+    const float noise = noise_map[i_pixel];
+    const bool valid = noise != 0.0f && isfinite(noise);
+    const float plane_val = plane[i_pixel];
+    const float snr = valid ? plane_val / noise : 0.0f;
+    const bool mask0 = image_mask[i_pixel] && valid;
+
+    float snr_cutoff_threshold = 0.0f;
+    if (snr_cutoff_enabled)
     {
-      snr_cutoff_threshold += snr_cutoff[i_channel * n_pixels + i_pixel];
+      for (auto i_channel = params.band_start; i_channel < params.band_stop; ++i_channel)
+      {
+        snr_cutoff_threshold += snr_cutoff[i_channel * n_pixels + i_pixel];
+      }
+      snr_cutoff_threshold *= params.inv_band_size;
     }
-    snr_cutoff_threshold *= params.inv_band_size;
-  }
 
-  float flux_cutoff_threshold = 0.0f;
-  if (flux_cutoff_enabled && valid_index)
-  {
-    for (auto i_channel = params.band_start; i_channel < params.band_stop; ++i_channel)
+    float flux_cutoff_threshold = 0.0f;
+    if (flux_cutoff_enabled)
     {
-      flux_cutoff_threshold += flux_cutoff[i_channel * n_pixels + i_pixel];
+      for (auto i_channel = params.band_start; i_channel < params.band_stop; ++i_channel)
+      {
+        flux_cutoff_threshold += flux_cutoff[i_channel * n_pixels + i_pixel];
+      }
+      flux_cutoff_threshold *= params.inv_band_size;
     }
-    flux_cutoff_threshold *= params.inv_band_size;
-  }
 
-  const auto mask1 = mask0 && (!snr_cutoff_enabled || fabsf(snr) >= snr_cutoff_threshold);
-  const auto mask2 = mask1 && (!flux_cutoff_enabled || fabsf(plane_val) >= flux_cutoff_threshold);
-  const auto mask3 = mask2 && (noise_rejection_disabled || noise <= noise_rejection_threshold);
+    const bool mask1 = mask0 && (!snr_cutoff_enabled || fabsf(snr) >= snr_cutoff_threshold);
+    const bool mask2 = mask1 && (!flux_cutoff_enabled || fabsf(plane_val) >= flux_cutoff_threshold);
+    const bool mask3 = mask2 && (noise_rejection_disabled || noise <= noise_rejection_threshold);
 
-  if (valid_index)
-  {
-    image_mask[i_pixel] = mask3;
-  }
-
-  auto bin_index = floorf(snr + params.max_sigma_bin);
-  bin_index -= (bin_index == 2 * params.max_sigma_bin ? 1.F : +0.F);
-
-  if (0 <= bin_index && bin_index < 2 * params.max_sigma_bin)
-  {
-    if (mask0 && params.histogram_detail > 1)
+    float bin_index = floorf(snr + params.max_sigma_bin);
+    bin_index -= (bin_index == 2 * params.max_sigma_bin ? 1.F : 0.F);
+    if (0 <= bin_index && bin_index < n_bins)
     {
-      atomicAdd(&histogram0[static_cast<unsigned long long>(bin_index)], 1ULL);
+      const auto bin = static_cast<size_t>(bin_index);
+      if (mask0 && params.histogram_detail > 1)
+      {
+        atomicAdd(&shared_histogram0[bin], 1ULL);
+      }
+      if (mask1 && params.histogram_detail > 1)
+      {
+        atomicAdd(&shared_histogram1[bin], 1ULL);
+      }
+      if (mask2 && params.histogram_detail > 0)
+      {
+        atomicAdd(&shared_histogram2[bin], 1ULL);
+      }
     }
-    if (mask1 && params.histogram_detail > 1)
+
+    if (mask3)
     {
-      atomicAdd(&histogram1[static_cast<unsigned long long>(bin_index)], 1ULL);
+      local_min = fminf(local_min, snr);
+      local_max = fmaxf(local_max, snr);
     }
-    if (mask2 && params.histogram_detail > 0)
-    {
-      atomicAdd(&histogram2[static_cast<unsigned long long>(bin_index)], 1ULL);
-    }
-  }
 
-  const auto snr_min_val = mask3 ? snr : cuda::std::numeric_limits<float>::infinity();
-  const auto snr_max_val = mask3 ? snr : -cuda::std::numeric_limits<float>::infinity();
-
-  const auto min_snr_reduced = block_reduce(snr_min_val, FloatMin{});
-  const auto max_snr_reduced = block_reduce(snr_max_val, FloatMax{});
-
-  if (threadIdx.x == 0 && min_snr_reduced <= max_snr_reduced)
-  {
-    atomic_update(out_min_sigma, min_snr_reduced, FloatMin{});
-    atomic_update(out_max_sigma, max_snr_reduced, FloatMax{});
-  }
-
-  const float thresholded_abs_snr = mask3 ? fabsf(snr) : 0.0f;
-  if (valid_index)
-  {
-    image_mask[i_pixel] = thresholded_abs_snr >= params.threshold;
+    // The intermediate masks were only ever overwritten by this one: a single write.
+    image_mask[i_pixel] = (mask3 ? fabsf(snr) : 0.0f) >= params.threshold;
     out_snr[i_pixel] = snr;
+  }
+
+  __syncthreads();
+  for (size_t i_bin = threadIdx.x; i_bin < n_bins; i_bin += blockDim.x)
+  {
+    if (params.histogram_detail > 1 && shared_histogram0[i_bin] != 0)
+    {
+      atomicAdd(histogram0 + i_bin, shared_histogram0[i_bin]);
+    }
+    if (params.histogram_detail > 1 && shared_histogram1[i_bin] != 0)
+    {
+      atomicAdd(histogram1 + i_bin, shared_histogram1[i_bin]);
+    }
+    if (params.histogram_detail > 0 && shared_histogram2[i_bin] != 0)
+    {
+      atomicAdd(histogram2 + i_bin, shared_histogram2[i_bin]);
+    }
+  }
+
+  const float block_min = block_reduce(local_min, FloatMin{});
+  const float block_max = block_reduce(local_max, FloatMax{});
+  if (threadIdx.x == 0 && block_min <= block_max)
+  {
+    atomic_update(out_min_sigma, block_min, FloatMin{});
+    atomic_update(out_max_sigma, block_max, FloatMax{});
   }
 }
 } // namespace
@@ -136,9 +161,14 @@ void gpu_snr_and_filters(const float *plane, const float *noise_map, const float
     CHECK_GPU(cudaMemsetAsync(histogram2, 0, sizeof(unsigned long long) * 2 * params.max_sigma_bin, stream));
   }
   launch(min_max_init, 1, 1, stream, out_min_sigma, out_max_sigma);
-  launch_per_element(snr_and_filters, n_pixels, stream, plane, noise_map, snr_cutoff, flux_cutoff, median_noise,
-                     n_pixels, params, out_snr, image_mask, histogram0, histogram1, histogram2, out_min_sigma,
-                     out_max_sigma);
+  // Dynamic shared memory: the block's three histograms, 2 * max_sigma_bin bins each.
+  const auto shared_bytes = 3 * 2 * static_cast<std::size_t>(params.max_sigma_bin) * sizeof(unsigned long long);
+  const auto grid = static_cast<unsigned int>(
+      std::min<std::size_t>((n_pixels + block_size - 1) / block_size, snr_max_blocks));
+  snr_and_filters<<<grid, block_size, shared_bytes, stream>>>(
+      plane, noise_map, snr_cutoff, flux_cutoff, median_noise, n_pixels, params, out_snr, image_mask, histogram0,
+      histogram1, histogram2, out_min_sigma, out_max_sigma);
+  CHECK_GPU(cudaGetLastError());
 }
 
 } // namespace breifast::gpu
