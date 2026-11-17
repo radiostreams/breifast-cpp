@@ -29,8 +29,8 @@ using KeepAlive = std::vector<pybind11::array>;
 
 /// An xtensor with the shape of `object`, allocated but not filled: the copy of its elements is registered in `copies`,
 /// to run later in parallel without the GIL. Moving the result keeps its buffer, which the copy targets.
-template <typename T, size_t N>
-xt::xtensor<T, N> to_xtensor(const pybind11::object &object, const char *key, HostCopies &copies, KeepAlive &keep_alive)
+template <typename T, size_t N, typename Tensor = xt::xtensor<T, N>>
+Tensor to_xtensor(const pybind11::object &object, const char *key, HostCopies &copies, KeepAlive &keep_alive)
 {
   auto array = pybind11::array_t<T, pybind11::array::c_style | pybind11::array::forcecast>::ensure(object);
   if (!array)
@@ -47,16 +47,16 @@ xt::xtensor<T, N> to_xtensor(const pybind11::object &object, const char *key, Ho
   {
     shape[i] = static_cast<size_t>(array.shape(static_cast<pybind11::ssize_t>(i)));
   }
-  xt::xtensor<T, N> tensor(shape);
+  Tensor tensor(shape);
   copies.add(array.data(), tensor.data(), static_cast<size_t>(array.nbytes()));
   keep_alive.push_back(std::move(array));
   return tensor;
 }
 
-template <typename T, size_t N>
-xt::xtensor<T, N> require_xtensor(const pybind11::dict &d, const char *key, HostCopies &copies, KeepAlive &keep_alive)
+template <typename T, size_t N, typename Tensor = xt::xtensor<T, N>>
+Tensor require_xtensor(const pybind11::dict &d, const char *key, HostCopies &copies, KeepAlive &keep_alive)
 {
-  return to_xtensor<T, N>(d[key], key, copies, keep_alive);
+  return to_xtensor<T, N, Tensor>(d[key], key, copies, keep_alive);
 }
 
 template <typename T, size_t N>
@@ -83,7 +83,7 @@ BandSlice to_band_slice(const pybind11::dict &d)
 PlaneBatchItem to_plane_batch_item(const pybind11::dict &plane_dict, HostCopies &copies, KeepAlive &keep_alive)
 {
   PlaneBatchItem item;
-  item.stokes_cube = require_xtensor<float, 3>(plane_dict, "stokes_cube", copies, keep_alive);
+  item.stokes_cube = require_xtensor<float, 3, HostCube>(plane_dict, "stokes_cube", copies, keep_alive);
   item.weights = require_xtensor<float, 1>(plane_dict, "weights", copies, keep_alive);
   item.nonzero_channels = require_xtensor<bool, 1>(plane_dict, "nonzero_channels", copies, keep_alive);
   item.group_index = plane_dict["group_index"].cast<size_t>();
@@ -275,6 +275,7 @@ PYBIND11_MODULE(breifast_helpers, m)
 #ifdef BREIFAST_HAVE_GPU
   m.attr("has_gpu") = true;
   breifast::gpu::require_cuda_device();
+  breifast::gpu::use_pinned_host_memory();
 #else
   m.attr("has_gpu") = false;
 #endif

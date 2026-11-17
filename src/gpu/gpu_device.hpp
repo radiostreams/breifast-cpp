@@ -33,4 +33,7 @@ struct GpuDeviceSummary
 /// Properties of the GPU with index `device_id` among the devices visible to the process.
 GpuDeviceSummary gpu_device_summary(int device_id = 0);
 void require_cuda_device();
+
+/// Makes HostMemoryPool hand out page-locked blocks, which the GPU copies from at full speed and asynchronously.
+void use_pinned_host_memory();
 } // namespace breifast::gpu

@@ -341,8 +341,9 @@ public:
   }
 
   /// Grows to at least n elements and copies `host[0, n)` into the first n, on the stream that allocated the buffer:
-  /// the work queued on that stream after this call sees the data. `host` may be freed once the call returns: a
-  /// pageable source is staged by then.
+  /// the work queued on that stream after this call sees the data. `host` may be freed once the call returns if it is
+  /// pageable (the copy is staged by then); a page-locked `host` must outlive the copy, which runs asynchronously on
+  /// the stream.
   void assign(const T *host, std::size_t n)
   {
     ensure(n);

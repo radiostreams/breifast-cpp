@@ -34,6 +34,7 @@
 #include "cpu/beam_kernel.hpp"
 #include "cpu/islands.hpp"
 #include "detection_arrays.hpp"
+#include "host_memory.hpp"
 #include "process_plane_result.hpp"
 
 namespace breifast
@@ -186,7 +187,7 @@ public:
 struct PlaneBatchItem
 {
   size_t group_index = 0;
-  xt::xtensor<float, 3> stokes_cube;
+  HostCube stokes_cube; // pooled, page-locked in GPU builds: the GPU uploads it at full speed
   xt::xtensor<float, 1> weights;
   xt::xtensor<bool, 1> nonzero_channels;
   std::string stokes_label;

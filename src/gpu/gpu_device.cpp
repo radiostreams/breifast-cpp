@@ -10,6 +10,7 @@
 #endif
 
 #include "gpu_runtime.hpp"
+#include "host_memory.hpp"
 
 namespace breifast::gpu
 {
@@ -67,5 +68,15 @@ void require_cuda_device()
   {
     throw std::runtime_error("breifast_helpers requires CUDA but no device is visible");
   }
+}
+
+void use_pinned_host_memory()
+{
+  HostMemoryPool::instance().set_allocate_block(
+      [](const std::size_t bytes) -> void *
+      {
+        void *block = nullptr;
+        return cudaHostAlloc(&block, bytes, cudaHostAllocDefault) == cudaSuccess ? block : nullptr;
+      });
 }
 } // namespace breifast::gpu

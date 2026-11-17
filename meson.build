@@ -210,6 +210,7 @@ test_breifast_core_sources = cpu_sources + [
   'tests/cpp/group1_pure_functions/test_island_boost.cpp',
   'tests/cpp/group1_pure_functions/test_median.cpp',
   'tests/cpp/group1_pure_functions/test_host_copies.cpp',
+  'tests/cpp/group1_pure_functions/test_host_memory.cpp',
   'tests/cpp/group1_pure_functions/test_or_accept_masks.cpp',
   'tests/cpp/group1_pure_functions/test_weighted_band_image.cpp',
   'tests/cpp/group2_snr_filters/test_compute_snr_and_apply_filters.cpp',

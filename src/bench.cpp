@@ -6,7 +6,7 @@
 //   repeat: number of times to re-run run_batch_core().
 //   max_items: keep only the first max_items planes, <=0 means all. Default 0.
 //   gpu: run run_batch_core_gpu() instead of the CPU path. Only in the bench_gpu build (-DBREIFAST_BENCH_GPU).
-//   pinned: with gpu, page-lock the cubes before each timed call (outside the timer): the upper bound of pinned memory.
+//   pinned: with gpu, take the cubes from the pinned host memory pool, as the extension module does.
 
 #include <algorithm>
 #include <chrono>
@@ -28,8 +28,7 @@
 
 #include "plane_lot_dispatch.hpp"
 #ifdef BREIFAST_BENCH_GPU
-#include <cuda_runtime.h>
-
+#include "gpu/gpu_device.hpp"
 #include "gpu/gpu_plane.hpp"
 #endif
 
@@ -229,6 +228,12 @@ int main(int argc, char **argv)
   manifest_file >> manifest;
 
   const PlaneConfig config = load_config(manifest, base_dir);
+#ifdef BREIFAST_BENCH_GPU
+  if (use_gpu && pin_cubes)
+  {
+    breifast::gpu::use_pinned_host_memory(); // before load_lot: every cube then comes from the pinned pool
+  }
+#endif
   LotBatch base_lot = load_lot(manifest, base_dir, max_items);
   if (max_items > 0 && static_cast<size_t>(max_items) < base_lot.planes.size())
   {
@@ -269,18 +274,12 @@ int main(int argc, char **argv)
   double total = 0.0;
   for (int i = 0; i < repeat; ++i)
   {
+    // Outside the timer, as the bindings' copy: with `pinned`, the cubes come from the pinned pool (pinned on the first
+    // iteration, reused after).
+    const auto copy_start = std::chrono::steady_clock::now();
     LotBatch lot = base_lot;
-#ifdef BREIFAST_BENCH_GPU
-    // Upper bound of pinned host memory: the cubes are page-locked outside the timed region.
-    if (pin_cubes)
-    {
-      for (auto &plane : lot.planes)
-      {
-        (void)cudaHostRegister(plane.stokes_cube.data(), plane.stokes_cube.size() * sizeof(float),
-                               cudaHostRegisterDefault);
-      }
-    }
-#endif
+    std::printf("  lot copy: %.3fs\n",
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - copy_start).count());
     const auto counters_before = read_proc_counters();
     const auto t0 = std::chrono::steady_clock::now();
     __itt_resume();
@@ -304,15 +303,6 @@ int main(int argc, char **argv)
                 elapsed);
     print_proc_counters_delta(counters_before, counters_after, elapsed,
                               num_threads > 0 ? num_threads : tbb::info::default_concurrency());
-#ifdef BREIFAST_BENCH_GPU
-    if (pin_cubes)
-    {
-      for (auto &plane : lot.planes)
-      {
-        (void)cudaHostUnregister(plane.stokes_cube.data());
-      }
-    }
-#endif
   }
   std::printf("run_batch_core: %d iterations, total = %.3fs, mean = %.3fs\n", repeat, total, total / repeat);
 
