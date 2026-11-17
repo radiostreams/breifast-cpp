@@ -1,10 +1,15 @@
 #pragma once
 
+#include <chrono>
 #include <cuda_runtime.h>
+#include <cuda_runtime_api.h>
+#include <driver_types.h>
 #include <nvtx3/nvToolsExt.h>
 
 #include <cassert>
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -12,6 +17,29 @@
 
 namespace breifast::gpu
 {
+/// Whether stream-ordered allocation (cudaMallocAsync) can be used on this device. The first call also tells the
+/// device's memory pool to keep the blocks it is given back instead of returning them to the system at the next
+/// synchronisation, so that a block freed by one growth is there for the next. Never throws: any failure means false,
+/// and callers fall back to cudaMalloc. Assumes one device per process.
+inline bool memory_pool_ready()
+{
+  static const bool ready = []() -> bool
+  {
+    int device = 0;
+    int supported = 0;
+    cudaMemPool_t pool = nullptr;
+    if (cudaGetDevice(&device) != cudaSuccess ||
+        cudaDeviceGetAttribute(&supported, cudaDevAttrMemoryPoolsSupported, device) != cudaSuccess || supported == 0 ||
+        cudaDeviceGetDefaultMemPool(&pool, device) != cudaSuccess)
+    {
+      return false;
+    }
+    std::uint64_t threshold = std::numeric_limits<std::uint64_t>::max();
+    return cudaMemPoolSetAttribute(pool, cudaMemPoolAttrReleaseThreshold, &threshold) == cudaSuccess;
+  }();
+  return ready;
+}
+
 /// NVTX domain of the GPU pipeline's ranges, so that Nsight Systems groups and filters them.
 inline nvtxDomainHandle_t nvtx_domain()
 {
@@ -49,9 +77,14 @@ public:
 class GpuError : public std::runtime_error
 {
 public:
-  GpuError(const cudaError_t error, const std::string &message) : std::runtime_error{message}, error_{error} {}
+  GpuError(const cudaError_t error, const std::string &message) : std::runtime_error{message}, error_{error}
+  {
+  }
 
-  [[nodiscard]] cudaError_t error() const noexcept { return error_; }
+  [[nodiscard]] cudaError_t error() const noexcept
+  {
+    return error_;
+  }
 
 private:
   cudaError_t error_;
@@ -65,20 +98,20 @@ constexpr bool is_sticky(const cudaError_t error)
 {
   switch (error)
   {
-  case cudaErrorIllegalAddress:
-  case cudaErrorLaunchTimeout:
-  case cudaErrorAssert:
-  case cudaErrorHardwareStackError:
-  case cudaErrorIllegalInstruction:
-  case cudaErrorMisalignedAddress:
-  case cudaErrorInvalidAddressSpace:
-  case cudaErrorInvalidPc:
-  case cudaErrorLaunchFailure:
-  case cudaErrorMpsClientTerminated:
-  case cudaErrorExternalDevice:
-    return true;
-  default:
-    return false;
+    case cudaErrorIllegalAddress:
+    case cudaErrorLaunchTimeout:
+    case cudaErrorAssert:
+    case cudaErrorHardwareStackError:
+    case cudaErrorIllegalInstruction:
+    case cudaErrorMisalignedAddress:
+    case cudaErrorInvalidAddressSpace:
+    case cudaErrorInvalidPc:
+    case cudaErrorLaunchFailure:
+    case cudaErrorMpsClientTerminated:
+    case cudaErrorExternalDevice:
+      return true;
+    default:
+      return false;
   }
 }
 
@@ -86,8 +119,8 @@ inline void check(const cudaError_t error, const char *const expression, const c
 {
   if (error != cudaSuccess)
   {
-    throw GpuError{error, std::string{file} + ":" + std::to_string(line) + ": " + expression + " failed: " +
-                              cudaGetErrorName(error) + ": " + cudaGetErrorString(error) +
+    throw GpuError{error, std::string{file} + ":" + std::to_string(line) + ": " + expression +
+                              " failed: " + cudaGetErrorName(error) + ": " + cudaGetErrorString(error) +
                               (is_sticky(error) ? " (the CUDA context is unusable: restart the process)" : "")};
   }
 }
@@ -105,8 +138,13 @@ namespace breifast::gpu
 class Stream
 {
 public:
-  Stream() { CHECK_GPU(cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking)); }
-  Stream(Stream &&other) noexcept : stream_{std::exchange(other.stream_, nullptr)} {}
+  Stream()
+  {
+    CHECK_GPU(cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking));
+  }
+  Stream(Stream &&other) noexcept : stream_{std::exchange(other.stream_, nullptr)}
+  {
+  }
   Stream &operator=(Stream &&other) noexcept
   {
     if (this != &other)
@@ -118,19 +156,45 @@ public:
   }
   Stream(const Stream &) = delete;
   Stream &operator=(const Stream &) = delete;
-  ~Stream() { reset(); }
+  ~Stream()
+  {
+    reset();
+  }
 
   /// Waits for the work enqueued so far; throws GpuError if any of it failed.
-  void synchronize() const { CHECK_GPU(cudaStreamSynchronize(get())); }
+  void synchronize() const
+  {
+    CHECK_GPU(cudaStreamSynchronize(get()));
+  }
 
   [[nodiscard]] cudaStream_t get() const noexcept
   {
     assert(stream_ != nullptr && "moved-from Stream");
     return stream_;
   }
-  operator cudaStream_t() const noexcept { return get(); }
+  operator cudaStream_t() const noexcept
+  {
+    return get();
+  }
+
+  static Stream &local_stream()
+  {
+    if (Stream *bound = bound_stream(); bound != nullptr)
+    {
+      return *bound;
+    }
+    thread_local Stream own; // created on first use only
+    return own;
+  }
 
 private:
+  friend class StreamScope;
+  static Stream *&bound_stream()
+  {
+    thread_local Stream *bound = nullptr;
+    return bound;
+  }
+
   /// Never throws: an error here comes from earlier work, which synchronize() reports.
   void reset() noexcept
   {
@@ -145,28 +209,70 @@ private:
   cudaStream_t stream_ = nullptr;
 };
 
-/// Owning device array: plain cudaMalloc/cudaFree, move-only. The implicit pointer conversion keeps kernel call sites
-/// short. Its copies and memsets run on the default stream, which the non-blocking work streams do not wait for, and
-/// neither is complete when it returns: each is followed by a sync of the default stream, so the data is in place
-/// before any stream can read it.
+/// While alive, local_stream() of the calling thread is `stream`: DeviceVector allocates on it and the plane code runs
+/// on it.
+class StreamScope
+{
+public:
+  explicit StreamScope(Stream &stream) : previous_{Stream::bound_stream()}
+  {
+    Stream::bound_stream() = &stream;
+  }
+  StreamScope(const StreamScope &) = delete;
+  StreamScope &operator=(const StreamScope &) = delete;
+  ~StreamScope()
+  {
+    Stream::bound_stream() = previous_;
+  }
+
+private:
+  Stream *previous_;
+};
+
+/// Owning device array, move-only. The implicit pointer conversion keeps kernel call sites short. Memory comes from the
+/// device's memory pool (cudaMallocAsync) on the calling thread's local_stream() when the device has one, else from
+/// cudaMalloc; it is freed with cudaFree, which also takes pool memory. Copies and memsets run on the stream that
+/// allocated the buffer.
 template <typename T> class DeviceVector
 {
 public:
   DeviceVector() = default;
 
   /// Uninitialised. Assert builds fill it with 0xFF bytes, so that a read before the first write shows up in tests.
-  explicit DeviceVector(std::size_t n) : data_{allocate(n)}, size_{n} {}
+  explicit DeviceVector(std::size_t n)
+  {
+    ensure(n);
+    size_ = {n};
+  }
 
   // Written out so that a moved-from vector is empty: defaulted moves would leave its size behind with a null pointer.
-  DeviceVector(DeviceVector &&other) noexcept : data_{std::move(other.data_)}, size_{std::exchange(other.size_, 0)} {}
+  DeviceVector(DeviceVector &&other) noexcept
+      : data_{std::exchange(other.data_, nullptr)}, size_{std::exchange(other.size_, 0)},
+        allocation_stream_(std::exchange(other.allocation_stream_, nullptr))
+  {
+  }
+
   DeviceVector &operator=(DeviceVector &&other) noexcept
   {
     if (this != &other)
     {
-      data_ = std::move(other.data_);
+      if (data_ != nullptr)
+      {
+        (void)cudaFree(data_); // synchronous, and valid for memory from cudaMallocAsync too
+      }
+      data_ = std::exchange(other.data_, nullptr);
       size_ = std::exchange(other.size_, 0);
+      allocation_stream_ = std::exchange(other.allocation_stream_, nullptr);
     }
     return *this;
+  }
+
+  ~DeviceVector()
+  {
+    if (data_ != nullptr)
+    {
+      (void)cudaFree(data_); // synchronous, and valid for memory from cudaMallocAsync too: the stream may be gone
+    }
   }
 
   static DeviceVector zeros(std::size_t n)
@@ -174,8 +280,9 @@ public:
     DeviceVector vector(n);
     if (n > 0)
     {
-      CHECK_GPU(cudaMemset(vector.data(), 0, n * sizeof(T)));
-      CHECK_GPU(cudaStreamSynchronize(nullptr)); // the default stream, which the call above ran on
+      // On the stream that allocated the buffer (the default stream for synchronous memory), and waited for there.
+      CHECK_GPU(cudaMemsetAsync(vector.data(), 0, n * sizeof(T), vector.allocation_stream_));
+      CHECK_GPU(cudaStreamSynchronize(vector.allocation_stream_));
     }
     return vector;
   }
@@ -187,71 +294,103 @@ public:
     return vector;
   }
 
-  /// Grows to at least n elements; the contents are unspecified after growing.
+  /// Grows to at least n elements; the contents are unspecified after growing. With memory pools, the new buffer is
+  /// taken from the pool in the order of the calling thread's stream, and the old one is given back in the order of the
+  /// stream that allocated it, with no device-wide synchronisation. That only holds when that stream is the calling
+  /// thread's: a buffer grown from another thread, or allocated synchronously, is freed with cudaFree, which waits for
+  /// the device. Without pools, everything is synchronous. A buffer from the pool may only be used on its stream.
   void ensure(std::size_t n)
   {
-    if (n > size_)
+    if (n <= size_)
     {
-      data_.reset();
-      size_ = 0;
-      data_ = allocate(n);
-      size_ = n;
+      return;
     }
+    n = std::max(n, 2 * size_);
+    const cudaStream_t stream = memory_pool_ready() ? Stream::local_stream().get() : nullptr;
+    if (data_ != nullptr)
+    {
+      if (stream != nullptr && stream == allocation_stream_)
+      {
+        CHECK_GPU(cudaFreeAsync(data_, allocation_stream_));
+      }
+      else
+      {
+        CHECK_GPU(cudaFree(data_));
+      }
+      data_ = nullptr; // nothing dangles if the allocation below throws
+      size_ = 0;
+      allocation_stream_ = nullptr;
+    }
+    void *raw = nullptr;
+    if (stream != nullptr)
+    {
+      CHECK_GPU(cudaMallocAsync(&raw, n * sizeof(T), stream));
+    }
+    else
+    {
+      CHECK_GPU(cudaMalloc(&raw, n * sizeof(T)));
+    }
+    data_ = static_cast<T *>(raw);
+    allocation_stream_ = stream;
+    size_ = n;
+#ifndef NDEBUG
+    // Poison, so that a read before the first write shows up in tests. On the allocation's own stream.
+    CHECK_GPU(cudaMemsetAsync(data_, 0xFF, n * sizeof(T), allocation_stream_));
+    CHECK_GPU(cudaStreamSynchronize(allocation_stream_));
+#endif
   }
 
-  /// Grows to at least n elements and copies `host[0, n)` into the first n, on `stream`: the work queued on `stream`
-  /// after this call sees the data. `host` may be freed once the call returns: a pageable source is staged by then.
-  void assign(const T *host, std::size_t n, cudaStream_t stream)
+  /// Grows to at least n elements and copies `host[0, n)` into the first n, on the stream that allocated the buffer:
+  /// the work queued on that stream after this call sees the data. `host` may be freed once the call returns: a
+  /// pageable source is staged by then.
+  void assign(const T *host, std::size_t n)
   {
     ensure(n);
     if (n > 0)
     {
-      CHECK_GPU(cudaMemcpyAsync(data(), host, n * sizeof(T), cudaMemcpyHostToDevice, stream));
+      CHECK_GPU(cudaMemcpyAsync(data(), host, n * sizeof(T), cudaMemcpyHostToDevice, allocation_stream_));
     }
   }
 
-  T *data() noexcept { return data_.get(); }
-  const T *data() const noexcept { return data_.get(); }
-  operator T *() noexcept { return data(); }
-  operator const T *() const noexcept { return data(); }
+  T *data() noexcept
+  {
+    return data_;
+  }
+  const T *data() const noexcept
+  {
+    return data_;
+  }
+  operator T *() noexcept
+  {
+    return data();
+  }
+  operator const T *() const noexcept
+  {
+    return data();
+  }
 
-  std::size_t size() const noexcept { return size_; }
-  bool empty() const noexcept { return size_ == 0; }
+  std::size_t size() const noexcept
+  {
+    return size_;
+  }
+  bool empty() const noexcept
+  {
+    return size_ == 0;
+  }
 
 private:
-  struct Free
-  {
-    void operator()(T *pointer) const noexcept { (void)cudaFree(pointer); }
-  };
-  using Pointer = std::unique_ptr<T[], Free>;
-
-  static Pointer allocate(std::size_t n)
-  {
-    if (n == 0)
-    {
-      return nullptr;
-    }
-    void *raw = nullptr;
-    CHECK_GPU(cudaMalloc(&raw, n * sizeof(T)));
-    Pointer pointer{static_cast<T *>(raw)};
-#ifndef NDEBUG
-    CHECK_GPU(cudaMemset(pointer.get(), 0xFF, n * sizeof(T)));
-    CHECK_GPU(cudaStreamSynchronize(nullptr)); // the default stream, which the call above ran on
-#endif
-    return pointer;
-  }
-
-  /// A pageable host-to-device cudaMemcpy can return before its last DMA lands.
+  /// Copies and waits for the copy: a pageable host-to-device copy can return before its last DMA lands.
   void upload(const T *host, std::size_t n)
   {
     if (n > 0)
     {
-      CHECK_GPU(cudaMemcpy(data(), host, n * sizeof(T), cudaMemcpyHostToDevice));
-      CHECK_GPU(cudaStreamSynchronize(nullptr)); // the default stream, which the call above ran on
+      CHECK_GPU(cudaMemcpyAsync(data(), host, n * sizeof(T), cudaMemcpyHostToDevice, allocation_stream_));
+      CHECK_GPU(cudaStreamSynchronize(allocation_stream_)); // the stream the call above ran on
     }
   }
 
-  Pointer data_;
+  T *data_ = nullptr;
   std::size_t size_ = 0;
+  cudaStream_t allocation_stream_ = nullptr;
 };
 } // namespace breifast::gpu

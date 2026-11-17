@@ -452,6 +452,34 @@ TEST_CASE("GPU batch runner matches CPU batch runner", "[gpu][parity][batch]")
   }
 }
 
+// The GPU slots persist from one call to the next, and the group arrays are uploaded once per group index and call.
+// The second call has other data under the same group index: a slot that kept the first call's arrays would show it.
+TEST_CASE("GPU batch runner called twice with different data under the same group index", "[gpu][parity][batch]")
+{
+  auto first = make_fixture(true, 1);
+
+  auto second = make_fixture(true, 1);
+  second.item.stokes_cube.fill(3.F);
+  second.item.stokes_cube(1, 2, 3) = 9.F;
+  second.group.accept_mask.fill(false);
+  second.group.accept_mask(1, 2, 3) = true;
+  second.group.selfnoise_raw.fill(2.F);
+  second.group.dde_noise.fill(0.5F);
+
+  for (const auto *fixture : {&first, &second, &first})
+  {
+    std::vector<PlaneBatchItem> cpu_items = {fixture->item};
+    std::vector<PlaneBatchItem> gpu_items = {fixture->item};
+    const std::vector<PlaneBatchGroup> groups = {fixture->group};
+
+    const auto cpu_results = run_batch_core(cpu_items, groups, fixture->config, 1);
+    const auto gpu_results = gpu::run_batch_core_gpu(gpu_items, groups, fixture->config);
+
+    REQUIRE(cpu_results.size() == gpu_results.size());
+    compare_plane_results(cpu_results[0], gpu_results[0]);
+  }
+}
+
 TEST_CASE("GPU parity on a structured plane in RMS noise mode", "[gpu][parity]")
 {
   const auto cpu_result = run_parity(make_structured_fixture(true));

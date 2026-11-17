@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstddef>
+#include <optional>
+#include <span>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -10,6 +12,8 @@
 
 namespace breifast
 {
+struct PlaneBatchGroup;
+struct PlaneConfig;
 struct ProcessPlaneResult; // process_plane_result.hpp includes xtensor, which nvcc cannot compile
 }
 
@@ -182,21 +186,34 @@ struct GpuBandLabels
 void append_band_result(const GpuBandHostResult &band, const GpuBandLabels &labels, float max_to_std_ratio,
                         bool use_rms_noise_estimator, breifast::ProcessPlaneResult &result);
 
-/// Device copies of a plane's inputs, grown to the largest plane and reused. An input the current plane does not have
-/// keeps the previous plane's contents: the null pointer in GpuPlaneInput is what says it is absent.
+/// Device copy of one PlaneBatchGroup. An array the group does not have stays empty.
+struct GpuGroupInputs
+{
+  DeviceVector<bool> accept_mask;
+  DeviceVector<float> mean_image;
+  DeviceVector<float> selfnoise_offset;
+  DeviceVector<float> selfnoise_raw;
+  DeviceVector<float> dde_noise;
+  DeviceVector<float> snr_cutoff;
+  DeviceVector<float> flux_cutoff;
+};
+
+/// What the planes of one call share on the device: every group's arrays and the baseline flux, uploaded once.
+struct GpuSharedInputs
+{
+  /// Copies the arrays (the mean image only when the config subtracts it) and waits for the copies.
+  GpuSharedInputs(std::span<const breifast::PlaneBatchGroup> batch_groups, const breifast::PlaneConfig &config);
+
+  std::vector<GpuGroupInputs> groups; // indexed like batch_groups
+  DeviceVector<float> baseline_flux;
+};
+
+/// Device copies of a plane's own inputs, grown to the largest plane and reused.
 struct GpuPlaneBuffers
 {
   DeviceVector<float> cube;
   DeviceVector<float> weights;
   DeviceVector<bool> nonzero_channels;
-  DeviceVector<bool> accept_mask;
-  DeviceVector<float> selfnoise_offset;
-  DeviceVector<float> selfnoise_raw;
-  DeviceVector<float> dde_noise;
-  DeviceVector<float> mean_image;
-  DeviceVector<float> snr_cutoff;
-  DeviceVector<float> flux_cutoff;
-  DeviceVector<float> baseline_flux;
   DeviceVector<float> beam_kernel; ///< the current band's
 };
 
@@ -204,6 +221,7 @@ struct GpuPlaneBuffers
 /// and outputs, the host staging, and the stream they all run on.
 struct GpuSlot
 {
+  Stream stream; // first: destroyed after the buffers
   GpuPlaneBuffers inputs;
   GpuBandWorkspace workspace;
   GpuBandResult result;
@@ -212,7 +230,11 @@ struct GpuSlot
   DeviceVector<float> sum_pow2;
   DeviceVector<float> sum_pow3;
   DeviceVector<float> sum_pow4;
-  // Declared last: destroyed first, it waits for the work on the buffers above.
-  Stream stream;
+
+  GpuSlot() = default;
+  GpuSlot(const GpuSlot&) = delete;
+  GpuSlot(GpuSlot&&) = default;
+  GpuSlot&& operator=(const GpuSlot&) = delete;
+  GpuSlot& operator=(GpuSlot&&) = default;
 };
 } // namespace breifast::gpu

@@ -4,6 +4,7 @@
 #include <functional>
 #include <limits>
 #include <optional>
+#include <span>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -75,7 +76,7 @@ float beam_kernel_sum(const float *kernel, long halfsize)
 /// Copies `array` into `buffer` on `stream`, growing it if needed, and returns the device pointer.
 template <typename T, typename Array> T *upload(DeviceVector<T> &buffer, const Array &array, cudaStream_t stream)
 {
-  buffer.assign(array.data(), array.size(), stream);
+  buffer.assign(array.data(), array.size());
   return buffer.data();
 }
 
@@ -92,12 +93,12 @@ SpectralVarianceStats spectral_variance_stats(GpuSlot &slot, const GpuPlaneInput
 {
   assert(plane.n_channels <= static_cast<std::size_t>(std::numeric_limits<int>::max()));
   const std::size_t n_pixels = plane.n_pixels();
-  const bool *const nonzero_channels = upload(slot.inputs.nonzero_channels, item.nonzero_channels, slot.stream);
+  const bool *const nonzero_channels = upload(slot.inputs.nonzero_channels, item.nonzero_channels, Stream::local_stream());
   slot.sum_pow2.ensure(n_pixels);
   slot.sum_pow3.ensure(n_pixels);
   slot.sum_pow4.ensure(n_pixels);
   gpu_spectral_variance_moments(plane.cube, nonzero_channels, slot.sum_pow2, slot.sum_pow3, slot.sum_pow4, n_pixels,
-                                static_cast<int>(plane.n_channels), slot.stream);
+                                static_cast<int>(plane.n_channels), Stream::local_stream());
 
   SpectralVarianceStats stats;
   for (auto [host, device] : {std::pair{&stats.sum_pow2, &slot.sum_pow2}, std::pair{&stats.sum_pow3, &slot.sum_pow3},
@@ -105,15 +106,39 @@ SpectralVarianceStats spectral_variance_stats(GpuSlot &slot, const GpuPlaneInput
   {
     host->resize({plane.n_y, plane.n_x});
     CHECK_GPU(
-        cudaMemcpyAsync(host->data(), device->data(), n_pixels * sizeof(float), cudaMemcpyDeviceToHost, slot.stream));
+        cudaMemcpyAsync(host->data(), device->data(), n_pixels * sizeof(float), cudaMemcpyDeviceToHost, Stream::local_stream()));
   }
-  slot.stream.synchronize();
+  Stream::local_stream().synchronize();
   stats.nonzero_channels_mask = item.nonzero_channels;
   return stats;
 }
 } // namespace
 
-ProcessPlaneResult gpu_process_plane(GpuSlot &slot, const PlaneBatchItem &item, const PlaneBatchGroup &group,
+GpuSharedInputs::GpuSharedInputs(std::span<const PlaneBatchGroup> batch_groups, const PlaneConfig &config)
+    : groups(batch_groups.size())
+{
+  const NvtxRange range{"upload groups"};
+  const cudaStream_t stream = Stream::local_stream();
+  for (std::size_t i = 0; i < batch_groups.size(); ++i)
+  {
+    const auto &host = batch_groups[i];
+    auto &device = groups[i];
+    upload(device.accept_mask, host.accept_mask, stream);
+    if (config.subtract_mean)
+    {
+      upload(device.mean_image, host.mean_image, stream);
+    }
+    upload(device.selfnoise_offset, host.selfnoise_offset, stream);
+    upload(device.selfnoise_raw, host.selfnoise_raw, stream);
+    upload(device.dde_noise, host.dde_noise, stream);
+    upload(device.snr_cutoff, host.snr_cutoff, stream);
+    upload(device.flux_cutoff, host.flux_cutoff, stream);
+  }
+  upload(baseline_flux, config.baseline_flux, stream);
+  Stream::local_stream().synchronize();
+}
+
+ProcessPlaneResult gpu_process_plane(GpuSlot &slot, const GpuSharedInputs &shared, const PlaneBatchItem &item,
                                      const PlaneConfig &config)
 {
   const NvtxRange range{"plane"};
@@ -122,20 +147,21 @@ ProcessPlaneResult gpu_process_plane(GpuSlot &slot, const PlaneBatchItem &item, 
   const std::size_t n_x = item.stokes_cube.shape(2);
 
   auto &inputs = slot.inputs;
+  const auto &group_inputs = shared.groups[item.group_index];
   const GpuPlaneInput plane = [&]
   {
     const NvtxRange upload_range{"upload"};
     return GpuPlaneInput{
-        .cube = upload(inputs.cube, item.stokes_cube, slot.stream),
-        .weights = upload(inputs.weights, item.weights, slot.stream),
-        .accept_mask = upload(inputs.accept_mask, group.accept_mask, slot.stream),
-        .mean_image = config.subtract_mean ? upload(inputs.mean_image, group.mean_image, slot.stream) : nullptr,
-        .selfnoise_offset = upload(inputs.selfnoise_offset, group.selfnoise_offset, slot.stream),
-        .selfnoise_raw = upload(inputs.selfnoise_raw, group.selfnoise_raw, slot.stream),
-        .dde_noise = upload(inputs.dde_noise, group.dde_noise, slot.stream),
-        .snr_cutoff = upload(inputs.snr_cutoff, group.snr_cutoff, slot.stream),
-        .flux_cutoff = upload(inputs.flux_cutoff, group.flux_cutoff, slot.stream),
-        .baseline_flux = upload(inputs.baseline_flux, config.baseline_flux, slot.stream),
+        .cube = upload(inputs.cube, item.stokes_cube, Stream::local_stream()),
+        .weights = upload(inputs.weights, item.weights, Stream::local_stream()),
+        .accept_mask = group_inputs.accept_mask.data(),
+        .mean_image = group_inputs.mean_image.data(),
+        .selfnoise_offset = group_inputs.selfnoise_offset.data(),
+        .selfnoise_raw = group_inputs.selfnoise_raw.data(),
+        .dde_noise = group_inputs.dde_noise.data(),
+        .snr_cutoff = group_inputs.snr_cutoff.data(),
+        .flux_cutoff = group_inputs.flux_cutoff.data(),
+        .baseline_flux = shared.baseline_flux.data(),
         .n_y = n_y,
         .n_x = n_x,
         .n_channels = n_channels,
@@ -168,15 +194,15 @@ ProcessPlaneResult gpu_process_plane(GpuSlot &slot, const PlaneBatchItem &item, 
         .start = slice->start,
         .stop = slice->stop,
         .selfnoise_scale_factor = slice->selfnoise_scale_factor,
-        .beam_kernel = upload(inputs.beam_kernel, beam.kernel, slot.stream),
+        .beam_kernel = upload(inputs.beam_kernel, beam.kernel, Stream::local_stream()),
         .beam_halfsize = beam_halfsize,
         .beam_kernel_sum = beam.kernel ? beam_kernel_sum(beam.kernel->data(), beam_halfsize) : 0.F,
     };
-    if (!gpu_process_band(plane, band, slot.workspace, slot.result, slot.stream))
+    if (!gpu_process_band(plane, band, slot.workspace, slot.result, Stream::local_stream()))
     {
       continue;
     }
-    copy_band_result(slot.result, slot.host, slot.stream);
+    copy_band_result(slot.result, slot.host, Stream::local_stream());
     append_band_result(slot.host, {item.stokes_label, slice->label}, plane.max_to_std_ratio,
                        config.use_rms_noise_estimator, result);
   }
@@ -194,6 +220,9 @@ ProcessPlaneResult gpu_process_plane(const PlaneBatchItem &item, const PlaneBatc
                                      const PlaneConfig &config)
 {
   GpuSlot slot;
-  return gpu_process_plane(slot, item, group, config);
+  const GpuSharedInputs shared{std::span{&group, 1}, config};
+  PlaneBatchItem single_group_item = item; // copies the cube: a convenience for small planes, not for the batch path
+  single_group_item.group_index = 0;
+  return gpu_process_plane(slot, shared, single_group_item, config);
 }
 } // namespace breifast::gpu

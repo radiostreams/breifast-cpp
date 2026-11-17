@@ -9,10 +9,11 @@
 namespace breifast::gpu
 {
 struct GpuSlot; // gpu_band.hpp, which needs the CUDA headers
+struct GpuSharedInputs;
 
 /// Processes one plane on the GPU with `slot`'s buffers and stream, growing them as needed. The bands run in the CPU
 /// order, on the slot's stream.
-ProcessPlaneResult gpu_process_plane(GpuSlot &slot, const PlaneBatchItem &item, const PlaneBatchGroup &group,
+ProcessPlaneResult gpu_process_plane(GpuSlot &slot, const GpuSharedInputs &shared, const PlaneBatchItem &item,
                                      const PlaneConfig &config);
 
 /// Same, with a slot of its own.

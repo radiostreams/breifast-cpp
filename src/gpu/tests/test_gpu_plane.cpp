@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <limits>
 #include <optional>
+#include <span>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -166,10 +167,16 @@ TEST_CASE("gpu_process_plane gives the same result on a reused slot", "[gpu][int
     CHECK(reused.max_sigma == fresh.max_sigma);
   };
 
+  // The shared inputs are per call: each plane has its own, as each call of run_batch_core_gpu does.
   gpu::GpuSlot slot;
-  check_same(gpu::gpu_process_plane(slot, large.item, large.group, large.config), fresh_large);
-  check_same(gpu::gpu_process_plane(slot, small.item, small.group, small.config), fresh_small);
-  check_same(gpu::gpu_process_plane(slot, large.item, large.group, large.config), fresh_large);
+  const auto run = [&slot](const Plane &plane)
+  {
+    const gpu::GpuSharedInputs shared{std::span{&plane.group, 1}, plane.config};
+    return gpu::gpu_process_plane(slot, shared, plane.item, plane.config);
+  };
+  check_same(run(large), fresh_large);
+  check_same(run(small), fresh_small);
+  check_same(run(large), fresh_large);
 }
 } // namespace plane_tests
 
