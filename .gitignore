@@ -1,4 +1,5 @@
 builddir
+compile_commands.json
 dist
 Testing
 __pycache__

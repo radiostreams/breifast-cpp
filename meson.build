@@ -112,7 +112,18 @@ catch2_dep = declare_dependency(
                '-lCatch2Main', '-lCatch2'],
 )
 
-itt_root = '/ssoft/spack/pinot-noir/jed/v2/spack/opt/spack/linux-rhel9-x86_64_v3/gcc-11.4.1/intel-oneapi-vtune-2024.1.0-ggpuzpx5nqydg76zoguizove2pgh4c4i/vtune/2024.1'
+# ITT profiling (ittnotify.h / libittnotify.a). Machine-dependent: ITT_ROOT env var wins, then the
+# newest local oneAPI VTune (/opt/intel/oneapi/vtune/*), then the cluster spack path. Meson errors out
+# via check:true when none of them actually contain the header, so the failure stays explicit.
+itt_script = [
+  'sh', '-c',
+  'if [ -n "$ITT_ROOT" ] && [ -f "$ITT_ROOT/include/ittnotify.h" ]; then echo "$ITT_ROOT"; exit 0; fi; ' +
+  'best="$(ls -d /opt/intel/oneapi/vtune/*/ 2>/dev/null | sort -V | tail -1)"; ' +
+  'if [ -n "$best" ] && [ -f "${best}include/ittnotify.h" ]; then echo "${best%/}"; exit 0; fi; ' +
+  'fallback="/ssoft/spack/pinot-noir/jed/v2/spack/opt/spack/linux-rhel9-x86_64_v3/gcc-11.4.1/intel-oneapi-vtune-2024.1.0-ggpuzpx5nqydg76zoguizove2pgh4c4i/vtune/2024.1"; ' +
+  'if [ -f "$fallback/include/ittnotify.h" ]; then echo "$fallback"; exit 0; fi; exit 1'
+]
+itt_root = run_command(itt_script, check : true).stdout().strip()
 
 itt_dep = declare_dependency(
   compile_args : ['-isystem', itt_root / 'include'],
