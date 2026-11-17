@@ -1,71 +1,17 @@
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
-#include <memory>
 #include <mutex>
-#include <optional>
+#include <span>
 #include <vector>
 
-#include <oneapi/tbb/parallel_for.h>
-#include <oneapi/tbb/task_arena.h>
+#include <oneapi/tbb/task_group.h>
 
 #include "gpu_band.hpp"
 #include "gpu_plane.hpp"
 
 namespace breifast::gpu
 {
-namespace
-{
-// Slots wait here between calls. A plane takes one for its whole run, so a slot never depends on which thread runs it.
-struct SlotPool
-{
-  std::mutex mutex;
-  std::vector<std::unique_ptr<GpuSlot>> free;
-};
-
-SlotPool &slot_pool()
-{
-  static SlotPool pool; // built on first use: CUDA is not ready at load time
-  return pool;
-}
-
-class SlotLease
-{
-public:
-  SlotLease()
-  {
-    {
-      const std::lock_guard lock{slot_pool().mutex};
-      if (!slot_pool().free.empty())
-      {
-        slot_ = std::move(slot_pool().free.back());
-        slot_pool().free.pop_back();
-      }
-    }
-    if (!slot_)
-    {
-      slot_ = std::make_unique<GpuSlot>();
-    }
-    scope_.emplace(slot_->stream);
-  }
-  SlotLease(const SlotLease &) = delete;
-  SlotLease &operator=(const SlotLease &) = delete;
-  ~SlotLease()
-  {
-    scope_.reset(); // unbind before the slot goes back
-    const std::lock_guard lock{slot_pool().mutex};
-    slot_pool().free.push_back(std::move(slot_));
-  }
-  GpuSlot &operator*()
-  {
-    return *slot_;
-  }
-
-private:
-  std::unique_ptr<GpuSlot> slot_;
-  std::optional<StreamScope> scope_;
-};
-} // namespace
-
 std::vector<ProcessPlaneResult> run_batch_core_gpu(std::vector<PlaneBatchItem> &items,
                                                    const std::vector<PlaneBatchGroup> &groups,
                                                    const PlaneConfig &config)
@@ -81,27 +27,41 @@ std::vector<ProcessPlaneResult> run_batch_core_gpu(std::vector<PlaneBatchItem> &
   // Populate the per-config cache once before workers read it.
   (void)config.max_to_std_ratio_value();
 
-  // At most slot_count planes are on the GPU at once, each on its own slot. TODO: choose the count from the device
-  // memory a slot needs.
-  const auto slot_count = static_cast<int>(std::min<std::size_t>(4, items.size()));
+  // The device buffers are kept from call to call, so that a call allocates only what the earlier ones did not. One
+  // call at a time: concurrent calls would only compete for the GPU, and each would need buffers of its own.
+  static std::mutex mutex;
+  static GpuSharedInputs shared;
+  static std::vector<GpuSlot> slots;
+  const std::lock_guard lock{mutex};
 
-  const GpuSharedInputs shared{groups, config};
+  shared.assign(groups, config);
 
-  tbb::task_arena arena(slot_count);
-  arena.execute(
-      [&]
-      {
-        // A plane that throws cancels the planes not started yet, and parallel_for rethrows its exception once the
-        // planes in flight have finished. Each plane in flight holds its own slot.
-        tbb::parallel_for(std::size_t{0}, items.size(),
-                          [&](const std::size_t index)
-                          {
-                            SlotLease lease;
-                            auto &slot = *lease;
-                            results[index] =
-                                gpu_process_plane(slot, shared, items[index], config);
-                          });
-      });
+  // At most slot_count planes are on the GPU at once. TODO: choose the count from the device memory a slot needs.
+  const std::size_t slot_count = std::min<std::size_t>(16, items.size());
+  if (slots.size() < slot_count)
+  {
+    slots.resize(slot_count);
+  }
+
+  // One task per slot, each taking the next plane until none is left, so that a slot serves one plane at a time. A
+  // plane that throws stops the planes not started yet, and wait() rethrows its exception once the others have
+  // finished.
+  std::atomic<std::size_t> next{0};
+  tbb::task_group tasks;
+  for (auto &slot : std::span{slots}.first(slot_count))
+  {
+    tasks.run(
+        [&]
+        {
+          const StreamScope scope{slot.stream};
+          for (std::size_t index = next++; index < items.size() && !tbb::is_current_task_group_canceling();
+               index = next++)
+          {
+            results[index] = gpu_process_plane(slot, shared, items[index], config);
+          }
+        });
+  }
+  tasks.wait();
   return results;
 }
 } // namespace breifast::gpu

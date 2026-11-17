@@ -171,12 +171,28 @@ TEST_CASE("gpu_process_plane gives the same result on a reused slot", "[gpu][int
   gpu::GpuSlot slot;
   const auto run = [&slot](const Plane &plane)
   {
-    const gpu::GpuSharedInputs shared{std::span{&plane.group, 1}, plane.config};
+    gpu::GpuSharedInputs shared;
+    shared.assign(std::span{&plane.group, 1}, plane.config);
     return gpu::gpu_process_plane(slot, shared, plane.item, plane.config);
   };
   check_same(run(large), fresh_large);
   check_same(run(small), fresh_small);
   check_same(run(large), fresh_large);
+}
+TEST_CASE("GpuSharedInputs empties an input that the next assign does not have", "[gpu]")
+{
+  Plane with_cutoff;
+  xt::xtensor<float, 3> cutoff;
+  cutoff.resize({n_channels, n_y, n_x});
+  cutoff.fill(1.F);
+  with_cutoff.group.snr_cutoff = std::move(cutoff);
+  const Plane without_cutoff;
+
+  gpu::GpuSharedInputs shared;
+  shared.assign(std::span{&with_cutoff.group, 1}, with_cutoff.config);
+  CHECK(shared.groups[0].snr_cutoff.data() != nullptr);
+  shared.assign(std::span{&without_cutoff.group, 1}, without_cutoff.config);
+  CHECK(shared.groups[0].snr_cutoff.data() == nullptr);
 }
 } // namespace plane_tests
 

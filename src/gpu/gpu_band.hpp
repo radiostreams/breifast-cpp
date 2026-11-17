@@ -198,11 +198,13 @@ struct GpuGroupInputs
   DeviceVector<float> flux_cutoff;
 };
 
-/// What the planes of one call share on the device: every group's arrays and the baseline flux, uploaded once.
+/// What the planes of one call share on the device: every group's arrays and the baseline flux. Kept from call to call
+/// and grown as needed.
 struct GpuSharedInputs
 {
-  /// Copies the arrays (the mean image only when the config subtracts it) and waits for the copies.
-  GpuSharedInputs(std::span<const breifast::PlaneBatchGroup> batch_groups, const breifast::PlaneConfig &config);
+  /// Replaces the contents with `batch_groups` (the mean image only when the config subtracts it) and the config's
+  /// baseline flux, and waits for the copies. An input that is absent ends up empty, never left over from before.
+  void assign(std::span<const breifast::PlaneBatchGroup> batch_groups, const breifast::PlaneConfig &config);
 
   std::vector<GpuGroupInputs> groups; // indexed like batch_groups
   DeviceVector<float> baseline_flux;

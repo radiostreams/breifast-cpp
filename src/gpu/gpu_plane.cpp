@@ -87,6 +87,25 @@ T *upload(DeviceVector<T> &buffer, const std::optional<Array> &array, cudaStream
   return array ? upload(buffer, *array, stream) : nullptr;
 }
 
+/// `upload`, but an absent optional input empties the buffer: its data() is then null, so that a buffer kept from an
+/// earlier call never passes for this call's input.
+template <typename T, typename Array> void set_input(DeviceVector<T> &buffer, const Array &array)
+{
+  upload(buffer, array, Stream::local_stream());
+}
+
+template <typename T, typename Array> void set_input(DeviceVector<T> &buffer, const std::optional<Array> &array)
+{
+  if (array)
+  {
+    set_input(buffer, *array);
+  }
+  else
+  {
+    buffer = DeviceVector<T>{};
+  }
+}
+
 /// Spectral variance moments of the slot's cube, after the bands, as the CPU compute_spectral_variance_stats computes
 /// them: copied from the slot's buffers straight into the result.
 SpectralVarianceStats spectral_variance_stats(GpuSlot &slot, const GpuPlaneInput &plane, const PlaneBatchItem &item)
@@ -114,27 +133,30 @@ SpectralVarianceStats spectral_variance_stats(GpuSlot &slot, const GpuPlaneInput
 }
 } // namespace
 
-GpuSharedInputs::GpuSharedInputs(std::span<const PlaneBatchGroup> batch_groups, const PlaneConfig &config)
-    : groups(batch_groups.size())
+void GpuSharedInputs::assign(std::span<const PlaneBatchGroup> batch_groups, const PlaneConfig &config)
 {
   const NvtxRange range{"upload groups"};
-  const cudaStream_t stream = Stream::local_stream();
+  groups.resize(batch_groups.size());
   for (std::size_t i = 0; i < batch_groups.size(); ++i)
   {
     const auto &host = batch_groups[i];
     auto &device = groups[i];
-    upload(device.accept_mask, host.accept_mask, stream);
+    set_input(device.accept_mask, host.accept_mask);
     if (config.subtract_mean)
     {
-      upload(device.mean_image, host.mean_image, stream);
+      set_input(device.mean_image, host.mean_image);
     }
-    upload(device.selfnoise_offset, host.selfnoise_offset, stream);
-    upload(device.selfnoise_raw, host.selfnoise_raw, stream);
-    upload(device.dde_noise, host.dde_noise, stream);
-    upload(device.snr_cutoff, host.snr_cutoff, stream);
-    upload(device.flux_cutoff, host.flux_cutoff, stream);
+    else
+    {
+      device.mean_image = DeviceVector<float>{};
+    }
+    set_input(device.selfnoise_offset, host.selfnoise_offset);
+    set_input(device.selfnoise_raw, host.selfnoise_raw);
+    set_input(device.dde_noise, host.dde_noise);
+    set_input(device.snr_cutoff, host.snr_cutoff);
+    set_input(device.flux_cutoff, host.flux_cutoff);
   }
-  upload(baseline_flux, config.baseline_flux, stream);
+  set_input(baseline_flux, config.baseline_flux);
   Stream::local_stream().synchronize();
 }
 
@@ -220,7 +242,8 @@ ProcessPlaneResult gpu_process_plane(const PlaneBatchItem &item, const PlaneBatc
                                      const PlaneConfig &config)
 {
   GpuSlot slot;
-  const GpuSharedInputs shared{std::span{&group, 1}, config};
+  GpuSharedInputs shared;
+  shared.assign(std::span{&group, 1}, config);
   PlaneBatchItem single_group_item = item; // copies the cube: a convenience for small planes, not for the batch path
   single_group_item.group_index = 0;
   return gpu_process_plane(slot, shared, single_group_item, config);
