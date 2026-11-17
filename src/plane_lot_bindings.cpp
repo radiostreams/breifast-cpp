@@ -1,10 +1,16 @@
 #include "plane_lot_bindings.hpp"
 #include "plane_lot_dispatch.hpp"
 
+#include <array>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
+#include <vector>
 
+#include <pybind11/numpy.h>
 #include <pybind11/stl.h>
+
+#include "host_copies.hpp"
 
 #ifdef BREIFAST_HAVE_GPU
 #include "gpu/gpu_device.hpp"
@@ -17,18 +23,51 @@
 
 namespace breifast
 {
-template <typename T, size_t N> xt::xtensor<T, N> require_xtensor(const pybind11::dict &d, const char *key)
+/// Arrays that must outlive the registered copies: an input that is not C-contiguous or not of the expected dtype is
+/// first converted by numpy, into a temporary that lives here.
+using KeepAlive = std::vector<pybind11::array>;
+
+/// An xtensor with the shape of `object`, allocated but not filled: the copy of its elements is registered in `copies`,
+/// to run later in parallel without the GIL. Moving the result keeps its buffer, which the copy targets.
+template <typename T, size_t N>
+xt::xtensor<T, N> to_xtensor(const pybind11::object &object, const char *key, HostCopies &copies, KeepAlive &keep_alive)
 {
-  return xt::xtensor<T, N>(d[key].cast<xt::pyarray<T>>());
+  auto array = pybind11::array_t<T, pybind11::array::c_style | pybind11::array::forcecast>::ensure(object);
+  if (!array)
+  {
+    throw std::invalid_argument(std::string("'") + key + "' is not an array of the expected type");
+  }
+  if (static_cast<size_t>(array.ndim()) != N)
+  {
+    throw std::invalid_argument(std::string("'") + key + "' has " + std::to_string(array.ndim()) +
+                                " dimensions, expected " + std::to_string(N));
+  }
+  std::array<size_t, N> shape{};
+  for (size_t i = 0; i < N; ++i)
+  {
+    shape[i] = static_cast<size_t>(array.shape(static_cast<pybind11::ssize_t>(i)));
+  }
+  xt::xtensor<T, N> tensor(shape);
+  copies.add(array.data(), tensor.data(), static_cast<size_t>(array.nbytes()));
+  keep_alive.push_back(std::move(array));
+  return tensor;
 }
 
-template <typename T, size_t N> std::optional<xt::xtensor<T, N>> optional_xtensor_key(const pybind11::dict &d, const char *key)
+template <typename T, size_t N>
+xt::xtensor<T, N> require_xtensor(const pybind11::dict &d, const char *key, HostCopies &copies, KeepAlive &keep_alive)
+{
+  return to_xtensor<T, N>(d[key], key, copies, keep_alive);
+}
+
+template <typename T, size_t N>
+std::optional<xt::xtensor<T, N>> optional_xtensor_key(const pybind11::dict &d, const char *key, HostCopies &copies,
+                                                      KeepAlive &keep_alive)
 {
   if (!d.contains(key))
   {
     return std::nullopt;
   }
-  return xt::xtensor<T, N>(d[key].cast<xt::pyarray<T>>());
+  return to_xtensor<T, N>(d[key], key, copies, keep_alive);
 }
 
 BandSlice to_band_slice(const pybind11::dict &d)
@@ -41,40 +80,42 @@ BandSlice to_band_slice(const pybind11::dict &d)
   return band;
 }
 
-PlaneBatchItem to_plane_batch_item(const pybind11::dict &plane_dict)
+PlaneBatchItem to_plane_batch_item(const pybind11::dict &plane_dict, HostCopies &copies, KeepAlive &keep_alive)
 {
   PlaneBatchItem item;
-  item.stokes_cube = require_xtensor<float, 3>(plane_dict, "stokes_cube");
-  item.weights = require_xtensor<float, 1>(plane_dict, "weights");
-  item.nonzero_channels = require_xtensor<bool, 1>(plane_dict, "nonzero_channels");
+  item.stokes_cube = require_xtensor<float, 3>(plane_dict, "stokes_cube", copies, keep_alive);
+  item.weights = require_xtensor<float, 1>(plane_dict, "weights", copies, keep_alive);
+  item.nonzero_channels = require_xtensor<bool, 1>(plane_dict, "nonzero_channels", copies, keep_alive);
   item.group_index = plane_dict["group_index"].cast<size_t>();
   item.stokes_label = plane_dict["stokes_label"].cast<std::string>();
-  item.beam_major_axis = optional_xtensor_key<float, 1>(plane_dict, "beam_major_axis");
-  item.beam_minor_axis = optional_xtensor_key<float, 1>(plane_dict, "beam_minor_axis");
-  item.beam_position_angle = optional_xtensor_key<float, 1>(plane_dict, "beam_position_angle");
+  item.beam_major_axis = optional_xtensor_key<float, 1>(plane_dict, "beam_major_axis", copies, keep_alive);
+  item.beam_minor_axis = optional_xtensor_key<float, 1>(plane_dict, "beam_minor_axis", copies, keep_alive);
+  item.beam_position_angle = optional_xtensor_key<float, 1>(plane_dict, "beam_position_angle", copies, keep_alive);
   return item;
 }
 
-PlaneBatchGroup to_plane_batch_group(const pybind11::dict &group_dict)
+PlaneBatchGroup to_plane_batch_group(const pybind11::dict &group_dict, HostCopies &copies, KeepAlive &keep_alive)
 {
   PlaneBatchGroup group;
-  group.accept_mask = require_xtensor<bool, 3>(group_dict, "accept_mask");
-  group.mean_image = optional_xtensor_key<float, 3>(group_dict, "mean_image");
-  group.selfnoise_offset = require_xtensor<float, 2>(group_dict, "selfnoise_offset");
-  group.selfnoise_raw = require_xtensor<float, 2>(group_dict, "selfnoise_raw");
-  group.dde_noise = require_xtensor<float, 2>(group_dict, "dde_noise");
-  group.flux_cutoff = optional_xtensor_key<float, 3>(group_dict, "flux_cutoff");
-  group.snr_cutoff = optional_xtensor_key<float, 3>(group_dict, "snr_cutoff");
+  group.accept_mask = require_xtensor<bool, 3>(group_dict, "accept_mask", copies, keep_alive);
+  group.mean_image = optional_xtensor_key<float, 3>(group_dict, "mean_image", copies, keep_alive);
+  group.selfnoise_offset = require_xtensor<float, 2>(group_dict, "selfnoise_offset", copies, keep_alive);
+  group.selfnoise_raw = require_xtensor<float, 2>(group_dict, "selfnoise_raw", copies, keep_alive);
+  group.dde_noise = require_xtensor<float, 2>(group_dict, "dde_noise", copies, keep_alive);
+  group.flux_cutoff = optional_xtensor_key<float, 3>(group_dict, "flux_cutoff", copies, keep_alive);
+  group.snr_cutoff = optional_xtensor_key<float, 3>(group_dict, "snr_cutoff", copies, keep_alive);
   return group;
 }
 
-template <typename T, size_t N> std::optional<xt::xtensor<T, N>> to_optional_xtensor(const pybind11::object &obj)
+template <typename T, size_t N>
+std::optional<xt::xtensor<T, N>> to_optional_xtensor(const pybind11::object &obj, const char *key, HostCopies &copies,
+                                                     KeepAlive &keep_alive)
 {
   if (obj.is_none())
   {
     return std::nullopt;
   }
-  return xt::xtensor<T, N>(obj.cast<xt::pyarray<T>>());
+  return to_xtensor<T, N>(obj, key, copies, keep_alive);
 }
 
 pybind11::object to_python_result(const ProcessPlaneResult &result)
@@ -141,14 +182,23 @@ pybind11::list process_lot(pybind11::list planes, pybind11::list stokes_groups, 
                            bool save_stat_cubes, bool beam_size_enabled, pybind11::object fixed_beam_kernel_obj,
                            int fixed_beam_halfsize, int num_threads, bool use_gpu)
 {
+  // The arrays are copied into the lot in parallel, after the GIL is released: the conversions below only allocate and
+  // register the copies. The vectors are reserved and their elements nothrow-movable, so that the buffers the copies
+  // target never move.
+  static_assert(std::is_nothrow_move_constructible_v<PlaneBatchItem> &&
+                std::is_nothrow_move_constructible_v<PlaneBatchGroup>);
+  HostCopies copies;
+  KeepAlive keep_alive;
   LotBatch lot;
+  lot.planes.reserve(planes.size());
+  lot.groups.reserve(stokes_groups.size());
   for (auto plane_handle : planes)
   {
-    lot.planes.push_back(to_plane_batch_item(plane_handle.cast<pybind11::dict>()));
+    lot.planes.push_back(to_plane_batch_item(plane_handle.cast<pybind11::dict>(), copies, keep_alive));
   }
   for (auto group_handle : stokes_groups)
   {
-    lot.groups.push_back(to_plane_batch_group(group_handle.cast<pybind11::dict>()));
+    lot.groups.push_back(to_plane_batch_group(group_handle.cast<pybind11::dict>(), copies, keep_alive));
   }
 
   PlaneConfig config;
@@ -164,9 +214,10 @@ pybind11::list process_lot(pybind11::list planes, pybind11::list stokes_groups, 
   config.threshold = threshold;
   config.save_stat_cubes = save_stat_cubes;
   config.beam_size_enabled = beam_size_enabled;
-  config.fixed_beam_kernel = to_optional_xtensor<double, 2>(fixed_beam_kernel_obj);
+  config.fixed_beam_kernel =
+      to_optional_xtensor<double, 2>(fixed_beam_kernel_obj, "fixed_beam_kernel", copies, keep_alive);
   config.fixed_beam_halfsize = fixed_beam_halfsize;
-  config.baseline_flux = to_optional_xtensor<float, 2>(baseline_flux_obj);
+  config.baseline_flux = to_optional_xtensor<float, 2>(baseline_flux_obj, "baseline_flux", copies, keep_alive);
   for (auto band_slice_handle : band_slices)
   {
     config.band_slices.push_back(to_band_slice(band_slice_handle.cast<pybind11::dict>()));
@@ -182,6 +233,7 @@ pybind11::list process_lot(pybind11::list planes, pybind11::list stokes_groups, 
   std::vector<ProcessPlaneResult> results;
   {
     pybind11::gil_scoped_release release;
+    copies.run();
 #ifdef BREIFAST_HAVE_GPU
     if (use_gpu)
     {
