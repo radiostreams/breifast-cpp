@@ -37,10 +37,11 @@ __global__ void radix_select_pass_kernel(const float *values, size_t n, uint32_t
   // Last pass, even n: also the largest key below the 24-bit prefix, for rank n/2 - 1.
   const bool track_lower = shift == 0 && n % 2 == 0;
   uint32_t local_lower = 0;
-  const size_t stride = static_cast<size_t>(gridDim.x) * blockDim.x;
-  for (size_t idx = global_index(); idx < n; idx += stride)
+  // Four values per load and two loads in flight per iteration: one 4-byte load per thread does not cover the memory
+  // latency (the pass stalled on its loads, not on the shared atomics).
+  const auto count_value = [&](const float value)
   {
-    const uint32_t key = abs_mode ? abs_key(values[idx]) : signed_key(values[idx]);
+    const uint32_t key = abs_mode ? abs_key(value) : signed_key(value);
     if ((key & coverage) == prefix)
     {
       atomicAdd(&local[(key >> shift) & 0xFFU], 1U);
@@ -49,6 +50,33 @@ __global__ void radix_select_pass_kernel(const float *values, size_t n, uint32_t
     {
       local_lower = max(local_lower, key);
     }
+  };
+  const auto count_values = [&](const float4 v)
+  {
+    count_value(v.x);
+    count_value(v.y);
+    count_value(v.z);
+    count_value(v.w);
+  };
+
+  const auto *const values4 = reinterpret_cast<const float4 *>(values);
+  const size_t n4 = n / 4;
+  const size_t stride = static_cast<size_t>(gridDim.x) * blockDim.x;
+  size_t i = global_index();
+  for (; i + stride < n4; i += 2 * stride)
+  {
+    const float4 a = values4[i];
+    const float4 b = values4[i + stride];
+    count_values(a);
+    count_values(b);
+  }
+  if (i < n4)
+  {
+    count_values(values4[i]);
+  }
+  for (size_t idx = 4 * n4 + global_index(); idx < n; idx += stride) // the last n % 4 values
+  {
+    count_value(values[idx]);
   }
   __syncthreads();
   if (local[threadIdx.x] != 0)
@@ -167,6 +195,7 @@ void gpu_median_impl(const float *values, size_t n, float *out_median, bool abs_
   static_assert(MedianScratch::histogram_bins == radix_bins);
   assert(n > 0);
   assert(scratch.words.size() == radix_bins + 5);
+  assert(reinterpret_cast<std::uintptr_t>(values) % alignof(float4) == 0); // whole buffers: 256-byte aligned
 
   uint32_t *histogram = scratch.words.data();
   uint32_t *state = histogram + radix_bins; // below, prefix, coverage
