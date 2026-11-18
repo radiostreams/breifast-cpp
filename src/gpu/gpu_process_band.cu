@@ -63,18 +63,17 @@ void gpu_process_band(const GpuPlaneInput &plane, const GpuBand &band, GpuBandWo
 
   {
     const NvtxRange range{"band image and noise"};
+    // The global MAD too: both noise modes need it, the band result reports it and it is the base noise without an
+    // RMS map.
     gpu_weighted_band_image(plane.cube, plane.weights, plane.mean_image, workspace.plane, n_pixels, band.start,
-                            band.stop, inv_band_size, stream);
-
-    // Both noise modes need it: the band result reports it, and it is the base noise without an RMS map.
-    gpu_median_abs(workspace.plane, n_pixels, result.global_mad, 1.4826F, workspace.median_scratch, stream);
+                            band.stop, inv_band_size, result.global_mad, 1.4826F, workspace.median_scratch, stream);
     const float *rms = nullptr;
     const float *base_noise = result.global_mad;
     if (plane.use_rms_noise_estimator)
     {
       gpu_rms_noise_map(workspace.plane, plane.n_y, plane.n_x, plane.boxsize, workspace.row_sums, workspace.row_prefix,
-                        workspace.row_prefix_scan_storage, workspace.rms_map, stream);
-      gpu_median(workspace.rms_map, n_pixels, result.rms_floor, workspace.median_scratch, stream);
+                        workspace.row_prefix_scan_storage, workspace.rms_map, result.rms_floor,
+                        workspace.median_scratch, stream);
       rms = workspace.rms_map;
       base_noise = result.rms_floor;
     }

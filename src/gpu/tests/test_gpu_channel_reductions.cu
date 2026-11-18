@@ -183,9 +183,13 @@ TEST_CASE("gpu_mask_or covers a plane spanning many blocks", "[gpu][mask_or]")
 
 namespace weighted_band_image_tests
 {
+using breifast::gpu::DeviceVector;
+using breifast::gpu::gpu_median_abs;
 using breifast::gpu::gpu_weighted_band_image;
+using breifast::gpu::MedianScratch;
 using breifast::gpu::Stream;
 using breifast::gpu::test::download;
+using breifast::gpu::test::download_scalar;
 using breifast::gpu::test::upload;
 using Catch::Approx;
 using Catch::Matchers::Equals;
@@ -253,7 +257,7 @@ const std::vector<float> expected_without_mean = {
 
 // Runs gpu_weighted_band_image with the inverse band size a caller derives from the band. `mean_values` empty means no
 // subtraction (a null pointer). `out_plane` starts filled with `prefill` on the device, like per-thread scratch that
-// still holds the previous band.
+// still holds the previous band. Also checks that the median it writes is gpu_median_abs() of the image it returns.
 std::vector<float> run_gpu_weighted_band_image(const std::vector<float> &cube_values,
                                                const std::vector<float> &weights_values,
                                                const std::vector<float> &mean_values, size_t n_plane_pixels,
@@ -265,9 +269,15 @@ std::vector<float> run_gpu_weighted_band_image(const std::vector<float> &cube_va
   auto device_out = upload(std::vector<float>(n_plane_pixels, prefill));
 
   const Stream stream;
+  MedianScratch scratch;
+  DeviceVector<float> median(1);
+  constexpr float scale = 1.4826F;
   gpu_weighted_band_image(device_cube, device_weights, mean_values.empty() ? nullptr : device_mean.data(), device_out,
                           n_plane_pixels, band_start, band_stop, 1.F / static_cast<float>(band_stop - band_start),
-                          stream);
+                          median, scale, scratch, stream);
+  const float folded_median = download_scalar(median.data(), stream);
+  gpu_median_abs(device_out, n_plane_pixels, median, scale, scratch, stream);
+  CHECK(folded_median == download_scalar(median.data(), stream));
   return download(device_out, stream);
 }
 

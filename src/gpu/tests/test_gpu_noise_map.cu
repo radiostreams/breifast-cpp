@@ -17,9 +17,12 @@
 namespace rms_noise_map_tests
 {
 using breifast::gpu::DeviceVector;
+using breifast::gpu::gpu_median;
 using breifast::gpu::gpu_rms_noise_map;
+using breifast::gpu::MedianScratch;
 using breifast::gpu::Stream;
 using breifast::gpu::test::download;
+using breifast::gpu::test::download_scalar;
 using breifast::gpu::test::upload;
 using Catch::Approx;
 
@@ -54,7 +57,7 @@ const std::vector<float> rms_reference = {
 };
 
 // Runs gpu_rms_noise_map on the plane above with its scratch and output filled with `prefill`, like per-thread scratch
-// holding an earlier band.
+// holding an earlier band. Also checks that the median it writes is gpu_median() of the map it returns.
 std::vector<float> run_gpu_rms_noise_map(const std::vector<float> &plane_values, size_t n_rows, size_t n_cols,
                                          long box, float prefill = 0.F)
 {
@@ -67,7 +70,13 @@ std::vector<float> run_gpu_rms_noise_map(const std::vector<float> &plane_values,
   DeviceVector<std::byte> scan_storage;
 
   const Stream stream;
-  gpu_rms_noise_map(device_plane, n_rows, n_cols, box, device_rows, device_prefix, scan_storage, device_out, stream);
+  MedianScratch scratch;
+  DeviceVector<float> median(1);
+  gpu_rms_noise_map(device_plane, n_rows, n_cols, box, device_rows, device_prefix, scan_storage, device_out, median,
+                    scratch, stream);
+  const float folded_median = download_scalar(median.data(), stream);
+  gpu_median(device_out, n_plane_pixels, median, scratch, stream);
+  CHECK(folded_median == download_scalar(median.data(), stream));
   return download(device_out, stream);
 }
 

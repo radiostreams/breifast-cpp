@@ -132,12 +132,17 @@ __global__ void window_diff(const double *in, const size_t n_y, const size_t n_x
 }
 
 /// The vertical window sums from the transposed prefix of window_kernel_cols, as the root of the mean over the whole
-/// box. One thread per pixel, consecutive threads walking down a column, so that the prefix is read coalesced and the
-/// strided accesses are the writes.
-__global__ void window_diff_cols(const double *in, const size_t n_y, const size_t n_x, long box_size, float *out)
+/// box. Index i walks down the columns, so that the prefix is read coalesced and the strided accesses are the writes.
+/// Returns each pixel's RMS as the median's first pass reads it.
+struct WindowDiffCols
 {
-  const auto i = global_index();
-  if (i < n_x * n_y)
+  const double *in;
+  size_t n_y;
+  size_t n_x;
+  long box_size;
+  float *out;
+
+  __device__ float operator()(const size_t i) const
   {
     const auto x = i / n_y;
     const auto y = i % n_y;
@@ -150,9 +155,15 @@ __global__ void window_diff_cols(const double *in, const size_t n_y, const size_
     const auto column_offset = x * n_y;
     const double sum = in[column_offset + hi_y - 1] - (lo_y > 0 ? in[column_offset + lo_y - 1] : 0.);
     const long count = (hi_y - lo_y) * (hi_x - lo_x);
-    out[y * n_x + x] = static_cast<float>(sqrt(sum / static_cast<double>(count)));
+    const auto value = static_cast<float>(sqrt(sum / static_cast<double>(count)));
+    out[y * n_x + x] = value;
+    return value;
   }
-}
+  __device__ float4 load4(const size_t i4) const
+  {
+    return {(*this)(4 * i4), (*this)(4 * i4 + 1), (*this)(4 * i4 + 2), (*this)(4 * i4 + 3)};
+  }
+};
 
 // The base noise is max(rms[p], *base_noise) with an RMS map, else *base_noise. Stores each pixel's noise as the
 // median's first pass reads it.
@@ -191,16 +202,18 @@ struct CombineNoise
 
 void gpu_rms_noise_map(const float *plane, size_t n_y, size_t n_x, long boxsize, float *row_window_sums,
                        double *row_prefix, DeviceVector<std::byte> &row_prefix_scan_storage, float *out_rms,
-                       cudaStream_t stream)
+                       float *out_median, MedianScratch &scratch, cudaStream_t stream)
 {
   assert(n_y > 0 && n_x > 0);
 
   // The horizontal pass: the per-row prefix sums of the squares, then every pixel's window sum from two of them.
   window_kernel(plane, n_y, n_x, row_prefix, row_prefix_scan_storage, stream);
   launch_per_element(window_diff, n_y * n_x, stream, row_prefix, n_y, n_x, boxsize, row_window_sums);
-  // The vertical pass: the prefix sums down each column of those sums, then the root of the mean from two of them.
+  // The vertical pass: the prefix sums down each column of those sums, then the root of the mean from two of them,
+  // as the first pass of the RMS median.
   window_kernel_cols(row_window_sums, n_y, n_x, row_prefix, row_prefix_scan_storage, stream);
-  launch_per_element(window_diff_cols, n_y * n_x, stream, row_prefix, n_y, n_x, boxsize, out_rms);
+  radix_median(WindowDiffCols{row_prefix, n_y, n_x, boxsize, out_rms}, out_rms, n_y * n_x, false, 1.F, out_median,
+               scratch, stream);
 }
 
 void gpu_combine_noise_map(const float *rms, const float *base_noise, const float *selfnoise_offset,

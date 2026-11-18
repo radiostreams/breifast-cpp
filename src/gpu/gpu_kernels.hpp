@@ -69,16 +69,17 @@ void gpu_mask_or(const bool *accept_mask, size_t n_pixels, long band_start, long
  * @brief Weighted band image: `out[p] = Σ_c cube[c,p]*weights[c]*inv_weights_sum - Σ_c mean[c,p]*inv_band_size`.
  *
  * `inv_weights_sum = 1 / Σ_c weights[c]` over the band, summed by the kernel in channel order like the host
- * std::accumulate. Device pointers. `mean_image` may be `nullptr`, then the second sum is skipped. Work is enqueued on
- * `stream`.
+ * std::accumulate. Also gpu_median_abs() of the band image, times `scale`: the band image's kernel is its first pass.
+ * Device pointers. `mean_image` may be `nullptr`, then the second sum is skipped. Work is enqueued on `stream`.
  * @param cube `[n_channels, n_pixels]` floats, channel major.
  * @param weights One weight per channel, indexed by the absolute channel.
  * @param mean_image `[n_channels, n_pixels]` floats, or `nullptr`.
  * @param out_plane `[n_pixels]` floats, written completely.
+ * @param out_median_abs One device float.
  */
 void gpu_weighted_band_image(const float *cube, const float *weights, const float *mean_image, float *out_plane,
                              size_t n_pixels, long band_start, long band_stop, float inv_band_size,
-                             cudaStream_t stream = nullptr);
+                             float *out_median_abs, float scale, MedianScratch &scratch, cudaStream_t stream = nullptr);
 
 /**
  * @brief Per-pixel sums of the second, third and fourth powers over the valid channels:
@@ -141,16 +142,18 @@ void gpu_snr_and_filters(const float *plane, const float *noise_map, const float
  * mean of `plane^2`.
  *
  * Two separable passes with double accumulators, the horizontal running sums into `row_window_sums` then the vertical
- * pass. Device pointers; the work is enqueued on `stream`. `boxsize <= 0` is treated as 1.
+ * pass. Also gpu_median() of the RMS map: the vertical pass is its first pass. Device pointers; the work is enqueued on
+ * `stream`. `boxsize <= 0` is treated as 1.
  * @param plane `[n_y, n_x]` floats, row major.
  * @param row_window_sums Caller scratch of `n_y * n_x` floats, overwritten.
  * @param row_prefix Caller scratch of `n_y * n_x` doubles, overwritten: the per-row prefix sums of `plane^2`.
  * @param row_prefix_scan_storage Caller scratch for the scan's temporary storage; grown as needed.
  * @param out_rms `[n_y, n_x]` floats, written completely.
+ * @param out_median One device float.
  */
 void gpu_rms_noise_map(const float *plane, size_t n_y, size_t n_x, long boxsize, float *row_window_sums,
                        double *row_prefix, DeviceVector<std::byte> &row_prefix_scan_storage, float *out_rms,
-                       cudaStream_t stream = nullptr);
+                       float *out_median, MedianScratch &scratch, cudaStream_t stream = nullptr);
 
 /**
  * @brief Exact median of `values`, numpy semantics: odd `n` picks rank `n/2`, even `n` averages ranks `n/2 - 1` and
