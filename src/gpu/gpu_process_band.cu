@@ -83,9 +83,8 @@ void gpu_process_band(const GpuPlaneInput &plane, const GpuBand &band, GpuBandWo
       CHECK_GPU(cudaMemsetAsync(result.rms_floor, 0, sizeof(float), stream)); // 0 in the global MAD mode, as on the CPU
     }
     gpu_combine_noise_map(rms, base_noise, plane.selfnoise_offset, plane.dde_noise, band.selfnoise_scale_factor,
-                          plane.ddenoise_scaling_factor, workspace.noise_map, n_pixels, stream);
-
-    gpu_median(workspace.noise_map, n_pixels, result.median_noise, workspace.median_scratch, stream);
+                          plane.ddenoise_scaling_factor, workspace.noise_map, n_pixels, result.median_noise,
+                          workspace.median_scratch, stream);
   }
 
   {

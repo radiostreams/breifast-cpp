@@ -9,6 +9,7 @@
 #include "gpu_kernels.hpp"
 
 #include "gpu_device_utils.cuh"
+#include "radix_select.cuh"
 
 namespace breifast::gpu
 {
@@ -153,19 +154,39 @@ __global__ void window_diff_cols(const double *in, const size_t n_y, const size_
   }
 }
 
-// The base noise is max(rms[p], *base_noise) with an RMS map, else *base_noise.
-__global__ void combine_noise_map_kernel(const float *rms, const float *base_noise, const float *selfnoise_offset,
-                                         const float *dde_noise, const float selfnoise_scale, const float dde_scale,
-                                         float *out_noise_map, const size_t n_pixels)
+// The base noise is max(rms[p], *base_noise) with an RMS map, else *base_noise. Stores each pixel's noise as the
+// median's first pass reads it.
+struct CombineNoise
 {
-  const auto i_pixel = global_index();
-  if (i_pixel < n_pixels)
+  const float *rms;
+  const float *base_noise;
+  const float *selfnoise_offset;
+  const float *dde_noise;
+  float selfnoise_scale;
+  float dde_scale;
+  float *out_noise_map;
+
+  __device__ float noise(const float rms_value, const float offset, const float dde) const
   {
-    const float base = rms != nullptr ? fmaxf(rms[i_pixel], *base_noise) : *base_noise;
-    out_noise_map[i_pixel] =
-        sqrtf(base * base + selfnoise_scale * selfnoise_offset[i_pixel] + dde_scale * dde_noise[i_pixel]);
+    const float base = rms != nullptr ? fmaxf(rms_value, *base_noise) : *base_noise;
+    return sqrtf(base * base + selfnoise_scale * offset + dde_scale * dde);
   }
-}
+  __device__ float operator()(const size_t i) const
+  {
+    const float value = noise(rms != nullptr ? rms[i] : 0.F, selfnoise_offset[i], dde_noise[i]);
+    out_noise_map[i] = value;
+    return value;
+  }
+  __device__ float4 load4(const size_t i4) const
+  {
+    const float4 r = rms != nullptr ? reinterpret_cast<const float4 *>(rms)[i4] : float4{};
+    const float4 o = reinterpret_cast<const float4 *>(selfnoise_offset)[i4];
+    const float4 d = reinterpret_cast<const float4 *>(dde_noise)[i4];
+    const float4 value = {noise(r.x, o.x, d.x), noise(r.y, o.y, d.y), noise(r.z, o.z, d.z), noise(r.w, o.w, d.w)};
+    reinterpret_cast<float4 *>(out_noise_map)[i4] = value;
+    return value;
+  }
+};
 } // namespace
 
 void gpu_rms_noise_map(const float *plane, size_t n_y, size_t n_x, long boxsize, float *row_window_sums,
@@ -184,10 +205,11 @@ void gpu_rms_noise_map(const float *plane, size_t n_y, size_t n_x, long boxsize,
 
 void gpu_combine_noise_map(const float *rms, const float *base_noise, const float *selfnoise_offset,
                            const float *dde_noise, const float selfnoise_scale, const float dde_scale,
-                           float *out_noise_map, const size_t n_pixels, cudaStream_t stream)
+                           float *out_noise_map, const size_t n_pixels, float *out_median, MedianScratch &scratch,
+                           cudaStream_t stream)
 {
   assert(n_pixels > 0);
-  launch_per_element(combine_noise_map_kernel, n_pixels, stream, rms, base_noise, selfnoise_offset, dde_noise,
-                     selfnoise_scale, dde_scale, out_noise_map, n_pixels);
+  radix_median(CombineNoise{rms, base_noise, selfnoise_offset, dde_noise, selfnoise_scale, dde_scale, out_noise_map},
+               out_noise_map, n_pixels, false, 1.F, out_median, scratch, stream);
 }
 } // namespace breifast::gpu

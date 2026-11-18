@@ -205,8 +205,12 @@ TEST_CASE("gpu_rms_noise_map stays accurate on a large plane with a wide box", "
 
 namespace combine_noise_map_tests
 {
+using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_combine_noise_map;
+using breifast::gpu::gpu_median;
+using breifast::gpu::MedianScratch;
 using breifast::gpu::Stream;
+using breifast::gpu::test::download_scalar;
 using breifast::gpu::test::download;
 using breifast::gpu::test::upload;
 using Catch::Approx;
@@ -241,6 +245,22 @@ const std::vector<float> dde_noise = {
     0.0142245321F, 0.0158669446F,  0.00697450154F, 0.00924703572F, 0.0171595179F,
 };
 
+// Runs gpu_combine_noise_map and returns the noise map, after checking that the median it writes is gpu_median() of
+// that map.
+std::vector<float> combine_and_check_median(const float *rms, const float *base, const float *selfnoise,
+                                            const float *dde, DeviceVector<float> &out)
+{
+  const Stream stream;
+  MedianScratch scratch;
+  DeviceVector<float> median(1);
+  gpu_combine_noise_map(rms, base, selfnoise, dde, selfnoise_scale, dde_scale, out, out.size(), median, scratch,
+                        stream);
+  const float folded_median = download_scalar(median.data(), stream);
+  gpu_median(out, out.size(), median, scratch, stream);
+  CHECK(folded_median == download_scalar(median.data(), stream));
+  return download(out, stream);
+}
+
 // Runs gpu_combine_noise_map with an RMS map. `out_noise_map` starts filled with `prefill` on the device, like
 // per-thread scratch that still holds the previous band.
 std::vector<float> run_gpu_combine_noise_map_rms(const std::vector<float> &rms_values, float floor,
@@ -255,10 +275,7 @@ std::vector<float> run_gpu_combine_noise_map_rms(const std::vector<float> &rms_v
   const auto device_dde = upload(dde_values);
   auto device_out = upload(std::vector<float>(n_plane_pixels, prefill));
 
-  const Stream stream;
-  gpu_combine_noise_map(device_rms, device_floor, device_selfnoise, device_dde, selfnoise_scale, dde_scale, device_out,
-                        n_plane_pixels, stream);
-  return download(device_out, stream);
+  return combine_and_check_median(device_rms, device_floor, device_selfnoise, device_dde, device_out);
 }
 
 // Runs gpu_combine_noise_map without an RMS map, so with the constant base noise.
@@ -272,10 +289,7 @@ std::vector<float> run_gpu_combine_noise_map_constant(const std::vector<float> &
   const auto device_dde = upload(dde_values);
   auto device_out = upload(std::vector<float>(n_plane_pixels, prefill));
 
-  const Stream stream;
-  gpu_combine_noise_map(nullptr, device_base_noise, device_selfnoise, device_dde, selfnoise_scale, dde_scale,
-                        device_out, n_plane_pixels, stream);
-  return download(device_out, stream);
+  return combine_and_check_median(nullptr, device_base_noise, device_selfnoise, device_dde, device_out);
 }
 
 // A deterministic ramp for the coverage cases, where a hand-written expected array would be unwieldy.

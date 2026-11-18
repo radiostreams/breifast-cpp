@@ -97,14 +97,16 @@ void gpu_spectral_variance_moments(const float *cube, const bool *nonzero_channe
  * @brief Noise map: `out[p] = sqrt(base[p]^2 + selfnoise_scale * selfnoise_offset[p] + dde_scale * dde_noise[p])`.
  *
  * `base[p] = max(rms[p], *base_noise)` with an RMS map, where `base_noise` is the RMS floor; `rms == nullptr` gives
- * `base[p] = *base_noise` for every pixel. Device pointers; the work is enqueued on `stream`.
+ * `base[p] = *base_noise` for every pixel. Also the median of the noise map, as gpu_median() computes it: the noise
+ * map's kernel is its first pass. Device pointers; the work is enqueued on `stream`.
  * @param rms `[n_pixels]` floats, or `nullptr`.
  * @param base_noise One device float.
  * @param out_noise_map `[n_pixels]` floats, written completely.
+ * @param out_median One device float.
  */
 void gpu_combine_noise_map(const float *rms, const float *base_noise, const float *selfnoise_offset,
                            const float *dde_noise, float selfnoise_scale, float dde_scale, float *out_noise_map,
-                           size_t n_pixels, cudaStream_t stream = nullptr);
+                           size_t n_pixels, float *out_median, MedianScratch &scratch, cudaStream_t stream = nullptr);
 
 /**
  * @brief SNR and mask cascade of one band, fused: `snr`, the four cumulative masks, the histogram counts and the SNR
