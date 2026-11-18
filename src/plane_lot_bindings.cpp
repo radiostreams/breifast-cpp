@@ -2,11 +2,13 @@
 #include "plane_lot_dispatch.hpp"
 
 #include <array>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <vector>
 
+#include <oneapi/tbb/task_arena.h>
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 
@@ -15,6 +17,7 @@
 #ifdef BREIFAST_HAVE_GPU
 #include "gpu/gpu_device.hpp"
 #include "gpu/gpu_plane.hpp"
+#include "gpu/gpu_runtime.hpp"
 #endif
 
 #define XTENSOR_USE_TBB
@@ -23,6 +26,17 @@
 
 namespace breifast
 {
+#ifdef BREIFAST_HAVE_GPU
+using ProfileRange = gpu::NvtxRange;
+#else
+struct ProfileRange
+{
+  explicit ProfileRange(const char *)
+  {
+  }
+};
+#endif
+
 /// Arrays that must outlive the registered copies: an input that is not C-contiguous or not of the expected dtype is
 /// first converted by numpy, into a temporary that lives here.
 using KeepAlive = std::vector<pybind11::array>;
@@ -80,10 +94,11 @@ BandSlice to_band_slice(const pybind11::dict &d)
   return band;
 }
 
-PlaneBatchItem to_plane_batch_item(const pybind11::dict &plane_dict, HostCopies &copies, KeepAlive &keep_alive)
+PlaneBatchItem to_plane_batch_item(const pybind11::dict &plane_dict, HostCopies &copies, HostCopies &cube_copies,
+                                   KeepAlive &keep_alive)
 {
   PlaneBatchItem item;
-  item.stokes_cube = require_xtensor<float, 3, HostCube>(plane_dict, "stokes_cube", copies, keep_alive);
+  item.stokes_cube = require_xtensor<float, 3, HostCube>(plane_dict, "stokes_cube", cube_copies, keep_alive);
   item.weights = require_xtensor<float, 1>(plane_dict, "weights", copies, keep_alive);
   item.nonzero_channels = require_xtensor<bool, 1>(plane_dict, "nonzero_channels", copies, keep_alive);
   item.group_index = plane_dict["group_index"].cast<size_t>();
@@ -182,6 +197,8 @@ pybind11::list process_lot(pybind11::list planes, pybind11::list stokes_groups, 
                            bool save_stat_cubes, bool beam_size_enabled, pybind11::object fixed_beam_kernel_obj,
                            int fixed_beam_halfsize, int num_threads, bool use_gpu)
 {
+  const ProfileRange range{"process_lot"};
+  std::optional<ProfileRange> convert_range{std::in_place, "convert inputs"};
   // The arrays are copied into the lot in parallel, after the GIL is released: the conversions below only allocate and
   // register the copies. The vectors are reserved and their elements nothrow-movable, so that the buffers the copies
   // target never move.
@@ -192,9 +209,12 @@ pybind11::list process_lot(pybind11::list planes, pybind11::list stokes_groups, 
   LotBatch lot;
   lot.planes.reserve(planes.size());
   lot.groups.reserve(stokes_groups.size());
-  for (auto plane_handle : planes)
+  // On the GPU, each plane's cube is copied by the slot that processes it, behind the other planes' GPU work.
+  std::vector<HostCopies> cube_copies(use_gpu ? planes.size() : 0);
+  for (std::size_t i = 0; i < planes.size(); ++i)
   {
-    lot.planes.push_back(to_plane_batch_item(plane_handle.cast<pybind11::dict>(), copies, keep_alive));
+    lot.planes.push_back(to_plane_batch_item(planes[i].cast<pybind11::dict>(), copies,
+                                             use_gpu ? cube_copies[i] : copies, keep_alive));
   }
   for (auto group_handle : stokes_groups)
   {
@@ -222,6 +242,7 @@ pybind11::list process_lot(pybind11::list planes, pybind11::list stokes_groups, 
   {
     config.band_slices.push_back(to_band_slice(band_slice_handle.cast<pybind11::dict>()));
   }
+  convert_range.reset();
 
 #ifndef BREIFAST_HAVE_GPU
   if (use_gpu)
@@ -233,11 +254,19 @@ pybind11::list process_lot(pybind11::list planes, pybind11::list stokes_groups, 
   std::vector<ProcessPlaneResult> results;
   {
     pybind11::gil_scoped_release release;
-    copies.run();
+    {
+      const ProfileRange copy_range{"copy inputs"};
+      copies.run();
+    }
 #ifdef BREIFAST_HAVE_GPU
     if (use_gpu)
     {
-      results = gpu::run_batch_core_gpu(lot.planes, lot.groups, config);
+      results = gpu::run_batch_core_gpu(lot.planes, lot.groups, config,
+                                        [&](const std::size_t index)
+                                        {
+                                          const ProfileRange cube_range{"copy cube"};
+                                          tbb::this_task_arena::isolate([&] { cube_copies[index].run(); });
+                                        });
     }
     else
     {
@@ -249,9 +278,12 @@ pybind11::list process_lot(pybind11::list planes, pybind11::list stokes_groups, 
   }
 
   pybind11::list out;
-  for (const ProcessPlaneResult &result : results)
   {
-    out.append(to_python_result(result));
+    const ProfileRange results_range{"convert results"};
+    for (const ProcessPlaneResult &result : results)
+    {
+      out.append(to_python_result(result));
+    }
   }
   return out;
 }

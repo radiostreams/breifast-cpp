@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
+#include <functional>
 #include <mutex>
 #include <span>
 #include <vector>
@@ -14,7 +15,8 @@ namespace breifast::gpu
 {
 std::vector<ProcessPlaneResult> run_batch_core_gpu(std::vector<PlaneBatchItem> &items,
                                                    const std::vector<PlaneBatchGroup> &groups,
-                                                   const PlaneConfig &config)
+                                                   const PlaneConfig &config,
+                                                   const std::function<void(std::size_t)> &prepare)
 {
   const NvtxRange range{"batch"};
   validate_plane_inputs(items, groups, config);
@@ -57,6 +59,10 @@ std::vector<ProcessPlaneResult> run_batch_core_gpu(std::vector<PlaneBatchItem> &
           for (std::size_t index = next++; index < items.size() && !tbb::is_current_task_group_canceling();
                index = next++)
           {
+            if (prepare)
+            {
+              prepare(index);
+            }
             results[index] = gpu_process_plane(slot, shared, items[index], config);
           }
         });

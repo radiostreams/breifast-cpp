@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstddef>
+#include <functional>
 #include <vector>
 
 #include "plane_lot_dispatch.hpp"
@@ -21,8 +23,11 @@ ProcessPlaneResult gpu_process_plane(const PlaneBatchItem &item, const PlaneBatc
                                      const PlaneConfig &config);
 
 /// Runs every plane of `items` on the GPU, after validate_plane_inputs(). If a plane throws, the planes not started yet
-/// are skipped and its exception is rethrown once the planes in flight have finished.
+/// are skipped and its exception is rethrown once the planes in flight have finished. `prepare(index)`, when given,
+/// runs in the slot's task right before plane `index` is processed: the bindings copy the plane's cube there, so that
+/// the copies overlap the other planes' GPU work.
 std::vector<ProcessPlaneResult> run_batch_core_gpu(std::vector<PlaneBatchItem> &items,
                                                    const std::vector<PlaneBatchGroup> &groups,
-                                                   const PlaneConfig &config);
+                                                   const PlaneConfig &config,
+                                                   const std::function<void(std::size_t)> &prepare = {});
 } // namespace breifast::gpu
