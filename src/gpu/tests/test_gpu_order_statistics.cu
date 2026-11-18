@@ -82,6 +82,20 @@ TEST_CASE("gpu_median averages the middle ranks when the upper rank starts a rep
   CHECK_THAT(run_median({5.F, 7.F, 9.F, 9.F}, true), WithinRel(8.F));
 }
 
+TEST_CASE("gpu_median finds the lower middle rank among keys that share the upper rank's high bits",
+          "[gpu][order_statistics]")
+{
+  // Sorted {-5, 1, above_one, 5}: the middle ranks 1 and 2 are adjacent floats whose keys differ in the last byte only
+  // (0x3F800000 and 0x3F800001), so the lower one comes from the last pass's histogram, not from the keys below the
+  // 24-bit prefix.
+  const float above_one = std::nextafter(1.F, 2.F);
+  const float expected = (1.F + above_one) / 2.F;
+  CHECK(run_median({above_one, -5.F, 5.F, 1.F}, false) == expected);
+  CHECK(run_median({above_one, -0.25F, 5.F, -1.F}, true) == expected);
+  // The same with the lower middle rank far below: from the keys below the prefix.
+  CHECK(run_median({1.F, -5.F, 5.F, 0.25F}, false) == (0.25F + 1.F) / 2.F);
+}
+
 TEST_CASE("gpu_median matches numpy on seeded arrays with many ties, odd and even n", "[gpu][order_statistics]")
 {
   // Expected values from np.median(x) and np.median(np.abs(x)) on the float32 arrays built by the same LCG.

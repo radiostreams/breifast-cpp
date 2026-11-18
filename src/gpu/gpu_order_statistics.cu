@@ -18,7 +18,7 @@ constexpr unsigned int histogram_max_blocks = 1024;
 // into a histogram of its own in shared memory, then adds it to the device-wide 256-bin one once. The grid is capped
 // and strides over the values, so that the merge costs one atomic per bin per block instead of one per value.
 __global__ void radix_histogram_kernel(const float *values, size_t n, uint32_t *histogram, int shift, bool abs_mode,
-                                       const uint32_t *state)
+                                       const uint32_t *state, uint32_t *lower_max)
 {
   __shared__ uint32_t local[radix_bins];
   for (size_t bin = threadIdx.x; bin < radix_bins; bin += blockDim.x)
@@ -29,6 +29,9 @@ __global__ void radix_histogram_kernel(const float *values, size_t n, uint32_t *
 
   const uint32_t prefix = state[1];
   const uint32_t coverage = state[2];
+  // Last pass, even n: also the largest key below the 24-bit prefix, for rank n/2 - 1 (see radix_finalize_kernel).
+  const bool track_lower = shift == 0 && n % 2 == 0;
+  uint32_t local_lower = 0;
   const size_t stride = static_cast<size_t>(gridDim.x) * blockDim.x;
   for (size_t idx = global_index(); idx < n; idx += stride)
   {
@@ -36,6 +39,10 @@ __global__ void radix_histogram_kernel(const float *values, size_t n, uint32_t *
     if ((key & coverage) == prefix)
     {
       atomicAdd(&local[(key >> shift) & 0xFFU], 1U);
+    }
+    else if (track_lower && key < prefix)
+    {
+      local_lower = max(local_lower, key);
     }
   }
   __syncthreads();
@@ -45,6 +52,15 @@ __global__ void radix_histogram_kernel(const float *values, size_t n, uint32_t *
     if (local[bin] != 0)
     {
       atomicAdd(&histogram[bin], local[bin]);
+    }
+  }
+
+  if (track_lower)
+  {
+    const uint32_t block_lower = block_reduce(local_lower, UintMax{});
+    if (threadIdx.x == 0 && block_lower != 0)
+    {
+      atomicMax(lower_max, block_lower);
     }
   }
 }
@@ -101,26 +117,22 @@ __global__ void radix_scan_kernel(const uint32_t *histogram, size_t rank, int sh
   select_radix_digit(histogram, rank, shift, state[0], state[1], state[2]);
 }
 
-// Even n only: the largest key strictly below the resolved rank-k key, to resolve rank k-1 when it is not a repeat.
-__global__ void radix_refine_kernel(const float *values, size_t n, bool abs_mode, const uint32_t *state,
-                                    uint32_t *lower_max)
+// Single thread. Rank n/2 - 1 when it is not a repeat of the rank-n/2 key: the highest non-empty bin of the last pass
+// below that key's bin, else the largest key below its 24-bit prefix.
+__global__ void radix_finalize_kernel(const uint32_t *histogram, const uint32_t *state, const uint32_t *lower_max,
+                                      bool abs_mode, size_t n, float scale, float *out_median)
 {
-  const size_t idx = global_index();
-  if (idx < n)
+  const uint32_t key = state[1];
+  uint32_t lower = *lower_max;
+  for (uint32_t bin = key & 0xFFU; bin-- > 0;)
   {
-    const uint32_t key = abs_mode ? abs_key(values[idx]) : signed_key(values[idx]);
-    if (key < state[1])
+    if (histogram[bin] != 0)
     {
-      atomicMax(lower_max, key);
+      lower = (key & 0xFFFFFF00U) | bin;
+      break;
     }
   }
-}
-
-// Single thread. state[1] is the full rank-n/2 key.
-__global__ void radix_finalize_kernel(const uint32_t *state, const uint32_t *lower_max, bool abs_mode, size_t n,
-                                      float scale, float *out_median)
-{
-  *out_median = median_of_keys(n, state[0], state[1], *lower_max, abs_mode) * scale;
+  *out_median = median_of_keys(n, state[0], key, lower, abs_mode) * scale;
 }
 
 void gpu_median_impl(const float *values, size_t n, float *out_median, bool abs_mode, float scale,
@@ -141,16 +153,12 @@ void gpu_median_impl(const float *values, size_t n, float *out_median, bool abs_
   for (int shift = 24; shift >= 0; shift -= 8)
   {
     CHECK_GPU(cudaMemsetAsync(histogram, 0, radix_bins * sizeof(uint32_t), stream));
-    launch(radix_histogram_kernel, histogram_grid, block_size, stream, values, n, histogram, shift, abs_mode, state);
+    launch(radix_histogram_kernel, histogram_grid, block_size, stream, values, n, histogram, shift, abs_mode, state,
+           lower_max);
     launch(radix_scan_kernel, 1, 1, stream, histogram, n / 2, shift, state);
   }
 
-  if (n % 2 == 0)
-  {
-    launch_per_element(radix_refine_kernel, n, stream, values, n, abs_mode, state, lower_max);
-  }
-
-  launch(radix_finalize_kernel, 1, 1, stream, state, lower_max, abs_mode, n, scale, out_median);
+  launch(radix_finalize_kernel, 1, 1, stream, histogram, state, lower_max, abs_mode, n, scale, out_median);
 }
 } // namespace
 

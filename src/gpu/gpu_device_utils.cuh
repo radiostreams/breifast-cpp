@@ -34,6 +34,10 @@ struct FloatMax
 {
   __device__ float operator()(const float a, const float b) const { return fmaxf(a, b); }
 };
+struct UintMax
+{
+  __device__ uint32_t operator()(const uint32_t a, const uint32_t b) const { return a > b ? a : b; }
+};
 
 /// Atomically replaces `*address` by `op(value, *address)` with a compare-and-swap loop, for float operations that
 /// have no hardware atomic (FloatMin, FloatMax).
