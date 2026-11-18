@@ -17,14 +17,12 @@ namespace breifast::gpu
 
 namespace
 {
-constexpr unsigned int background = ~0U;
-
 __global__ void init_labels_kernel(const bool *const mask, const size_t n, unsigned int *const labels)
 {
   const size_t index = global_index();
   if (index < n)
   {
-    labels[index] = mask[index] ? static_cast<unsigned int>(index) : background;
+    labels[index] = mask[index] ? static_cast<unsigned int>(index) : background_label;
   }
 }
 
@@ -257,7 +255,6 @@ void gpu_label_islands(const bool *const mask, const size_t n_y, const size_t n_
 
   const size_t n = n_y * n_x;
   assert(scratch.root_ranks.size() >= n);
-  launch_per_element(init_labels_kernel, n, stream, mask, n, labels);
   launch_cooperative(converge_labels_kernel, n, stream, mask, n_y, n_x, labels, scratch.changed.data());
 
   // Rank each component's root among the roots: an inclusive scan, in place.
@@ -267,6 +264,11 @@ void gpu_label_islands(const bool *const mask, const size_t n_y, const size_t n_
   CHECK_GPU(cub::DeviceScan::InclusiveSum(scratch.scan_storage.data(), scan_bytes, ranks, ranks, static_cast<int>(n),
                                           stream));
   launch_per_element(scatter_labels_kernel, n, stream, mask, n, labels, ranks, out_count);
+}
+
+void gpu_init_labels(const bool *const mask, const size_t n, unsigned int *const labels, cudaStream_t stream)
+{
+  launch_per_element(init_labels_kernel, n, stream, mask, n, labels);
 }
 
 void gpu_island_boost(const unsigned int *const labels_per_pixel, const float *const baseline_flux,

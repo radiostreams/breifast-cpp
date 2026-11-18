@@ -9,6 +9,10 @@
 // Host-side interface of the GPU kernels: the launch wrappers and the scratch they reuse.
 namespace breifast::gpu
 {
+/// Initial label of a pixel outside the mask, before gpu_label_islands converges; a pixel inside starts at its flat
+/// index.
+constexpr unsigned int background_label = ~0U;
+
 /// Device scratch of gpu_median and gpu_median_abs: the digit histogram, then the radix-select state (count below the
 /// prefix, prefix, coverage), the largest key below the prefix and the count of blocks done with the current pass.
 struct MedianScratch
@@ -122,12 +126,13 @@ void gpu_combine_noise_map(const float *rms, const float *base_noise, const floa
  *        `histogram1` under the second mask; `histogram2` under the third mask when `histogram_detail > 0`. Every
  *        non-null histogram is zeroed on every call, including the ones this band does not fill, matching the CPU.
  * @param out_min_sigma,out_max_sigma One float each; `+inf` and `lowest` when no pixel passes the third mask.
+ * @param labels `[n_pixels]`, written completely: the initial labels of gpu_label_islands for `image_mask`.
  */
 void gpu_snr_and_filters(const float *plane, const float *noise_map, const float *snr_cutoff, const float *flux_cutoff,
                          const float *median_noise, size_t n_pixels, const common::SnrFilterParams &params,
                          float *out_snr, const bool *accept_mask, bool *image_mask, unsigned long long *histogram0,
                          unsigned long long *histogram1, unsigned long long *histogram2, float *out_min_sigma,
-                         float *out_max_sigma, cudaStream_t stream = nullptr);
+                         float *out_max_sigma, unsigned int *labels, cudaStream_t stream = nullptr);
 
 /**
  * @brief Local RMS noise map: a sliding `boxsize x boxsize` window over `plane`, edge-corrected, square root of the
@@ -265,12 +270,16 @@ void gpu_gather_at_peaks(const float *plane, const float *noise_map, const float
  * enqueued on `stream` and converges on the device with a cooperative grid sync, so this call does not synchronise
  * `stream`. Requires cooperative-launch support. `n_y * n_x` must be positive.
  * @param mask `[n_y * n_x]` bools, row major.
- * @param labels `[n_y * n_x]` output labels, `0` outside every island.
+ * @param labels `[n_y * n_x]`: on entry the initial labels of `mask` (from gpu_snr_and_filters or gpu_init_labels), on
+ *        exit the island labels, `0` outside every island.
  * @param out_count One `unsigned int`, the number of islands.
  * @param scratch Grown to at least `n_y * n_x` pixels.
  */
 void gpu_label_islands(const bool *mask, size_t n_y, size_t n_x, unsigned int *labels, unsigned int *out_count,
                        LabelScratch &scratch, cudaStream_t stream = nullptr);
+
+/// Initial labels of gpu_label_islands for `mask`: the flat index where `mask` is set, background_label elsewhere.
+void gpu_init_labels(const bool *mask, size_t n, unsigned int *labels, cudaStream_t stream = nullptr);
 
 /**
  * @brief Per-label statistics of a labeled image: the `peak_per_label` outputs of the CPU label_islands() pass.

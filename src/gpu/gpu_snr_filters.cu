@@ -25,7 +25,8 @@ __global__ void snr_and_filters(const float *plane, const float *noise_map, cons
                                 const float *flux_cutoff, const float *median_noise, const size_t n_pixels,
                                 const common::SnrFilterParams params, float *out_snr, const bool *const accept_mask,
                                 bool *image_mask, unsigned long long *histogram0, unsigned long long *histogram1,
-                                unsigned long long *histogram2, float *out_min_sigma, float *out_max_sigma)
+                                unsigned long long *histogram2, float *out_min_sigma, float *out_max_sigma,
+                                unsigned int *labels)
 {
   constexpr float inf = cuda::std::numeric_limits<float>::infinity();
   const bool snr_cutoff_enabled = snr_cutoff != nullptr;
@@ -135,16 +136,23 @@ __global__ void snr_and_filters(const float *plane, const float *noise_map, cons
     out4.w = process(value4.w, noise4.w, mask4.w != 0, snr_cutoff_sum.w * params.inv_band_size,
                      flx_cutoff_sum.w * params.inv_band_size, snr4.w);
 
+    const auto i = static_cast<unsigned int>(4 * i4);
+    const uint4 labels4 = {out4.x ? i : background_label, out4.y ? i + 1 : background_label,
+                           out4.z ? i + 2 : background_label, out4.w ? i + 3 : background_label};
+
     reinterpret_cast<uchar4 *>(image_mask)[i4] = out4;
     reinterpret_cast<float4 *>(out_snr)[i4] = snr4;
+    reinterpret_cast<uint4 *>(labels)[i4] = labels4;
   }
 
   for (size_t i_pixel = 4 * n4 + global_index(); i_pixel < n_pixels; i_pixel += stride)
   {
     float snr;
-    image_mask[i_pixel] = process(plane[i_pixel], noise_map[i_pixel], accept_mask[i_pixel],
-                                  snr_cutoff_enabled ? band_mean(snr_cutoff, i_pixel) : 0.0f,
-                                  flux_cutoff_enabled ? band_mean(flux_cutoff, i_pixel) : 0.0f, snr);
+    const auto mask = process(plane[i_pixel], noise_map[i_pixel], accept_mask[i_pixel],
+                              snr_cutoff_enabled ? band_mean(snr_cutoff, i_pixel) : 0.0f,
+                              flux_cutoff_enabled ? band_mean(flux_cutoff, i_pixel) : 0.0f, snr);
+    image_mask[i_pixel] = mask;
+    labels[i_pixel] = mask ? static_cast<unsigned int>(i_pixel) : background_label;
     out_snr[i_pixel] = snr;
   }
 
@@ -179,7 +187,7 @@ void gpu_snr_and_filters(const float *plane, const float *noise_map, const float
                          const float *median_noise, size_t n_pixels, const common::SnrFilterParams &params,
                          float *out_snr, const bool *const accept_mask, bool *image_mask,
                          unsigned long long *histogram0, unsigned long long *histogram1, unsigned long long *histogram2,
-                         float *out_min_sigma, float *out_max_sigma, cudaStream_t stream)
+                         float *out_min_sigma, float *out_max_sigma, unsigned int *labels, cudaStream_t stream)
 {
   assert(n_pixels > 0);
   assert(params.max_sigma_bin > 0);
@@ -206,7 +214,7 @@ void gpu_snr_and_filters(const float *plane, const float *noise_map, const float
       static_cast<unsigned int>(std::min<std::size_t>((n_pixels + block_size - 1) / block_size, snr_max_blocks));
   snr_and_filters<<<grid, block_size, shared_bytes, stream>>>(
       plane, noise_map, snr_cutoff, flux_cutoff, median_noise, n_pixels, params, out_snr, accept_mask, image_mask,
-      histogram0, histogram1, histogram2, out_min_sigma, out_max_sigma);
+      histogram0, histogram1, histogram2, out_min_sigma, out_max_sigma, labels);
   CHECK_GPU(cudaGetLastError());
 }
 

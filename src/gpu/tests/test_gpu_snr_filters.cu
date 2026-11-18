@@ -17,6 +17,7 @@
 #include "gpu_test_utils.hpp"
 
 using breifast::gpu::DeviceVector;
+using breifast::gpu::background_label;
 using breifast::gpu::gpu_snr_and_filters;
 using breifast::gpu::Stream;
 using breifast::gpu::test::download;
@@ -153,12 +154,13 @@ Outputs run_gpu_snr_and_filters(const std::vector<float> &plane_values, const st
   auto device_histogram2 = upload(std::vector<unsigned long long>(n_bins, histogram_prefill));
   DeviceVector<float> device_min(1);
   DeviceVector<float> device_max(1);
+  auto device_labels = upload(std::vector<unsigned int>(n, 7U));
 
   const Stream stream;
   gpu_snr_and_filters(device_plane, device_noise, snr_cutoff_values.empty() ? nullptr : device_snr_cutoff.data(),
                       flux_cutoff_values.empty() ? nullptr : device_flux_cutoff.data(), device_median_noise, n, params,
-                      device_out, device_accept, device_mask, device_histogram0, device_histogram1, device_histogram2, device_min,
-                      device_max, stream);
+                      device_out, device_accept, device_mask, device_histogram0, device_histogram1, device_histogram2,
+                      device_min, device_max, device_labels, stream);
 
   std::string mask;
   mask.reserve(n);
@@ -166,6 +168,13 @@ Outputs run_gpu_snr_and_filters(const std::vector<float> &plane_values, const st
   {
     mask += value ? '1' : '0';
   }
+  // The initial labels of gpu_label_islands, for the mask just written.
+  std::vector<unsigned int> expected_labels(n);
+  for (size_t i_pixel = 0; i_pixel < n; ++i_pixel)
+  {
+    expected_labels[i_pixel] = mask[i_pixel] == '1' ? static_cast<unsigned int>(i_pixel) : background_label;
+  }
+  CHECK(download(device_labels, stream) == expected_labels);
   return {download(device_out, stream),
           mask,
           {download(device_histogram0, stream), download(device_histogram1, stream),

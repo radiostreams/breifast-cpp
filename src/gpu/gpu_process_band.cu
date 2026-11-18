@@ -101,7 +101,8 @@ void gpu_process_band(const GpuPlaneInput &plane, const GpuBand &band, GpuBandWo
 
     gpu_snr_and_filters(workspace.plane, workspace.noise_map, plane.snr_cutoff, plane.flux_cutoff, result.median_noise,
                         n_pixels, params, workspace.snr, band.accept_mask, workspace.mask, result.histogram0,
-                        result.histogram1, result.histogram2, result.min_sigma, result.max_sigma, stream);
+                        result.histogram1, result.histogram2, result.min_sigma, result.max_sigma, workspace.labels,
+                        stream);
 
     // As on the CPU: a single-channel band of a multi-channel plane writes its SNR into its channel of the cube, which
     // the bands after it and the spectral variance stats then read.
