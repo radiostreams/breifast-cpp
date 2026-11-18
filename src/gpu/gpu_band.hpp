@@ -15,7 +15,7 @@ namespace breifast
 struct PlaneBatchGroup;
 struct PlaneConfig;
 struct ProcessPlaneResult; // process_plane_result.hpp includes xtensor, which nvcc cannot compile
-}
+} // namespace breifast
 
 // The band level of the GPU pipeline, for gpu_plane.cpp and the tests.
 namespace breifast::gpu
@@ -24,10 +24,9 @@ namespace breifast::gpu
 /// and the plane-wide settings.
 struct GpuPlaneInput
 {
-  float *cube = nullptr; ///< [n_channels, n_y, n_x]; a single-channel band writes its SNR into its channel
-  const float *weights = nullptr;          ///< [n_channels]
-  const bool *accept_mask = nullptr;       ///< [n_channels, n_y, n_x]
-  const float *mean_image = nullptr;       ///< [n_channels, n_y, n_x]; null unless the mean is subtracted
+  float *cube = nullptr;             ///< [n_channels, n_y, n_x]; a single-channel band writes its SNR into its channel
+  const float *weights = nullptr;    ///< [n_channels]
+  const float *mean_image = nullptr; ///< [n_channels, n_y, n_x]; null unless the mean is subtracted
   const float *selfnoise_offset = nullptr; ///< [n_y, n_x]
   const float *selfnoise_raw = nullptr;    ///< [n_y, n_x]
   const float *dde_noise = nullptr;        ///< [n_y, n_x]
@@ -66,6 +65,7 @@ struct GpuBand
   const float *beam_kernel = nullptr; ///< device, (2 * beam_halfsize + 1)^2; null when the beam is disabled
   long beam_halfsize = 0;
   float beam_kernel_sum = 0.F; ///< summed on the host, as the CPU does
+  const bool *accept_mask = nullptr;
 };
 
 /// The per-island outputs of a band, declared once: IslandColumns<DeviceVector> on the device and
@@ -118,7 +118,6 @@ struct GpuBandWorkspace
   LabelScratch label_scratch;
   IslandScratch island_scratch;
 
-  DeviceVector<int> any_flag{1};
   DeviceVector<unsigned int> label_count{1};
 
   MedianScratch median_scratch;
@@ -149,9 +148,8 @@ struct GpuBandResult
 };
 
 /// Runs one band on `stream` and leaves its outputs in `result`, growing `workspace` and `result` to what the band
-/// needs. Returns false when the band's accept mask is empty: the band is skipped, as on the CPU. The caller has
-/// already skipped a band with no nonzero channel.
-bool gpu_process_band(const GpuPlaneInput &plane, const GpuBand &band, GpuBandWorkspace &workspace,
+/// needs.
+void gpu_process_band(const GpuPlaneInput &plane, const GpuBand &band, GpuBandWorkspace &workspace,
                       GpuBandResult &result, cudaStream_t stream);
 
 /// Host copy of a GpuBandResult: every island column holds label_count entries.
@@ -196,6 +194,8 @@ struct GpuGroupInputs
   DeviceVector<float> dde_noise;
   DeviceVector<float> snr_cutoff;
   DeviceVector<float> flux_cutoff;
+  DeviceVector<bool> band_masks;
+  std::vector<int> band_accepted;
 };
 
 /// What the planes of one call share on the device: every group's arrays and the baseline flux. Kept from call to call
@@ -208,6 +208,7 @@ struct GpuSharedInputs
 
   std::vector<GpuGroupInputs> groups; // indexed like batch_groups
   DeviceVector<float> baseline_flux;
+  DeviceVector<int> band_any;
 };
 
 /// Device copies of a plane's own inputs, grown to the largest plane and reused.
@@ -234,9 +235,9 @@ struct GpuSlot
   DeviceVector<float> sum_pow4;
 
   GpuSlot() = default;
-  GpuSlot(const GpuSlot&) = delete;
-  GpuSlot(GpuSlot&&) = default;
-  GpuSlot&& operator=(const GpuSlot&) = delete;
-  GpuSlot& operator=(GpuSlot&&) = default;
+  GpuSlot(const GpuSlot &) = delete;
+  GpuSlot(GpuSlot &&) = default;
+  GpuSlot &&operator=(const GpuSlot &) = delete;
+  GpuSlot &operator=(GpuSlot &&) = default;
 };
 } // namespace breifast::gpu

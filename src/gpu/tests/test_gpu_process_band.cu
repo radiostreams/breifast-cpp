@@ -57,12 +57,12 @@ struct Fixture
     selfnoise_offset = upload(std::vector<float>(n_pixels, 0.F));
     selfnoise_raw = upload(std::vector<float>(n_pixels, 1.F));
     dde_noise = upload(std::vector<float>(n_pixels, 0.F));
-    accept_mask = upload(std::vector<bool>(n_pixels * n_channels, accept_value));
+    accept_mask = upload(std::vector<bool>(n_pixels, accept_value));
+    band.accept_mask = accept_mask.data();
 
     plane = GpuPlaneInput{
         .cube = cube.data(),
         .weights = weights.data(),
-        .accept_mask = accept_mask.data(),
         .selfnoise_offset = selfnoise_offset.data(),
         .selfnoise_raw = selfnoise_raw.data(),
         .dde_noise = dde_noise.data(),
@@ -86,20 +86,14 @@ struct Fixture
 void set_accept_mask(Fixture &fixture, const std::vector<bool> &mask)
 {
   fixture.accept_mask = upload(mask);
-  fixture.plane.accept_mask = fixture.accept_mask.data();
+  fixture.band.accept_mask = fixture.accept_mask.data();
 }
 } // namespace
-
-TEST_CASE("gpu_process_band skips a band whose accept mask is empty", "[gpu][process_band]")
-{
-  Fixture fixture(false, true);
-  CHECK_FALSE(gpu_process_band(fixture.plane, fixture.band, fixture.workspace, fixture.result, fixture.stream));
-}
 
 TEST_CASE("gpu_process_band runs the RMS noise stage and reports no detections", "[gpu][process_band]")
 {
   Fixture fixture(true, true);
-  CHECK(gpu_process_band(fixture.plane, fixture.band, fixture.workspace, fixture.result, fixture.stream));
+  gpu_process_band(fixture.plane, fixture.band, fixture.workspace, fixture.result, fixture.stream);
   CHECK(fixture.result.label_count == 0U);
 
   CHECK_THAT(download_scalar(fixture.result.rms_floor.data(), fixture.stream), WithinRel(1.F, 1e-6));
@@ -117,7 +111,7 @@ TEST_CASE("gpu_process_band runs the RMS noise stage and reports no detections",
 TEST_CASE("gpu_process_band runs the MAD noise stage and reports no detections", "[gpu][process_band]")
 {
   Fixture fixture(true, false);
-  CHECK(gpu_process_band(fixture.plane, fixture.band, fixture.workspace, fixture.result, fixture.stream));
+  gpu_process_band(fixture.plane, fixture.band, fixture.workspace, fixture.result, fixture.stream);
   CHECK(fixture.result.label_count == 0U);
 
   CHECK_THAT(download_scalar(fixture.result.global_mad.data(), fixture.stream), WithinRel(1.4826F, 1e-6));
@@ -129,11 +123,11 @@ TEST_CASE("gpu_process_band reaches the detection stage", "[gpu][process_band]")
   Fixture fixture(true, true);
   fixture.plane.threshold = 0.5F;
 
-  std::vector<bool> mask(Fixture::n_pixels * Fixture::n_channels, false);
+  std::vector<bool> mask(Fixture::n_pixels, false);
   mask[0] = true;
   set_accept_mask(fixture, mask);
 
-  CHECK(gpu_process_band(fixture.plane, fixture.band, fixture.workspace, fixture.result, fixture.stream));
+  gpu_process_band(fixture.plane, fixture.band, fixture.workspace, fixture.result, fixture.stream);
   CHECK(fixture.result.label_count == 1U);
 }
 } // namespace process_band_tests
@@ -174,7 +168,6 @@ TEST_CASE("GpuBandWorkspace grows every buffer to what the plane needs", "[gpu][
   CHECK(workspace.labels.size() == n_pixels);
   CHECK(workspace.label_scratch.root_ranks.size() == n_pixels);
   CHECK(workspace.label_scratch.scan_storage.empty() == false);
-  CHECK(workspace.any_flag.size() == 1);
   CHECK(workspace.label_count.size() == 1);
 }
 

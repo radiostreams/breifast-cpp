@@ -141,7 +141,13 @@ Outputs run_gpu_snr_and_filters(const std::vector<float> &plane_values, const st
   const auto device_flux_cutoff = upload(flux_cutoff_values);
   const auto device_median_noise = upload(std::vector<float>{params.median_noise});
   auto device_out = upload(std::vector<float>(n, snr_prefill));
-  auto device_mask = upload(host_mask);
+  const auto device_accept = upload(host_mask);
+  std::vector<bool> inverted_mask(n);
+  for (size_t i_pixel = 0; i_pixel < n; ++i_pixel)
+  {
+    inverted_mask[i_pixel] = !host_mask[i_pixel];
+  }
+  auto device_mask = upload(inverted_mask);
   auto device_histogram0 = upload(std::vector<unsigned long long>(n_bins, histogram_prefill));
   auto device_histogram1 = upload(std::vector<unsigned long long>(n_bins, histogram_prefill));
   auto device_histogram2 = upload(std::vector<unsigned long long>(n_bins, histogram_prefill));
@@ -151,7 +157,7 @@ Outputs run_gpu_snr_and_filters(const std::vector<float> &plane_values, const st
   const Stream stream;
   gpu_snr_and_filters(device_plane, device_noise, snr_cutoff_values.empty() ? nullptr : device_snr_cutoff.data(),
                       flux_cutoff_values.empty() ? nullptr : device_flux_cutoff.data(), device_median_noise, n, params,
-                      device_out, device_mask, device_histogram0, device_histogram1, device_histogram2, device_min,
+                      device_out, device_accept, device_mask, device_histogram0, device_histogram1, device_histogram2, device_min,
                       device_max, stream);
 
   std::string mask;

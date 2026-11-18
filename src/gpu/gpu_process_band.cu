@@ -11,14 +11,6 @@ namespace breifast::gpu
 {
 namespace
 {
-int read_flag(int *flag, cudaStream_t stream)
-{
-  int host_flag = 0;
-  CHECK_GPU(cudaMemcpyAsync(&host_flag, flag, sizeof(int), cudaMemcpyDeviceToHost, stream));
-  CHECK_GPU(cudaStreamSynchronize(stream));
-  return host_flag;
-}
-
 unsigned int read_count(const unsigned int *count, cudaStream_t stream)
 {
   unsigned int host_count = 0;
@@ -52,7 +44,7 @@ template <typename T> void copy_scalar(const DeviceVector<T> &device, T &host, c
 }
 } // namespace
 
-bool gpu_process_band(const GpuPlaneInput &plane, const GpuBand &band, GpuBandWorkspace &workspace,
+void gpu_process_band(const GpuPlaneInput &plane, const GpuBand &band, GpuBandWorkspace &workspace,
                       GpuBandResult &result, cudaStream_t stream)
 {
   const std::size_t n_pixels = plane.n_pixels();
@@ -60,23 +52,14 @@ bool gpu_process_band(const GpuPlaneInput &plane, const GpuBand &band, GpuBandWo
   assert(band.start >= 0 && band.start < band.stop && static_cast<std::size_t>(band.stop) <= plane.n_channels);
   assert(plane.max_sigma_bin > 0);
   assert(plane.boxsize >= 0 && plane.inner_boxsize >= 0);
-  assert(plane.cube != nullptr && plane.weights != nullptr && plane.accept_mask != nullptr &&
-         plane.selfnoise_offset != nullptr && plane.selfnoise_raw != nullptr && plane.dde_noise != nullptr);
+  assert(plane.cube != nullptr && plane.weights != nullptr && plane.selfnoise_offset != nullptr &&
+         plane.selfnoise_raw != nullptr && plane.dde_noise != nullptr);
   assert(band.beam_kernel == nullptr || (band.beam_halfsize >= 0 && plane.max_to_std_ratio > 0.F));
 
   const float inv_band_size = 1.F / static_cast<float>(band.stop - band.start);
   const auto histogram_bins = static_cast<std::size_t>(2 * plane.max_sigma_bin);
   workspace.ensure(plane);
   result.ensure(0, histogram_bins); // the island columns grow once the islands are counted
-
-  {
-    const NvtxRange range{"mask"};
-    gpu_mask_or(plane.accept_mask, n_pixels, band.start, band.stop, workspace.mask, workspace.any_flag, stream);
-    if (read_flag(workspace.any_flag, stream) == 0)
-    {
-      return false;
-    }
-  }
 
   {
     const NvtxRange range{"band image and noise"};
@@ -89,8 +72,8 @@ bool gpu_process_band(const GpuPlaneInput &plane, const GpuBand &band, GpuBandWo
     const float *base_noise = result.global_mad;
     if (plane.use_rms_noise_estimator)
     {
-      gpu_rms_noise_map(workspace.plane, plane.n_y, plane.n_x, plane.boxsize, workspace.row_sums,
-                        workspace.row_prefix, workspace.row_prefix_scan_storage, workspace.rms_map, stream);
+      gpu_rms_noise_map(workspace.plane, plane.n_y, plane.n_x, plane.boxsize, workspace.row_sums, workspace.row_prefix,
+                        workspace.row_prefix_scan_storage, workspace.rms_map, stream);
       gpu_median(workspace.rms_map, n_pixels, result.rms_floor, workspace.median_scratch, stream);
       rms = workspace.rms_map;
       base_noise = result.rms_floor;
@@ -117,8 +100,8 @@ bool gpu_process_band(const GpuPlaneInput &plane, const GpuBand &band, GpuBandWo
     params.threshold = plane.threshold;
 
     gpu_snr_and_filters(workspace.plane, workspace.noise_map, plane.snr_cutoff, plane.flux_cutoff, result.median_noise,
-                        n_pixels, params, workspace.snr, workspace.mask, result.histogram0, result.histogram1,
-                        result.histogram2, result.min_sigma, result.max_sigma, stream);
+                        n_pixels, params, workspace.snr, band.accept_mask, workspace.mask, result.histogram0,
+                        result.histogram1, result.histogram2, result.min_sigma, result.max_sigma, stream);
 
     // As on the CPU: a single-channel band of a multi-channel plane writes its SNR into its channel of the cube, which
     // the bands after it and the spectral variance stats then read.
@@ -140,7 +123,7 @@ bool gpu_process_band(const GpuPlaneInput &plane, const GpuBand &band, GpuBandWo
   result.label_count = n_islands;
   if (n_islands == 0)
   {
-    return true;
+    return;
   }
   workspace.island_scratch.ensure(n_islands);
   result.ensure(n_islands, histogram_bins);
@@ -193,8 +176,6 @@ bool gpu_process_band(const GpuPlaneInput &plane, const GpuBand &band, GpuBandWo
       CHECK_GPU(cudaMemsetAsync(result.islands.boost, 0, n_islands * sizeof(float), stream));
     }
   }
-
-  return true;
 }
 
 void GpuBandWorkspace::ensure(const GpuPlaneInput &input)
