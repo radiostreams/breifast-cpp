@@ -14,7 +14,7 @@ namespace breifast::gpu
 struct MedianScratch
 {
   static constexpr std::size_t histogram_bins = 256;
-  DeviceVector<std::uint32_t> words{histogram_bins + 4};
+  DeviceVector<std::uint32_t> words{histogram_bins + 5}; // histogram, then below, prefix, coverage, lower_max, done
 };
 
 /// Device scratch of gpu_label_islands: the per-pixel root ranks, the convergence flag, and the temporary storage of
