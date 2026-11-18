@@ -16,25 +16,34 @@ namespace
 /// Blocks of the histogram kernel at most: a few waves on any current GPU.
 constexpr unsigned int histogram_max_blocks = 1024;
 
-// One pass of the radix select, most significant byte first, over the keys whose resolved high bytes equal the prefix.
-// A block counts into a histogram of its own in shared memory, then adds it to the device-wide 256-bin one once; the
-// grid is capped and strides over the values, so that the merge costs one atomic per bin per block. Scratch:
-// histogram[256], then state = below, prefix, coverage, then lower_max and done (blocks finished with this pass). The
-// last block to finish picks the byte for the next pass and, after the last pass, writes the median; it clears the
-// histogram and the counter behind it.
-__global__ void radix_select_pass_kernel(const float *values, size_t n, uint32_t *histogram, int shift, bool abs_mode,
-                                         uint32_t *state, uint32_t *lower_max, uint32_t *done, float scale,
-                                         float *out_median)
+/// The median's radix select: three digits of 11, 11 and 10 bits, most significant first.
+constexpr uint32_t select_bins = 2048;
+constexpr int select_shifts[] = {21, 10, 0};
+constexpr uint32_t select_masks[] = {0x7FFU, 0x7FFU, 0x3FFU};
+constexpr uint32_t bins_per_thread = select_bins / block_size; // the last block scans 8 bins per thread
+
+// One pass of the radix select over the keys whose resolved high digits equal the prefix. A block counts into a
+// histogram of its own in shared memory, then adds it to the device-wide one once; the grid is capped and strides over
+// the values, so that the merge costs one atomic per bin per block. Scratch: histogram[select_bins], then state =
+// below, prefix, coverage, then lower_max and done (blocks finished with this pass). The last block to finish picks the
+// digit for the next pass and, after the last pass, writes the median; it clears the histogram and the counter behind
+// it.
+__global__ void radix_select_pass_kernel(const float *values, size_t n, uint32_t *histogram, int shift, uint32_t mask,
+                                         bool abs_mode, uint32_t *state, uint32_t *lower_max, uint32_t *done,
+                                         float scale, float *out_median)
 {
-  static_assert(block_size == radix_bins, "the last block scans one bin per thread");
-  __shared__ uint32_t local[radix_bins];
-  local[threadIdx.x] = 0;
+  static_assert(select_bins % block_size == 0);
+  __shared__ uint32_t local[select_bins];
+  for (uint32_t bin = threadIdx.x; bin < select_bins; bin += blockDim.x)
+  {
+    local[bin] = 0;
+  }
   __syncthreads();
 
   const uint32_t below = state[0];
   const uint32_t prefix = state[1];
   const uint32_t coverage = state[2];
-  // Last pass, even n: also the largest key below the 24-bit prefix, for rank n/2 - 1.
+  // Last pass, even n: also the largest key below the 22-bit prefix, for rank n/2 - 1.
   const bool track_lower = shift == 0 && n % 2 == 0;
   uint32_t local_lower = 0;
   // Four values per load and two loads in flight per iteration: one 4-byte load per thread does not cover the memory
@@ -44,7 +53,7 @@ __global__ void radix_select_pass_kernel(const float *values, size_t n, uint32_t
     const uint32_t key = abs_mode ? abs_key(value) : signed_key(value);
     if ((key & coverage) == prefix)
     {
-      atomicAdd(&local[(key >> shift) & 0xFFU], 1U);
+      atomicAdd(&local[(key >> shift) & mask], 1U);
     }
     else if (track_lower && key < prefix)
     {
@@ -79,9 +88,12 @@ __global__ void radix_select_pass_kernel(const float *values, size_t n, uint32_t
     count_value(values[idx]);
   }
   __syncthreads();
-  if (local[threadIdx.x] != 0)
+  for (uint32_t bin = threadIdx.x; bin < select_bins; bin += blockDim.x)
   {
-    atomicAdd(&histogram[threadIdx.x], local[threadIdx.x]);
+    if (local[bin] != 0)
+    {
+      atomicAdd(&histogram[bin], local[bin]);
+    }
   }
   if (track_lower)
   {
@@ -104,30 +116,49 @@ __global__ void radix_select_pass_kernel(const float *values, size_t n, uint32_t
     return;
   }
 
-  // Every block's counts are in: the bin that holds rank n/2.
-  const uint32_t bin = threadIdx.x;
-  const uint32_t count = __ldcg(&histogram[bin]);
+  // Every block's counts are in: the bin that holds rank n/2. Thread t owns bins [8t, 8t + 8).
+  uint32_t counts[bins_per_thread];
+  uint32_t thread_total = 0;
+  for (uint32_t j = 0; j < bins_per_thread; ++j)
+  {
+    counts[j] = __ldcg(&histogram[threadIdx.x * bins_per_thread + j]);
+    thread_total += counts[j];
+  }
   using BlockScan = cub::BlockScan<uint32_t, block_size>;
   __shared__ typename BlockScan::TempStorage scan_storage;
   __shared__ uint32_t selected_bin;
   uint32_t before = 0;
-  BlockScan(scan_storage).ExclusiveSum(count, before);
-  const size_t first = size_t{below} + before;
+  BlockScan(scan_storage).ExclusiveSum(thread_total, before);
   const size_t rank = n / 2;
-  if (count != 0 && first <= rank && rank < first + count)
+  size_t first = size_t{below} + before;
+  for (uint32_t j = 0; j < bins_per_thread; ++j)
   {
-    selected_bin = bin;
-    state[0] = static_cast<uint32_t>(first);
-    state[1] = prefix | (bin << shift);
-    state[2] = coverage | (0xFFU << shift);
+    if (counts[j] != 0 && first <= rank && rank < first + counts[j])
+    {
+      const uint32_t bin = threadIdx.x * bins_per_thread + j;
+      selected_bin = bin;
+      state[0] = static_cast<uint32_t>(first);
+      state[1] = prefix | (bin << shift);
+      state[2] = coverage | (mask << shift);
+    }
+    first += counts[j];
   }
   __syncthreads();
 
   if (shift == 0)
   {
     // Rank n/2 - 1 when it is not a repeat: the highest non-empty bin below the selected one, else the largest key
-    // below the 24-bit prefix.
-    const uint32_t lower_bin = block_reduce(count != 0 && bin < selected_bin ? bin + 1 : 0U, UintMax{});
+    // below the 22-bit prefix.
+    uint32_t thread_lower = 0;
+    for (uint32_t j = 0; j < bins_per_thread; ++j)
+    {
+      const uint32_t bin = threadIdx.x * bins_per_thread + j;
+      if (counts[j] != 0 && bin < selected_bin)
+      {
+        thread_lower = bin + 1;
+      }
+    }
+    const uint32_t lower_bin = block_reduce(thread_lower, UintMax{});
     if (threadIdx.x == 0)
     {
       const uint32_t key = prefix | selected_bin;
@@ -136,7 +167,10 @@ __global__ void radix_select_pass_kernel(const float *values, size_t n, uint32_t
     }
   }
 
-  histogram[bin] = 0; // every thread has read its bin: the next pass starts from zero
+  for (uint32_t j = 0; j < bins_per_thread; ++j) // every thread has read its bins: the next pass starts from zero
+  {
+    histogram[threadIdx.x * bins_per_thread + j] = 0;
+  }
   if (threadIdx.x == 0)
   {
     *done = 0;
@@ -192,13 +226,13 @@ __global__ void radix_histogram_private_kernel(const float *values, size_t n, ui
 void gpu_median_impl(const float *values, size_t n, float *out_median, bool abs_mode, float scale,
                      MedianScratch &scratch, cudaStream_t stream)
 {
-  static_assert(MedianScratch::histogram_bins == radix_bins);
+  static_assert(MedianScratch::histogram_bins == select_bins);
   assert(n > 0);
-  assert(scratch.words.size() == radix_bins + 5);
+  assert(scratch.words.size() == select_bins + 5);
   assert(reinterpret_cast<std::uintptr_t>(values) % alignof(float4) == 0); // whole buffers: 256-byte aligned
 
   uint32_t *histogram = scratch.words.data();
-  uint32_t *state = histogram + radix_bins; // below, prefix, coverage
+  uint32_t *state = histogram + select_bins; // below, prefix, coverage
   uint32_t *lower_max = state + 3;
   uint32_t *done = state + 4;
   // One memset per median: the passes clear the histogram and the block counter behind them.
@@ -206,10 +240,10 @@ void gpu_median_impl(const float *values, size_t n, float *out_median, bool abs_
 
   const auto histogram_grid =
       static_cast<unsigned int>(std::min<size_t>((n + block_size - 1) / block_size, histogram_max_blocks));
-  for (int shift = 24; shift >= 0; shift -= 8)
+  for (int pass = 0; pass < 3; ++pass)
   {
-    launch(radix_select_pass_kernel, histogram_grid, block_size, stream, values, n, histogram, shift, abs_mode, state,
-           lower_max, done, scale, out_median);
+    launch(radix_select_pass_kernel, histogram_grid, block_size, stream, values, n, histogram, select_shifts[pass],
+           select_masks[pass], abs_mode, state, lower_max, done, scale, out_median);
   }
 }
 } // namespace

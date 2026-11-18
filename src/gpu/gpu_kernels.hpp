@@ -9,12 +9,12 @@
 // Host-side interface of the GPU kernels: the launch wrappers and the scratch they reuse.
 namespace breifast::gpu
 {
-/// Device scratch of gpu_median and gpu_median_abs: the 256-bin digit histogram, then the radix-select state (count
-/// below the prefix, prefix, coverage) and the largest key below the median.
+/// Device scratch of gpu_median and gpu_median_abs: the digit histogram, then the radix-select state (count below the
+/// prefix, prefix, coverage), the largest key below the prefix and the count of blocks done with the current pass.
 struct MedianScratch
 {
-  static constexpr std::size_t histogram_bins = 256;
-  DeviceVector<std::uint32_t> words{histogram_bins + 5}; // histogram, then below, prefix, coverage, lower_max, done
+  static constexpr std::size_t histogram_bins = 2048;
+  DeviceVector<std::uint32_t> words{histogram_bins + 5};
 };
 
 /// Device scratch of gpu_label_islands: the per-pixel root ranks, the convergence flag, and the temporary storage of
