@@ -33,7 +33,6 @@ __global__ void snr_and_filters(const float *plane, const float *noise_map, cons
   const bool noise_rejection_disabled = params.reject_noise_threshold == 0.F;
   const float noise_rejection_threshold = median_noise[0] * params.reject_noise_threshold;
 
-  // The block's histograms, flushed to the global ones once at the end.
   const auto n_bins = static_cast<size_t>(2 * params.max_sigma_bin);
   extern __shared__ unsigned long long shared_histograms[];
   auto *const shared_histogram0 = shared_histograms;
@@ -47,36 +46,15 @@ __global__ void snr_and_filters(const float *plane, const float *noise_map, cons
 
   float local_min = inf;
   float local_max = -inf;
-  for (size_t i_pixel = global_index(); i_pixel < n_pixels; i_pixel += size_t{gridDim.x} * blockDim.x)
+  const auto process = [&](const float plane_val, const float noise, const bool mask_in, const float snr_threshold,
+                           const float flux_threshold, float &snr) -> bool
   {
-    const float noise = noise_map[i_pixel];
-    const bool valid = noise != 0.0f && isfinite(noise);
-    const float plane_val = plane[i_pixel];
-    const float snr = valid ? plane_val / noise : 0.0f;
-    const bool mask0 = image_mask[i_pixel] && valid;
+    const bool valid = noise != 0.F && isfinite(noise);
+    snr = valid ? plane_val / noise : 0.F;
 
-    float snr_cutoff_threshold = 0.0f;
-    if (snr_cutoff_enabled)
-    {
-      for (auto i_channel = params.band_start; i_channel < params.band_stop; ++i_channel)
-      {
-        snr_cutoff_threshold += snr_cutoff[i_channel * n_pixels + i_pixel];
-      }
-      snr_cutoff_threshold *= params.inv_band_size;
-    }
-
-    float flux_cutoff_threshold = 0.0f;
-    if (flux_cutoff_enabled)
-    {
-      for (auto i_channel = params.band_start; i_channel < params.band_stop; ++i_channel)
-      {
-        flux_cutoff_threshold += flux_cutoff[i_channel * n_pixels + i_pixel];
-      }
-      flux_cutoff_threshold *= params.inv_band_size;
-    }
-
-    const bool mask1 = mask0 && (!snr_cutoff_enabled || fabsf(snr) >= snr_cutoff_threshold);
-    const bool mask2 = mask1 && (!flux_cutoff_enabled || fabsf(plane_val) >= flux_cutoff_threshold);
+    const bool mask0 = mask_in && valid;
+    const bool mask1 = mask0 && (!snr_cutoff_enabled || fabsf(snr) >= snr_threshold);
+    const bool mask2 = mask1 && (!flux_cutoff_enabled || fabsf(plane_val) >= flux_threshold);
     const bool mask3 = mask2 && (noise_rejection_disabled || noise <= noise_rejection_threshold);
 
     float bin_index = floorf(snr + params.max_sigma_bin);
@@ -103,9 +81,70 @@ __global__ void snr_and_filters(const float *plane, const float *noise_map, cons
       local_min = fminf(local_min, snr);
       local_max = fmaxf(local_max, snr);
     }
+    return (mask3 ? fabsf(snr) : 0.F) >= params.threshold;
+  };
 
-    // The intermediate masks were only ever overwritten by this one: a single write.
-    image_mask[i_pixel] = (mask3 ? fabsf(snr) : 0.0f) >= params.threshold;
+  const auto band_mean = [&](const float *cutoff, const size_t i_pixel)
+  {
+    float sum = 0.F;
+    for (auto i_channel = params.band_start; i_channel < params.band_stop; ++i_channel)
+    {
+      sum += cutoff[i_channel * n_pixels + i_pixel];
+    }
+    return sum * params.inv_band_size;
+  };
+
+  const size_t stride = static_cast<size_t>(gridDim.x) * blockDim.x;
+
+  const size_t n4 = n_pixels % 4 == 0 ? n_pixels / 4 : 0;
+  for (size_t i4 = global_index(); i4 < n4; i4 += stride)
+  {
+    const float4 value4 = reinterpret_cast<const float4 *>(plane)[i4];
+    const float4 noise4 = reinterpret_cast<const float4 *>(noise_map)[i4];
+    const uchar4 mask4 = reinterpret_cast<const uchar4 *>(image_mask)[i4];
+
+    float4 snr_cutoff_sum = {0.F, 0.F, 0.F, 0.F};
+    float4 flx_cutoff_sum = {0.F, 0.F, 0.F, 0.F};
+
+    for (auto i_channel = params.band_start; snr_cutoff_enabled && i_channel < params.band_stop; ++i_channel)
+    {
+      const float4 snr_cutoff_value = reinterpret_cast<const float4 *>(snr_cutoff + i_channel * n_pixels)[i4];
+      snr_cutoff_sum.x += snr_cutoff_value.x;
+      snr_cutoff_sum.y += snr_cutoff_value.y;
+      snr_cutoff_sum.z += snr_cutoff_value.z;
+      snr_cutoff_sum.w += snr_cutoff_value.w;
+    }
+
+    for (auto i_channel = params.band_start; flux_cutoff_enabled && i_channel < params.band_stop; ++i_channel)
+    {
+      const float4 flx_cutoff_value = reinterpret_cast<const float4 *>(flux_cutoff + i_channel * n_pixels)[i4];
+      flx_cutoff_sum.x += flx_cutoff_value.x;
+      flx_cutoff_sum.y += flx_cutoff_value.y;
+      flx_cutoff_sum.z += flx_cutoff_value.z;
+      flx_cutoff_sum.w += flx_cutoff_value.w;
+    }
+
+    float4 snr4;
+    uchar4 out4;
+    out4.x = process(value4.x, noise4.x, mask4.x != 0, snr_cutoff_sum.x * params.inv_band_size,
+                     flx_cutoff_sum.x * params.inv_band_size, snr4.x);
+    out4.y = process(value4.y, noise4.y, mask4.y != 0, snr_cutoff_sum.y * params.inv_band_size,
+                     flx_cutoff_sum.y * params.inv_band_size, snr4.y);
+    out4.z = process(value4.z, noise4.z, mask4.z != 0, snr_cutoff_sum.z * params.inv_band_size,
+                     flx_cutoff_sum.z * params.inv_band_size, snr4.z);
+    out4.w = process(value4.w, noise4.w, mask4.w != 0, snr_cutoff_sum.w * params.inv_band_size,
+                     flx_cutoff_sum.w * params.inv_band_size, snr4.w);
+
+    reinterpret_cast<uchar4 *>(image_mask)[i4] = out4;
+    reinterpret_cast<float4 *>(out_snr)[i4] = snr4;
+  }
+
+  for (size_t i_pixel = 4 * n4 + global_index(); i_pixel < n_pixels; i_pixel += stride)
+  {
+    float snr;
+    image_mask[i_pixel] = process(plane[i_pixel], noise_map[i_pixel], image_mask[i_pixel],
+                                  snr_cutoff_enabled ? band_mean(snr_cutoff, i_pixel) : 0.0f,
+                                  flux_cutoff_enabled ? band_mean(flux_cutoff, i_pixel) : 0.0f, snr);
     out_snr[i_pixel] = snr;
   }
 
@@ -163,11 +202,11 @@ void gpu_snr_and_filters(const float *plane, const float *noise_map, const float
   launch(min_max_init, 1, 1, stream, out_min_sigma, out_max_sigma);
   // Dynamic shared memory: the block's three histograms, 2 * max_sigma_bin bins each.
   const auto shared_bytes = 3 * 2 * static_cast<std::size_t>(params.max_sigma_bin) * sizeof(unsigned long long);
-  const auto grid = static_cast<unsigned int>(
-      std::min<std::size_t>((n_pixels + block_size - 1) / block_size, snr_max_blocks));
-  snr_and_filters<<<grid, block_size, shared_bytes, stream>>>(
-      plane, noise_map, snr_cutoff, flux_cutoff, median_noise, n_pixels, params, out_snr, image_mask, histogram0,
-      histogram1, histogram2, out_min_sigma, out_max_sigma);
+  const auto grid =
+      static_cast<unsigned int>(std::min<std::size_t>((n_pixels + block_size - 1) / block_size, snr_max_blocks));
+  snr_and_filters<<<grid, block_size, shared_bytes, stream>>>(plane, noise_map, snr_cutoff, flux_cutoff, median_noise,
+                                                              n_pixels, params, out_snr, image_mask, histogram0,
+                                                              histogram1, histogram2, out_min_sigma, out_max_sigma);
   CHECK_GPU(cudaGetLastError());
 }
 
