@@ -2,7 +2,7 @@
 #include <span>
 #include <type_traits>
 
-#include <ittnotify.h>
+#include "itt_compat.hpp"
 
 #include <tracy/Tracy.hpp>
 

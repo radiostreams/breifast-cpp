@@ -20,7 +20,7 @@
 
 #include <sys/resource.h>
 
-#include <ittnotify.h>
+#include "itt_compat.hpp"
 #include <nlohmann/json.hpp>
 #include <oneapi/tbb/info.h>
 #include <tracy/Tracy.hpp>

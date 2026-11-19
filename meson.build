@@ -102,21 +102,37 @@ catch2_dep = declare_dependency(
                '-lCatch2Main', '-lCatch2'],
 )
 
-itt_root = '/ssoft/spack/pinot-noir/jed/v2/spack/opt/spack/linux-rhel9-x86_64_v3/gcc-11.4.1/intel-oneapi-vtune-2024.1.0-ggpuzpx5nqydg76zoguizove2pgh4c4i/vtune/2024.1'
-
-itt_dep = declare_dependency(
-  compile_args : ['-isystem', itt_root / 'include'],
-  link_args : [itt_root / 'lib64' / 'libittnotify.a', '-ldl'],
-)
+# VTune's ITT API, used by bench to pause/resume collection. Optional: point -Dvtune_root at a VTune install to
+# enable it; without it bench runs uninstrumented. Nothing else links it.
+fs = import('fs')
+itt_root = get_option('vtune_root')
+if itt_root != '' and fs.exists(itt_root / 'lib64' / 'libittnotify.a')
+  itt_dep = declare_dependency(
+    compile_args : ['-isystem', itt_root / 'include', '-DBREIFAST_HAVE_ITT'],
+    link_args : [itt_root / 'lib64' / 'libittnotify.a', '-ldl'],
+  )
+else
+  itt_dep = declare_dependency()
+endif
 
 tracy_root = meson.project_source_root() / 'tracy'
 
 # Header-only view of Tracy, for every target that compiles an instrumented source file.
 # Without TRACY_ENABLE the zone macros expand to nothing, so this costs the wheel and the
-# test binary an include path and nothing else.
-tracy_headers_dep = declare_dependency(
-  compile_args : ['-isystem', tracy_root / 'public'],
-)
+# test binary an include path and nothing else. The tracy/ checkout is not in the repository:
+# without it (and with -Dtracy=false) a no-op stand-in header from compat/tracy is used instead.
+if fs.is_dir(tracy_root / 'public')
+  tracy_headers_dep = declare_dependency(
+    compile_args : ['-isystem', tracy_root / 'public'],
+  )
+else
+  if get_option('tracy')
+    error('-Dtracy=true needs the Tracy sources checked out in ' + tracy_root)
+  endif
+  tracy_headers_dep = declare_dependency(
+    compile_args : ['-isystem', meson.project_source_root() / 'compat' / 'tracy'],
+  )
+endif
 
 # The client proper: only bench gets it, and only with -Dtracy=true.
 # no_exit makes the process block at exit until tracy-capture has drained the trace, without
@@ -158,13 +174,15 @@ ext_module = py.extension_module(
   install : true,
 )
 
-pytest = find_program('pytest', required : true)
+pytest = find_program('pytest', required : false)
+if pytest.found()
 test('breifast_helpers',
   pytest,
   args : [meson.project_source_root() / 'tests'],
   env : {'PYTHONPATH' : meson.current_build_dir()},
   depends : [ext_module],
 )
+endif
 
 bench = executable(
   'bench',
@@ -211,6 +229,7 @@ test_breifast_core = executable(
   dependencies : [xtl_dep, xtensor_dep, xsimd_dep, tbb_dep, catch2_dep, itt_dep, json_dep, tracy_headers_dep],
   cpp_args : ['-DFIXTURES_DIR="' + meson.project_source_root() / 'tests' / 'fixtures' + '"'],
   link_args : ['-static-libstdc++', '-static-libgcc'],
+  build_by_default : false,
 )
 test('breifast_core', test_breifast_core)
 
@@ -218,11 +237,13 @@ if have_gpu
   subdir('src/gpu')
 endif
 
-uv = find_program('uv', required : true)
+uv = find_program('uv', required : false)
 devshell_python = find_program('python3', required : true)
+if uv.found()
 run_target('wheel',
   command : [uv, 'build', '--wheel', '--no-build-isolation',
              '--python', devshell_python,
              '-o', meson.project_source_root() / 'dist',
              meson.project_source_root()],
 )
+endif
