@@ -355,5 +355,5 @@ void init_spectron_bindings(py::module_ &m)
         py::arg("accumulators") = py::none(),
         "spectron's process_plane for one (interval, Stokes) plane; modifies `cube` in place as procres does");
   m.def("max_to_std_ratio", &breifast::spectron::max_to_std_ratio);
-  m.attr("SPECTRON_KERNEL_VERSION") = 3;
+  m.attr("SPECTRON_KERNEL_VERSION") = 4;
 }

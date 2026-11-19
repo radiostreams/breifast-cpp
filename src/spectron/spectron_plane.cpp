@@ -336,8 +336,13 @@ void make_noise_map_std(const std::vector<float> &plane, long ny, long nx, long 
   const size_t npix = static_cast<size_t>(ny) * nx;
   thread_local std::vector<float> sq, pass0;
   sq.resize(npix);
+  bool any_nonfinite = false;
   for (size_t i = 0; i < npix; ++i)
-    sq[i] = plane[i] * plane[i];
+  {
+    const bool fin = std::isfinite(plane[i]);
+    any_nonfinite |= !fin;
+    sq[i] = fin ? plane[i] * plane[i] : 0.F; // NaN pixels left out (scipy's running sum would never shed one)
+  }
   pass0.resize(npix);
   for (long x = 0; x < nx; ++x)
     uniform_line(ny, box, [&](long k) { return static_cast<double>(sq[static_cast<size_t>(k) * nx + x]); },
@@ -350,14 +355,32 @@ void make_noise_map_std(const std::vector<float> &plane, long ny, long nx, long 
     uniform_line(nx, box, [&](long k) { return static_cast<double>(row[k]); },
                  [&](long k, double v) { out[k] = std::sqrt(static_cast<float>(v)); });
   }
-  // the edge scale, from a float64 array of ones
-  std::vector<double> s0(ny);
-  uniform_line(ny, box, [&](long) { return 1.0; }, [&](long k, double v) { s0[k] = v; });
+  // the edge scale, from the float64 finite mask: separable rows of ones when everything is finite
   thread_local std::vector<double> scale;
   scale.resize(npix);
-  for (long y = 0; y < ny; ++y)
-    uniform_line(nx, box, [&](long) { return s0[y]; },
-                 [&](long k, double v) { scale[static_cast<size_t>(y) * nx + k] = std::sqrt(v); });
+  if (!any_nonfinite)
+  {
+    std::vector<double> s0(ny);
+    uniform_line(ny, box, [&](long) { return 1.0; }, [&](long k, double v) { s0[k] = v; });
+    for (long y = 0; y < ny; ++y)
+      uniform_line(nx, box, [&](long) { return s0[y]; },
+                   [&](long k, double v) { scale[static_cast<size_t>(y) * nx + k] = std::sqrt(v); });
+  }
+  else
+  {
+    thread_local std::vector<double> m0;
+    m0.resize(npix);
+    for (long x = 0; x < nx; ++x)
+      uniform_line(ny, box,
+                   [&](long k) { return std::isfinite(plane[static_cast<size_t>(k) * nx + x]) ? 1.0 : 0.0; },
+                   [&](long k, double v) { m0[static_cast<size_t>(k) * nx + x] = v; });
+    for (long y = 0; y < ny; ++y)
+    {
+      const double *row = m0.data() + static_cast<size_t>(y) * nx;
+      uniform_line(nx, box, [&](long k) { return row[k]; },
+                   [&](long k, double v) { scale[static_cast<size_t>(y) * nx + k] = std::sqrt(v); });
+    }
+  }
   for (size_t i = 0; i < npix; ++i)
     noise[i] = scale[i] == 0. ? 0.F : static_cast<float>(static_cast<double>(noise[i]) / scale[i]);
   scratch.assign(noise.begin(), noise.end());
@@ -1001,7 +1024,8 @@ void process_plane(const Config &cfg, PlaneInputs &in, PlaneResult &out)
           for (const float v : fscratch)
             ss += (v - m) * (v - m);
           const float drms = static_cast<float>(std::sqrt(ss / fscratch.size()));
-          sig_rms = drms != 0.F ? flmax / drms : 0.F;
+          // (numpy.ma masks a NaN std, and a masked value is falsy: 0, as procres has it)
+          sig_rms = (drms != 0.F && !std::isnan(drms)) ? flmax / drms : 0.F;
           std::vector<float> absd(fscratch.size());
           for (size_t k = 0; k < fscratch.size(); ++k)
             absd[k] = std::abs(fscratch[k]);
