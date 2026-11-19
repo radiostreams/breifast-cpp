@@ -12,6 +12,7 @@ namespace breifast::spectron
 namespace
 {
 std::mutex pb_ivar_mutex;
+std::mutex accumulate_mutex;
 
 template <typename T> bool is_dtype(const py::array &a)
 {
@@ -116,7 +117,8 @@ py::dict process_plane_spectron(const Config &config, py::array cube, long stoke
                                 py::object flux_cutoff, py::object selfnoise_offset, py::object dde_noise,
                                 py::object nm_noise, py::object nm_noise_band, py::object noise_scale_sqrt,
                                 py::object selfnoise, py::object baseline_flux, py::object bmaj, py::object bmin,
-                                py::object bpa, std::vector<double> slice_threshold, py::object pb_ivar)
+                                py::object bpa, std::vector<double> slice_threshold, py::object pb_ivar,
+                                py::object accumulators)
 {
   const long ny = config.ny, nx = config.nx, nfreq = config.nfreq;
   if (!is_dtype<float>(cube) || cube.ndim() != 4 || cube.shape(1) != nfreq || !cube.writeable())
@@ -171,6 +173,41 @@ py::dict process_plane_spectron(const Config &config, py::array cube, long stoke
     check_planes(a, ny, nx, "pb_ivar");
     in.pb_ivar = static_cast<double *>(a.mutable_data());
     in.pb_ivar_lock = &pb_ivar_mutex;
+  }
+
+  if (!accumulators.is_none())
+  {
+    // procres' variance accumulators, as a dict of the arrays process_plane_result folds into
+    const py::dict d = accumulators;
+    const auto f64 = [&](const char *key, long lead) -> py::array
+    {
+      py::array a = d[key];
+      if (!is_dtype<double>(a) || !a.writeable() || a.ndim() != (lead ? 3 : 2) || (lead && a.shape(0) != lead) ||
+          a.strides(0) != static_cast<long>((lead ? ny * nx : nx) * 8))
+        throw std::invalid_argument(where(key) + ": expected a writeable contiguous float64 array");
+      check_planes(a, ny, nx, key);
+      return a;
+    };
+    PlaneInputs::Accumulators A;
+    A.spvar_sum = static_cast<double *>(f64("spvar_sum", 0).mutable_data());
+    A.spskew_sum = static_cast<double *>(f64("spskew_sum", 0).mutable_data());
+    A.spkurt_sum = static_cast<double *>(f64("spkurt_sum", 0).mutable_data());
+    A.spinvvar_sum = static_cast<double *>(f64("spinvvar_sum", 0).mutable_data());
+    A.spmodel_sum = static_cast<double *>(f64("spmodel_sum", 0).mutable_data());
+    py::array vmax = d["spvar_max"];
+    A.nslots = vmax.ndim() == 3 ? static_cast<long>(vmax.shape(0)) : 0;
+    A.spvar_max = static_cast<double *>(f64("spvar_max", A.nslots).mutable_data());
+    A.spkurt_max = static_cast<double *>(f64("spkurt_max", A.nslots).mutable_data());
+    A.pb_var_sum = static_cast<double *>(f64("pb_var_sum", nfreq).mutable_data());
+    py::array cnt = d["spvar_counts"], pbc = d["pb_var_counts"];
+    if (!is_dtype<int64_t>(cnt) || cnt.ndim() != 2 || !cnt.writeable() || !is_dtype<int64_t>(pbc) ||
+        pbc.ndim() != 1 || pbc.shape(0) != nfreq || !pbc.writeable() || pbc.strides(0) != 8)
+      throw std::invalid_argument(where("counts") + ": expected writeable int64 spvar_counts (ny, nx), pb_var_counts (nfreq)");
+    check_planes(cnt, ny, nx, "spvar_counts");
+    A.spvar_counts = static_cast<int64_t *>(cnt.mutable_data());
+    A.pb_var_counts = static_cast<int64_t *>(pbc.mutable_data());
+    A.lock = &accumulate_mutex;
+    in.accumulate = A;
   }
 
   PlaneResult out;
@@ -314,7 +351,8 @@ void init_spectron_bindings(py::module_ &m)
         py::arg("flux_cutoff"), py::arg("selfnoise_offset"), py::arg("dde_noise"), py::arg("nm_noise"),
         py::arg("nm_noise_band"), py::arg("noise_scale_sqrt"), py::arg("selfnoise"), py::arg("baseline_flux"),
         py::arg("bmaj"), py::arg("bmin"), py::arg("bpa"), py::arg("slice_threshold"), py::arg("pb_ivar"),
+        py::arg("accumulators") = py::none(),
         "spectron's process_plane for one (interval, Stokes) plane; modifies `cube` in place as procres does");
   m.def("max_to_std_ratio", &breifast::spectron::max_to_std_ratio);
-  m.attr("SPECTRON_KERNEL_VERSION") = 1;
+  m.attr("SPECTRON_KERNEL_VERSION") = 2;
 }

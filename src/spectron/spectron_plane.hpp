@@ -137,6 +137,21 @@ struct PlaneInputs
   // accumulator for the per-band inverse thermal variance (pb_ivar_sum[stokes]), shared between planes
   double *pb_ivar = nullptr;
   std::mutex *pb_ivar_lock = nullptr;
+
+  /// procres' spectral-variance accumulators, folded here (what process_plane_result does with variance_stats) so
+  /// that procres' main thread does not have to: per-Stokes slices except the maxima, which take every slot
+  struct Accumulators
+  {
+    double *spvar_sum = nullptr, *spskew_sum = nullptr, *spkurt_sum = nullptr; ///< (ny, nx)
+    double *spinvvar_sum = nullptr, *spmodel_sum = nullptr;                    ///< (ny, nx)
+    int64_t *spvar_counts = nullptr;                                           ///< (ny, nx)
+    double *spvar_max = nullptr, *spkurt_max = nullptr;                        ///< (nslots, ny, nx)
+    long nslots = 0;
+    double *pb_var_sum = nullptr;     ///< (nfreq, ny, nx)
+    int64_t *pb_var_counts = nullptr; ///< (nfreq)
+    std::mutex *lock = nullptr;
+  };
+  std::optional<Accumulators> accumulate;
 };
 
 /// What process_plane returns, minus what the caller already has.

@@ -7,7 +7,6 @@
 #include <numeric>
 #include <stdexcept>
 
-#include "../cpu/windows.hpp"
 
 namespace breifast::spectron
 {
@@ -94,7 +93,8 @@ template <typename T>
 void band_mean(const BandArray<T> &arr, const std::vector<long> &bands, size_t npix, std::vector<double> &out)
 {
   out.resize(npix);
-  std::vector<T> acc(npix);
+  thread_local std::vector<T> acc;
+  acc.resize(npix);
   const T *p0 = arr.plane(bands[0]);
   std::copy(p0, p0 + npix, acc.begin());
   for (size_t k = 1; k < bands.size(); ++k)
@@ -127,7 +127,8 @@ void label4(const std::vector<uint8_t> &mask, long ny, long nx, Labels &out)
 {
   const size_t npix = static_cast<size_t>(ny) * nx;
   out.lab.assign(npix, 0);
-  std::vector<int32_t> parent(1, 0);
+  thread_local std::vector<int32_t> parent;
+  parent.assign(1, 0);
   const auto find = [&](int32_t a)
   {
     while (parent[a] != a)
@@ -165,7 +166,8 @@ void label4(const std::vector<uint8_t> &mask, long ny, long nx, Labels &out)
     }
   }
   // compact ids in raster order of first appearance
-  std::vector<int32_t> compact(parent.size(), 0);
+  thread_local std::vector<int32_t> compact;
+  compact.assign(parent.size(), 0);
   int32_t n = 0;
   for (size_t i = 0; i < npix; ++i)
   {
@@ -298,6 +300,67 @@ std::vector<uint8_t> dilate_l1(const std::vector<uint8_t> &m, long w, long k)
   return out;
 }
 
+/// scipy.ndimage.uniform_filter1d(mode='constant', cval=0) along a line, as scipy computes it: a double running sum,
+/// updated by (in[i + size - 1] - in[i - 1]) / size, the window [i - size/2, i + size - 1 - size/2].
+/// `at(k)` reads input k of the line (0 outside), `put(k, v)` stores output k.
+template <typename In, typename Out>
+void uniform_line(long length, long size, const In &at, const Out &put)
+{
+  const long size1 = size / 2;
+  const auto ext = [&](long j) { return (j - size1 >= 0 && j - size1 < length) ? at(j - size1) : 0.0; };
+  double tmp = 0.0;
+  for (long k = 0; k < size; ++k)
+    tmp += ext(k);
+  tmp /= static_cast<double>(size);
+  put(0, tmp);
+  for (long l = 1; l < length; ++l)
+  {
+    tmp += (ext(l + size - 1) - ext(l - 1)) / static_cast<double>(size);
+    put(l, tmp);
+  }
+}
+
+/// breifast.make_noise_map(plane, boxsize, method='std') into `noise` (float32): sqrt(uniform_filter(plane^2)) over
+/// sqrt(uniform_filter(ones)), both filters as scipy runs them (axis 0, then axis 1, each pass stored in the array's
+/// type), then the median floor.
+void make_noise_map_std(const std::vector<float> &plane, long ny, long nx, long box, std::vector<float> &noise,
+                        std::vector<float> &scratch)
+{
+  const size_t npix = static_cast<size_t>(ny) * nx;
+  thread_local std::vector<float> sq, pass0;
+  sq.resize(npix);
+  for (size_t i = 0; i < npix; ++i)
+    sq[i] = plane[i] * plane[i];
+  pass0.resize(npix);
+  for (long x = 0; x < nx; ++x)
+    uniform_line(ny, box, [&](long k) { return static_cast<double>(sq[static_cast<size_t>(k) * nx + x]); },
+                 [&](long k, double v) { pass0[static_cast<size_t>(k) * nx + x] = static_cast<float>(v); });
+  noise.resize(npix);
+  for (long y = 0; y < ny; ++y)
+  {
+    const float *row = pass0.data() + static_cast<size_t>(y) * nx;
+    float *out = noise.data() + static_cast<size_t>(y) * nx;
+    uniform_line(nx, box, [&](long k) { return static_cast<double>(row[k]); },
+                 [&](long k, double v) { out[k] = std::sqrt(static_cast<float>(v)); });
+  }
+  // the edge scale, from a float64 array of ones
+  std::vector<double> s0(ny);
+  uniform_line(ny, box, [&](long) { return 1.0; }, [&](long k, double v) { s0[k] = v; });
+  thread_local std::vector<double> scale;
+  scale.resize(npix);
+  for (long y = 0; y < ny; ++y)
+    uniform_line(nx, box, [&](long) { return s0[y]; },
+                 [&](long k, double v) { scale[static_cast<size_t>(y) * nx + k] = std::sqrt(v); });
+  for (size_t i = 0; i < npix; ++i)
+    noise[i] = scale[i] == 0. ? 0.F : static_cast<float>(static_cast<double>(noise[i]) / scale[i]);
+  scratch.assign(noise.begin(), noise.end());
+  const float med = static_cast<float>(np_median(scratch));
+  if (!std::isnan(med))
+    for (auto &v : noise)
+      if (v < med)
+        v = med;
+}
+
 /// np.histogram(values, bins=arange(-M, M+1)) accumulated into `hist`.
 inline void hist_add(std::vector<long> &hist, double v, long M)
 {
@@ -389,14 +452,27 @@ void process_plane(const Config &cfg, PlaneInputs &in, PlaneResult &out)
   const bool rms_mode = cfg.noise_estimator == Config::NoiseEstimator::rms;
 
   // scratch
-  std::vector<float> plane(npix);
-  std::vector<double> noisemap(npix), snr(npix), nm_here, cutoff, noise0;
-  std::vector<uint8_t> image_mask(npix);
-  std::vector<float> row_sums, rms;
-  std::vector<double> col_acc;
-  Labels labels;
-  std::vector<float> fscratch;
-  std::vector<double> dscratch;
+  // full-image scratch, kept per thread from plane to plane: allocating it afresh for every plane costs more than
+  // the plane itself at high thread counts (procres caps malloc arenas and mmaps anything over 1 MB, so every buffer
+  // is fresh zeroed pages and an munmap with its TLB shootdowns)
+  struct Scratch
+  {
+    std::vector<float> plane, rms, fscratch;
+    std::vector<double> noisemap, snr, nm_here, cutoff, dscratch, iv, abs_snr;
+    std::vector<uint8_t> image_mask, valid;
+    Labels labels;
+  };
+  thread_local Scratch tls;
+  Scratch &S = tls; // one TLS lookup, not one per access
+  auto &plane = S.plane, &rms = S.rms, &fscratch = S.fscratch;
+  auto &noisemap = S.noisemap, &snr = S.snr, &nm_here = S.nm_here, &cutoff = S.cutoff, &dscratch = S.dscratch,
+       &iv = S.iv, &abs_snr = S.abs_snr;
+  auto &image_mask = S.image_mask, &valid = S.valid;
+  auto &labels = S.labels;
+  plane.resize(npix);
+  noisemap.resize(npix);
+  snr.resize(npix);
+  image_mask.resize(npix);
   std::vector<float> sub, bstamp, pstamp;
 
   bool have_inv_var = false;
@@ -506,16 +582,7 @@ void process_plane(const Config &cfg, PlaneInputs &in, PlaneResult &out)
     // base noise estimate: float32, per pixel (rms) or scalar (MAD)
     if (rms_mode)
     {
-      rms.resize(npix);
-      row_sums.resize(npix);
-      col_acc.resize(nx);
-      plane_lot::detail::rms_noise_map(plane, ny, nx, cfg.boxsize, row_sums, col_acc, rms);
-      fscratch.assign(rms.begin(), rms.end());
-      const float med = static_cast<float>(np_median(fscratch));
-      if (!std::isnan(med))
-        for (auto &v : rms)
-          if (v < med)
-            v = med;
+      make_noise_map_std(plane, ny, nx, cfg.boxsize, rms, fscratch);
     }
     const auto n0_at = [&](size_t i) -> double { return rms_mode ? rms[i] : noise_globmad; };
 
@@ -567,7 +634,7 @@ void process_plane(const Config &cfg, PlaneInputs &in, PlaneResult &out)
     out.mednoises[num_band_slices - 1 - iband] = mednoise;
 
     // SNR
-    std::vector<uint8_t> valid(npix);
+    valid.resize(npix);
     for (size_t i = 0; i < npix; ++i)
     {
       valid[i] = noisemap[i] != 0. && std::isfinite(noisemap[i]);
@@ -584,7 +651,7 @@ void process_plane(const Config &cfg, PlaneInputs &in, PlaneResult &out)
         model_excess.assign(npix, 0.);
         have_inv_var = true;
       }
-      std::vector<double> iv(npix);
+      iv.resize(npix);
       for (size_t i = 0; i < npix; ++i)
       {
         const float n0 = static_cast<float>(n0_at(i));
@@ -656,7 +723,7 @@ void process_plane(const Config &cfg, PlaneInputs &in, PlaneResult &out)
     minsig = minsig_set ? std::min(minsig, lo) : lo;
     maxsig = minsig_set ? std::max(maxsig, hi) : hi;
     minsig_set = true;
-    std::vector<double> abs_snr(npix);
+    abs_snr.resize(npix);
     for (size_t i = 0; i < npix; ++i)
       abs_snr[i] = image_mask[i] ? std::abs(snr[i]) : 0.;
     const double thr_b = in.slice_threshold[num_band_slices - 1 - iband];
@@ -1105,17 +1172,59 @@ void process_plane(const Config &cfg, PlaneInputs &in, PlaneResult &out)
       }
       first = false;
     }
-    out.pb_var.resize(static_cast<size_t>(nfreq) * npix);
-    for (long b = 0; b < nfreq; ++b)
+    if (in.accumulate)
     {
-      const float *p = chan(b);
+      // process_plane_result's folding, in one pass under the lock
+      const auto &A = *in.accumulate;
+      const auto npmax = [](double a, double b) { return (std::isnan(a) || std::isnan(b)) ? NaN : std::max(a, b); };
+      std::lock_guard<std::mutex> guard(*A.lock);
       for (size_t i = 0; i < npix; ++i)
-        out.pb_var[static_cast<size_t>(b) * npix + i] = p[i] * p[i];
+      {
+        A.spvar_sum[i] += out.spvar[i];
+        A.spinvvar_sum[i] += have_inv_var ? inv_var[i] : 0.;
+        A.spmodel_sum[i] += have_inv_var ? model_excess[i] : 0.;
+        A.spskew_sum[i] += out.spskew[i];
+        A.spkurt_sum[i] += out.spkurt[i];
+        A.spvar_counts[i] += out.counts;
+      }
+      for (long s = 0; s < A.nslots; ++s)
+      {
+        double *vm = A.spvar_max + static_cast<size_t>(s) * npix, *km = A.spkurt_max + static_cast<size_t>(s) * npix;
+        for (size_t i = 0; i < npix; ++i)
+        {
+          vm[i] = npmax(vm[i], out.spvar[i]);
+          km[i] = npmax(km[i], out.spkurt[i]);
+        }
+      }
+      for (long b = 0; b < nfreq; ++b)
+      {
+        if (!out.usable[b])
+          continue;
+        const float *p = chan(b);
+        double *acc = A.pb_var_sum + static_cast<size_t>(b) * npix;
+        for (size_t i = 0; i < npix; ++i)
+          acc[i] += static_cast<double>(p[i] * p[i]);
+        A.pb_var_counts[b] += 1;
+      }
+      out.has_variance = false;
+      out.spvar = {};
+      out.spskew = {};
+      out.spkurt = {};
     }
-    if (have_inv_var)
+    else
     {
-      out.inv_var = std::move(inv_var);
-      out.model_excess = std::move(model_excess);
+      out.pb_var.resize(static_cast<size_t>(nfreq) * npix);
+      for (long b = 0; b < nfreq; ++b)
+      {
+        const float *p = chan(b);
+        for (size_t i = 0; i < npix; ++i)
+          out.pb_var[static_cast<size_t>(b) * npix + i] = p[i] * p[i];
+      }
+      if (have_inv_var)
+      {
+        out.inv_var = std::move(inv_var);
+        out.model_excess = std::move(model_excess);
+      }
     }
   }
 }
