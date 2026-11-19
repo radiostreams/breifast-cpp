@@ -768,10 +768,21 @@ void process_plane(const Config &cfg, PlaneInputs &in, PlaneResult &out)
       if (labels.n)
       {
         std::vector<double> peaks(labels.n, -std::numeric_limits<double>::infinity());
+        std::vector<size_t> at(labels.n, 0);
         for (size_t i = 0; i < npix; ++i)
-          if (labels.lab[i])
-            peaks[labels.lab[i] - 1] = std::max(peaks[labels.lab[i] - 1], abs_snr[i]);
-        out.nominal_peaks.emplace_back(sl.label, std::move(peaks));
+          if (labels.lab[i] && abs_snr[i] > peaks[labels.lab[i] - 1])
+          {
+            peaks[labels.lab[i] - 1] = abs_snr[i];
+            at[labels.lab[i] - 1] = i;
+          }
+        std::vector<double> rows(3 * static_cast<size_t>(labels.n));
+        for (long l = 0; l < labels.n; ++l)
+        {
+          rows[3 * l] = peaks[l];
+          rows[3 * l + 1] = static_cast<double>(at[l] / nx);
+          rows[3 * l + 2] = static_cast<double>(at[l] % nx);
+        }
+        out.nominal_peaks.emplace_back(sl.label, std::move(rows));
       }
     }
     if (cfg.skip_detection)

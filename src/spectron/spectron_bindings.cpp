@@ -259,8 +259,8 @@ py::dict process_plane_spectron(const Config &config, py::array cube, long stoke
   py::dict peaks;
   for (auto &[label, values] : out.nominal_peaks)
   {
-    const py::ssize_t n = static_cast<py::ssize_t>(values.size());
-    peaks[py::str(label)] = to_numpy(std::move(values), {n});
+    const py::ssize_t n = static_cast<py::ssize_t>(values.size() / 3);
+    peaks[py::str(label)] = to_numpy(std::move(values), {n, 3});
   }
   r["nominal_peaks"] = peaks;
   r["flood_dropped_islands"] = out.flood_dropped_islands;
@@ -355,5 +355,5 @@ void init_spectron_bindings(py::module_ &m)
         py::arg("accumulators") = py::none(),
         "spectron's process_plane for one (interval, Stokes) plane; modifies `cube` in place as procres does");
   m.def("max_to_std_ratio", &breifast::spectron::max_to_std_ratio);
-  m.attr("SPECTRON_KERNEL_VERSION") = 4;
+  m.attr("SPECTRON_KERNEL_VERSION") = 5;
 }

@@ -177,7 +177,8 @@ struct PlaneResult
   std::vector<double> sigma, sigma_ext, enf, beamchi2, psf_iso, psf_iso_x, psf_corr, dip_src, dip_mirror, dip_sep,
       localnoise, boost;
 
-  // nominal-threshold island peaks, by band label
+  // nominal-threshold islands, by band label: (peak |sigma|, y, x) per island, flattened, the position being the
+  // first pixel in raster order at the peak (the tail calibration counts distinct positions)
   std::vector<std::pair<std::string, std::vector<double>>> nominal_peaks;
 
   // counters the caller adds to its own
