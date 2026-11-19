@@ -167,9 +167,12 @@ cpu_sources = [
 
 ext_module = py.extension_module(
   'breifast_helpers',
-  ['src/plane_lot_bindings.cpp'] + cpu_sources + [tbb_build],
+  ['src/plane_lot_bindings.cpp', 'src/spectron/spectron_bindings.cpp', 'src/spectron/spectron_plane.cpp']
+    + cpu_sources + [tbb_build],
   dependencies : [py.dependency(), pybind11_dep, xtl_dep, xtensor_dep, xsimd_dep, xtensor_python_dep, numpy_dep,
                   tbb_dep, itt_dep, tracy_headers_dep],
+  # the spectron port reproduces numpy's float32/float64 rounding step by step: no fused multiply-adds
+  cpp_args : ['-ffp-contract=off'],
   link_args : ['-static-libstdc++', '-static-libgcc'],
   install : true,
 )
