@@ -330,6 +330,7 @@ void init_spectron_bindings(py::module_ &m)
       .def_readwrite("max_sigma_bin", &Config::max_sigma_bin)
       .def_readwrite("skip_detection", &Config::skip_detection)
       .def_readwrite("nominal_peaks", &Config::nominal_peaks)
+      .def_readwrite("threshold", &Config::threshold)
       .def_readwrite("flood_cell_max", &Config::flood_cell_max)
       .def_readwrite("flood_cell_size", &Config::flood_cell_size)
       .def_readwrite("flood_cell_hard", &Config::flood_cell_hard)
@@ -354,5 +355,5 @@ void init_spectron_bindings(py::module_ &m)
         py::arg("accumulators") = py::none(),
         "spectron's process_plane for one (interval, Stokes) plane; modifies `cube` in place as procres does");
   m.def("max_to_std_ratio", &breifast::spectron::max_to_std_ratio);
-  m.attr("SPECTRON_KERNEL_VERSION") = 2;
+  m.attr("SPECTRON_KERNEL_VERSION") = 3;
 }

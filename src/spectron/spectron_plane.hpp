@@ -11,7 +11,9 @@
  * types: numpy computes a float32 array op in float32 and promotes to float64 only where a float64 operand enters, and
  * the port rounds at the same places, so that thresholds fall the same way.
  *
- * Quirks of the Python code are kept on purpose, so that the two paths agree: see the notes marked QUIRK.
+ * Faults found in the Python code while porting were fixed in both together (2026-11-19: tail calibration counting
+ * the acceptance mask, the plane's max sigma overwritten, histograms reset per band slice, NaN medians), so the
+ * two paths keep agreeing.
  *
  * The caller (breifast's procres) runs one plane per Python worker thread with the GIL released; nothing here is
  * shared between calls except the max_to_std_ratio cache and the inverse-variance accumulator lock.
@@ -85,6 +87,7 @@ struct Config
   long max_sigma_bin = 200;
   bool skip_detection = false;
   bool nominal_peaks = false; ///< flood_rate_early_planes and flood_rate_max
+  double threshold = 6.;       ///< the nominal detection threshold (tail calibration counts islands above it)
 
   long flood_cell_max = 0, flood_cell_size = 0, flood_cell_hard = 0;
   long edge_margin = 0;

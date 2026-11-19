@@ -72,6 +72,13 @@ template <typename T> double np_median(std::vector<T> &v)
   return static_cast<T>((lo + hi) / static_cast<T>(2));
 }
 
+/// np.nanmedian of `v` (destroyed): NaNs dropped first, NaN if nothing is left.
+template <typename T> double np_nanmedian(std::vector<T> &v)
+{
+  v.erase(std::remove_if(v.begin(), v.end(), [](T x) { return std::isnan(x); }), v.end());
+  return np_median(v);
+}
+
 /// np.std of float32 values (ddof 0), computed as numpy does: float32 pairwise sums.
 double np_std_f32(const std::vector<float> &d)
 {
@@ -354,7 +361,7 @@ void make_noise_map_std(const std::vector<float> &plane, long ny, long nx, long 
   for (size_t i = 0; i < npix; ++i)
     noise[i] = scale[i] == 0. ? 0.F : static_cast<float>(static_cast<double>(noise[i]) / scale[i]);
   scratch.assign(noise.begin(), noise.end());
-  const float med = static_cast<float>(np_median(scratch));
+  const float med = static_cast<float>(np_nanmedian(scratch));
   if (!std::isnan(med))
     for (auto &v : noise)
       if (v < med)
@@ -577,7 +584,7 @@ void process_plane(const Config &cfg, PlaneInputs &in, PlaneResult &out)
     fscratch.resize(npix);
     for (size_t i = 0; i < npix; ++i)
       fscratch[i] = std::abs(plane[i]);
-    const float noise_globmad = static_cast<float>(np_median(fscratch)) * 1.4826F;
+    const float noise_globmad = static_cast<float>(np_nanmedian(fscratch)) * 1.4826F;
 
     // base noise estimate: float32, per pixel (rms) or scalar (MAD)
     if (rms_mode)
@@ -623,12 +630,12 @@ void process_plane(const Config &cfg, PlaneInputs &in, PlaneResult &out)
     if (final_f64)
     {
       dscratch.assign(noisemap.begin(), noisemap.end());
-      mednoise = np_median(dscratch);
+      mednoise = np_nanmedian(dscratch);
     }
     else
     {
       fscratch.assign(noisemap.begin(), noisemap.end());
-      mednoise = np_median(fscratch);
+      mednoise = np_nanmedian(fscratch);
     }
     // the loop runs over the slices in reverse; mednoises is in forward order
     out.mednoises[num_band_slices - 1 - iband] = mednoise;
@@ -671,14 +678,16 @@ void process_plane(const Config &cfg, PlaneInputs &in, PlaneResult &out)
       }
     }
 
+    // a NaN plane pixel under a valid noise gives a NaN SNR: kept out of histograms, sigma range and search
     for (size_t i = 0; i < npix; ++i)
-      image_mask[i] = image_mask[i] && valid[i];
+      image_mask[i] = image_mask[i] && valid[i] && std::isfinite(snr[i]);
 
-    // QUIRK: the histograms are reset for every band slice that gets this far, so a plane returns only the last one's
-    std::optional<std::vector<long>> hist[3];
+    // the histograms accumulate over the plane's band slices
+    auto &hist = out.hist;
     const auto histogram = [&](int which)
     {
-      hist[which].emplace(2 * M, 0);
+      if (!hist[which])
+        hist[which].emplace(2 * M, 0);
       for (size_t i = 0; i < npix; ++i)
         if (image_mask[i])
           hist_add(*hist[which], snr[i], M);
@@ -701,8 +710,6 @@ void process_plane(const Config &cfg, PlaneInputs &in, PlaneResult &out)
     }
     if (cfg.histogram_detail > 0)
       histogram(2);
-    for (int h = 0; h < 3; ++h)
-      out.hist[h] = hist[h];
     if (cfg.reject_noise_threshold != 0.)
     {
       const double lim = mednoise * cfg.reject_noise_threshold;
@@ -728,11 +735,13 @@ void process_plane(const Config &cfg, PlaneInputs &in, PlaneResult &out)
       abs_snr[i] = image_mask[i] ? std::abs(snr[i]) : 0.;
     const double thr_b = in.slice_threshold[num_band_slices - 1 - iband];
 
-    // QUIRK: the windowed tail calibration labels the whole filtered acceptance mask, not the islands above the
-    // nominal threshold that its comment describes
+    // windowed tail calibration: the peaks of the islands above the NOMINAL threshold, whatever threshold is in force
     if (cfg.nominal_peaks && !cfg.skip_detection)
     {
-      label4(image_mask, ny, nx, labels);
+      std::vector<uint8_t> &nominal = valid; // free by now
+      for (size_t i = 0; i < npix; ++i)
+        nominal[i] = abs_snr[i] >= cfg.threshold;
+      label4(nominal, ny, nx, labels);
       if (labels.n)
       {
         std::vector<double> peaks(labels.n, -std::numeric_limits<double>::infinity());
@@ -851,7 +860,6 @@ void process_plane(const Config &cfg, PlaneInputs &in, PlaneResult &out)
             best_i = pix[k];
           }
         }
-        maxsig = best; // QUIRK: the island loop reuses the name of the plane's maximum sigma
         const long x = static_cast<long>(best_i % nx), y = static_cast<long>(best_i / nx);
         if (cfg.edge_margin &&
             (x < cfg.edge_margin || y < cfg.edge_margin || x >= nx - cfg.edge_margin || y >= ny - cfg.edge_margin))
