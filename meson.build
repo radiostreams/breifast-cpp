@@ -13,6 +13,16 @@ add_project_arguments('-march=' + get_option('march'), '-fno-math-errno', langua
 have_gpu = add_languages('cuda', required : get_option('gpu'), native : false)
 if have_gpu
   add_project_arguments('-arch=' + get_option('gpu_arch'), '-lineinfo', language : 'cuda')
+  cudart_dep = dependency('cudart', method : 'pkg-config')
+  cudart_libdir = cudart_dep.get_variable(pkgconfig : 'libdir')
+
+  cuda_host_include_args = []
+  foreach token : run_command('sh', '-c', 'printf %s "$NIX_CFLAGS_COMPILE"', check : false).stdout().split()
+    if token.startswith('/nix/store') and token.contains('cuda')
+      cuda_host_include_args += ['-isystem', token]
+    endif
+  endforeach
+  cuda_headers_dep = declare_dependency(compile_args : cuda_host_include_args)
 endif
 
 py = import('python').find_installation()
@@ -152,9 +162,10 @@ else
 endif
 
 # The CPU kernels (src/cpu) and the dispatch. Compiled by every target that uses them, so that each target's
-# own Tracy and compiler arguments apply.
+# own compiler arguments apply.
 cpu_sources = [
   'src/plane_lot_dispatch.cpp',
+  'src/plane_lot_validation.cpp',
   'src/cpu/channel_reductions.cpp',
   'src/cpu/island_stamps.cpp',
   'src/cpu/islands.cpp',
@@ -164,34 +175,54 @@ cpu_sources = [
   'src/cpu/snr_filters.cpp',
   'src/cpu/windows.cpp',
 ]
+cpu_source_files = files(cpu_sources)
+
+if have_gpu
+  subdir('src/gpu')
+endif
+
+ext_sources = ['src/plane_lot_bindings.cpp', 'src/spectron/spectron_bindings.cpp',
+               'src/spectron/spectron_plane.cpp'] + cpu_sources
+# the spectron port reproduces numpy's float32/float64 rounding step by step: no fused multiply-adds
+ext_cpp_args = ['-ffp-contract=off']
+ext_link_args = ['-static-libstdc++', '-static-libgcc', '-Wl,-z,noexecstack']
+ext_link_with = []
+ext_deps = [py.dependency(), pybind11_dep, xtl_dep, xtensor_dep, xsimd_dep, xtensor_python_dep, numpy_dep,
+            tbb_dep, itt_dep, tracy_headers_dep]
+if have_gpu
+  ext_cpp_args += ['-DBREIFAST_HAVE_GPU']
+  ext_deps += [cuda_headers_dep]
+  ext_link_with += [gpu_lib, gpu_host_lib]
+  ext_link_args += ['-L' + cudart_libdir, '-lcudart_static', '-lrt', '-lpthread', '-ldl']
+endif
 
 ext_module = py.extension_module(
   'breifast_helpers',
-  ['src/plane_lot_bindings.cpp', 'src/spectron/spectron_bindings.cpp', 'src/spectron/spectron_plane.cpp']
-    + cpu_sources + [tbb_build],
-  dependencies : [py.dependency(), pybind11_dep, xtl_dep, xtensor_dep, xsimd_dep, xtensor_python_dep, numpy_dep,
-                  tbb_dep, itt_dep, tracy_headers_dep],
-  # the spectron port reproduces numpy's float32/float64 rounding step by step: no fused multiply-adds
-  cpp_args : ['-ffp-contract=off'],
-  link_args : ['-static-libstdc++', '-static-libgcc'],
+  ext_sources + [tbb_build],
+  include_directories : include_directories('src', 'src/gpu'),
+  dependencies : ext_deps,
+  cpp_args : ext_cpp_args,
+  link_args : ext_link_args,
+  link_with : ext_link_with,
+  link_language : 'cpp',
   install : true,
 )
 
 pytest = find_program('pytest', required : false)
 if pytest.found()
-test('breifast_helpers',
-  pytest,
-  args : [meson.project_source_root() / 'tests'],
-  env : {'PYTHONPATH' : meson.current_build_dir()},
-  depends : [ext_module],
-)
+  test('breifast_helpers',
+    pytest,
+    args : [meson.project_source_root() / 'tests'],
+    env : {'PYTHONPATH' : meson.current_build_dir()},
+    depends : [ext_module],
+  )
 endif
 
 bench = executable(
   'bench',
   ['src/bench.cpp'] + cpu_sources + [tbb_build],
   include_directories : include_directories('src'),
-  dependencies : [xtl_dep, xtensor_dep, xsimd_dep, tbb_dep, itt_dep, json_dep, tracy_dep],
+  dependencies : [xtl_dep, xtensor_dep, xsimd_dep, tbb_dep, itt_dep, json_dep],
   cpp_args : get_option('box_version') ? ['-DBOX_VERSION'] : [],
   link_args : ['-static-libstdc++', '-static-libgcc'],
   build_by_default : false,
@@ -201,6 +232,7 @@ test_breifast_core_sources = cpu_sources + [
   'tests/cpp/group1_pure_functions/test_build_gaussian_beam_kernel.cpp',
   'tests/cpp/group1_pure_functions/test_compute_rms_noise_map.cpp',
   'tests/cpp/group1_pure_functions/test_rms_noise_map.cpp',
+  'tests/cpp/group1_pure_functions/test_compact_mask.cpp',
   'tests/cpp/group1_pure_functions/test_combine_noise_map.cpp',
   'tests/cpp/group1_pure_functions/test_compute_rms_noise_map_precision.cpp',
   'tests/cpp/group1_pure_functions/test_max_to_std_ratio.cpp',
@@ -213,6 +245,8 @@ test_breifast_core_sources = cpu_sources + [
   'tests/cpp/group1_pure_functions/test_label_islands.cpp',
   'tests/cpp/group1_pure_functions/test_island_boost.cpp',
   'tests/cpp/group1_pure_functions/test_median.cpp',
+  'tests/cpp/group1_pure_functions/test_host_copies.cpp',
+  'tests/cpp/group1_pure_functions/test_host_memory.cpp',
   'tests/cpp/group1_pure_functions/test_or_accept_masks.cpp',
   'tests/cpp/group1_pure_functions/test_weighted_band_image.cpp',
   'tests/cpp/group2_snr_filters/test_compute_snr_and_apply_filters.cpp',
@@ -223,30 +257,36 @@ test_breifast_core_sources = cpu_sources + [
   'tests/cpp/group4_dispatch/test_run_batch_core.cpp',
   'tests/cpp/group4_dispatch/test_run_batch_core_random.cpp',
   'tests/cpp/group4_dispatch/test_run_batch_core_scratch_persistence.cpp',
+  'tests/cpp/group4_dispatch/test_validate_plane_inputs.cpp',
 ]
 
 test_breifast_core = executable(
   'test_breifast_core',
   test_breifast_core_sources + [tbb_build, catch2_build],
   include_directories : include_directories('src'),
-  dependencies : [xtl_dep, xtensor_dep, xsimd_dep, tbb_dep, catch2_dep, itt_dep, json_dep, tracy_headers_dep],
+  dependencies : [xtl_dep, xtensor_dep, xsimd_dep, tbb_dep, catch2_dep, itt_dep, json_dep],
   cpp_args : ['-DFIXTURES_DIR="' + meson.project_source_root() / 'tests' / 'fixtures' + '"'],
   link_args : ['-static-libstdc++', '-static-libgcc'],
   build_by_default : false,
 )
 test('breifast_core', test_breifast_core)
 
-if have_gpu
-  subdir('src/gpu')
-endif
-
 uv = find_program('uv', required : false)
 devshell_python = find_program('python3', required : true)
+
 if uv.found()
-run_target('wheel',
-  command : [uv, 'build', '--wheel', '--no-build-isolation',
-             '--python', devshell_python,
-             '-o', meson.project_source_root() / 'dist',
-             meson.project_source_root()],
-)
+  run_target('wheel',
+    command : [uv, 'build', '--wheel', '--no-build-isolation',
+               '--python', devshell_python,
+               '-o', meson.project_source_root() / 'dist',
+               meson.project_source_root()],
+  )
+
+  run_target('wheel-gpu',
+    command : [uv, 'build', '--wheel', '--no-build-isolation',
+               '--config-setting', 'setup-args=-Dgpu=enabled',
+               '--python', devshell_python,
+               '-o', meson.project_source_root() / 'dist-gpu',
+               meson.project_source_root()],
+  )
 endif

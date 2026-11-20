@@ -1,5 +1,9 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
+
+#include <stdexcept>
 
 #include "plane_lot_dispatch.hpp"
 
@@ -71,17 +75,17 @@ TEST_CASE("run_batch_core resolves each item's group_index into the correct grou
   REQUIRE(results[0].detections.peak_y().size() == 1);
   CHECK(results[0].detections.peak_y()[0] == 2);
   CHECK(results[0].detections.peak_x()[0] == 2);
-  CHECK(results[0].detections.self_noise()[0] == Catch::Approx(1.F));
+  CHECK_THAT(results[0].detections.self_noise()[0], Catch::Matchers::WithinRel(1.F));
 
   REQUIRE(results[1].detections.peak_y().size() == 1);
   CHECK(results[1].detections.peak_y()[0] == 4);
   CHECK(results[1].detections.peak_x()[0] == 4);
-  CHECK(results[1].detections.self_noise()[0] == Catch::Approx(2.F));
+  CHECK_THAT(results[1].detections.self_noise()[0], Catch::Matchers::WithinRel(2.F));
 
   REQUIRE(results[2].detections.peak_y().size() == 1);
   CHECK(results[2].detections.peak_y()[0] == 2);
   CHECK(results[2].detections.peak_x()[0] == 4);
-  CHECK(results[2].detections.self_noise()[0] == Catch::Approx(1.F));
+  CHECK_THAT(results[2].detections.self_noise()[0], Catch::Matchers::WithinRel(1.F));
 }
 
 TEST_CASE("run_batch_core keeps results in items order across many items scheduled on multiple TBB threads",
@@ -126,17 +130,14 @@ TEST_CASE("run_batch_core keeps results in items order across many items schedul
     REQUIRE(results[i].detections.peak_y().size() == 1);
     CHECK(results[i].detections.peak_y()[0] == expected_peaks[i].first);
     CHECK(results[i].detections.peak_x()[0] == expected_peaks[i].second);
-    CHECK(results[i].detections.self_noise()[0] == Catch::Approx(static_cast<float>(i % num_groups) + 1.F));
+    CHECK_THAT(results[i].detections.self_noise()[0], Catch::Matchers::WithinRel(static_cast<float>(i % num_groups) + 1.F));
   }
 }
 
-TEST_CASE("run_batch_core isolates a per-item exception: one item throwing doesn't abort the batch or corrupt "
-         "other items' results",
-         "[run_batch_core]")
+TEST_CASE("run_batch_core rejects the whole batch when one plane is inconsistent", "[run_batch_core]")
 {
-  // group 1's selfnoise_offset is deliberately the wrong shape (3x3 instead of item1's actual 7x7 plane), so
-  // process_band's noisemap = sqrt(noisemap0^2 + scale*selfnoise_offset + ...) throws xtensor's
-  // "Incompatible dimension of arrays" broadcast error for item 1 only.
+  // group 1's selfnoise_offset is deliberately the wrong shape (3x3 instead of item 1's 7x7 plane): the validation that
+  // runs before any plane names it, and the batch throws instead of returning an empty result for item 1.
   constexpr size_t n = 7;
   auto broken_group = make_group(n, 9.F);
   broken_group.selfnoise_offset.resize({3, 3});
@@ -159,19 +160,9 @@ TEST_CASE("run_batch_core isolates a per-item exception: one item throwing doesn
   config.beam_size_enabled = false;
   config.band_slices = {BandSlice{.start = 0, .stop = 1, .selfnoise_scale_factor = 1.F, .label = "B0"}};
 
-  const auto results = run_batch_core(items, groups, config, 2);
-
-  REQUIRE(results.size() == 3);
-
-  REQUIRE(results[0].detections.peak_y().size() == 1);
-  CHECK(results[0].detections.peak_y()[0] == 2);
-  CHECK(results[0].detections.peak_x()[0] == 2);
-
-  CHECK(results[1].detections.peak_y().empty());
-
-  REQUIRE(results[2].detections.peak_y().size() == 1);
-  CHECK(results[2].detections.peak_y()[0] == 2);
-  CHECK(results[2].detections.peak_x()[0] == 4);
+  CHECK_THROWS_AS(run_batch_core(items, groups, config, 2), std::invalid_argument);
+  CHECK_THROWS_WITH(run_batch_core(items, groups, config, 2),
+                    "plane 1: selfnoise_offset has shape (3, 3), expected (7, 7)");
 }
 
 TEST_CASE("run_lot_core forwards lot.planes/lot.groups to run_batch_core unchanged", "[run_lot_core]")
@@ -202,12 +193,12 @@ TEST_CASE("run_lot_core forwards lot.planes/lot.groups to run_batch_core unchang
   REQUIRE(results[0].detections.peak_y().size() == 1);
   CHECK(results[0].detections.peak_y()[0] == 2);
   CHECK(results[0].detections.peak_x()[0] == 2);
-  CHECK(results[0].detections.self_noise()[0] == Catch::Approx(1.F));
+  CHECK_THAT(results[0].detections.self_noise()[0], Catch::Matchers::WithinRel(1.F));
 
   REQUIRE(results[1].detections.peak_y().size() == 1);
   CHECK(results[1].detections.peak_y()[0] == 4);
   CHECK(results[1].detections.peak_x()[0] == 4);
-  CHECK(results[1].detections.self_noise()[0] == Catch::Approx(2.F));
+  CHECK_THAT(results[1].detections.self_noise()[0], Catch::Matchers::WithinRel(2.F));
 }
 
 TEST_CASE("run_batch_core processes multi-band items (band_slices on the shared PlaneConfig) in the same batch as "

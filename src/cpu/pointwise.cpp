@@ -1,9 +1,8 @@
 #include "pointwise.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
-#include <stdexcept>
-#include <tracy/Tracy.hpp>
 
 namespace breifast::plane_lot::detail
 {
@@ -15,12 +14,8 @@ inline void combine_noise_map_loop(BaseAt base_at, std::span<const float> selfno
                                    std::span<const float> dde_noise, const float selfnoise_scale, const float dde_scale,
                                    std::span<float> out_noise_map)
 {
-  ZoneScopedN("combine");
   const size_t n_pixels = out_noise_map.size();
-  if (selfnoise_offset.size() != n_pixels || dde_noise.size() != n_pixels)
-  {
-    throw std::runtime_error("combine_noise_map: selfnoise_offset or dde_noise size mismatch with out_noise_map");
-  }
+  assert(selfnoise_offset.size() == n_pixels && dde_noise.size() == n_pixels);
 
   float *const __restrict out = out_noise_map.data();
   const float *const __restrict selfnoise = selfnoise_offset.data();
@@ -37,10 +32,7 @@ void combine_noise_map_rms(std::span<const float> rms, const float rms_floor, st
                            std::span<const float> dde_noise, const float selfnoise_scale, const float dde_scale,
                            std::span<float> out_noise_map)
 {
-  if (rms.size() != out_noise_map.size())
-  {
-    throw std::runtime_error("combine_noise_map_rms: rms size mismatch with out_noise_map");
-  }
+  assert(rms.size() == out_noise_map.size());
   const float *const __restrict rms_ptr = rms.data();
   combine_noise_map_loop([&](size_t i_pixel) { return std::max(rms_ptr[i_pixel], rms_floor); }, selfnoise_offset,
                          dde_noise, selfnoise_scale, dde_scale, out_noise_map);

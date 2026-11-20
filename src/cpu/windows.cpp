@@ -1,9 +1,8 @@
 #include "windows.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
-#include <stdexcept>
-#include <tracy/Tracy.hpp>
 
 namespace breifast::plane_lot::detail
 {
@@ -11,24 +10,11 @@ namespace breifast::plane_lot::detail
 void rms_noise_map(std::span<const float> plane, const size_t n_y_size, const size_t n_x_size, const long boxsize,
                    std::span<float> row_window_sums, std::span<double> column_accumulators, std::span<float> out_rms)
 {
-  ZoneScopedN("compute_rms_noise_map");
   const size_t n_pixels = n_y_size * n_x_size;
-  if (plane.size() != n_pixels)
-  {
-    throw std::runtime_error("rms_noise_map: plane size mismatch with n_y * n_x");
-  }
-  if (row_window_sums.size() != n_pixels)
-  {
-    throw std::runtime_error("rms_noise_map: row_window_sums size mismatch with n_y * n_x");
-  }
-  if (column_accumulators.size() != n_x_size)
-  {
-    throw std::runtime_error("rms_noise_map: column_accumulators size mismatch with n_x");
-  }
-  if (out_rms.size() != n_pixels)
-  {
-    throw std::runtime_error("rms_noise_map: out_rms size mismatch with n_y * n_x");
-  }
+  assert(plane.size() == n_pixels);
+  assert(row_window_sums.size() == n_pixels);
+  assert(column_accumulators.size() == n_x_size);
+  assert(out_rms.size() == n_pixels);
 
   const long n_y = static_cast<long>(n_y_size);
   const long n_x = static_cast<long>(n_x_size);
@@ -111,6 +97,21 @@ void rms_noise_map(std::span<const float> plane, const size_t n_y_size, const si
       }
     }
   }
+}
+
+size_t compact_mask(std::span<const bool> mask, std::span<size_t> out_indices)
+{
+  size_t index_in = 0;
+  size_t index_out = 0;
+  for (const auto value : mask)
+  {
+    if (value)
+    {
+      out_indices[index_out++] = index_in;
+    }
+    ++index_in;
+  }
+  return index_out;
 }
 
 } // namespace breifast::plane_lot::detail

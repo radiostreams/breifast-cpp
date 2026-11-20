@@ -1,11 +1,14 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
 #include "plane_lot_dispatch.hpp"
 
 #include "../test_helpers.hpp"
 
 using namespace breifast;
+using Catch::Matchers::Equals;
 
 TEST_CASE("process_band detects a single clear point-source island with correct identity and basic detection "
          "fields",
@@ -60,30 +63,30 @@ TEST_CASE("process_band detects a single clear point-source island with correct 
   CHECK(result.detections.peak_y()[0] == 3);
   CHECK(result.detections.peak_x()[0] == 3);
   CHECK(result.detections.island_size()[0] == 1);
-  CHECK(result.detections.stokes_label()[0] == "I");
-  CHECK(result.detections.band_label()[0] == "bandA");
+  CHECK_THAT(result.detections.stokes_label()[0], Equals("I"));
+  CHECK_THAT(result.detections.band_label()[0], Equals("bandA"));
 
   const float expected_noise = 1.4826F; // median(|plane|) * 1.4826
-  CHECK(result.detections.local_noise()[0] == Catch::Approx(expected_noise).epsilon(1e-4));
-  CHECK(result.detections.local_noise_median_ratio()[0] == Catch::Approx(1.F).epsilon(1e-4));
+  CHECK_THAT(result.detections.local_noise()[0], Catch::Matchers::WithinRel(static_cast<double>(expected_noise), 1e-4));
+  CHECK_THAT(result.detections.local_noise_median_ratio()[0], Catch::Matchers::WithinRel(static_cast<double>(1.F), 1e-4));
 
   // median_noises collects one entry per band processed; with a uniform selfnoise_offset/dde_noise
   // of zero, this band's noisemap is uniformly the scalar global-MAD estimate, so its median equals
   // that same expected_noise value.
   REQUIRE(result.median_noises.size() == 1);
-  CHECK(result.median_noises[0] == Catch::Approx(expected_noise).epsilon(1e-4));
+  CHECK_THAT(result.median_noises[0], Catch::Matchers::WithinRel(static_cast<double>(expected_noise), 1e-4));
 
   const float expected_snr = 50.F / expected_noise;
-  CHECK(result.detections.signal_to_noise()[0] == Catch::Approx(expected_snr).epsilon(1e-4));
+  CHECK_THAT(result.detections.signal_to_noise()[0], Catch::Matchers::WithinRel(static_cast<double>(expected_snr), 1e-4));
   CHECK(result.detections.signal_to_noise_rms()[0] == 0.F); // uniform donut, stddev=0, rms guard
-  CHECK(result.detections.signal_to_noise_local_mad()[0] == Catch::Approx(expected_snr).epsilon(1e-4));
-  CHECK(result.detections.signal_to_noise_global_mad()[0] == Catch::Approx(expected_snr).epsilon(1e-4));
+  CHECK_THAT(result.detections.signal_to_noise_local_mad()[0], Catch::Matchers::WithinRel(static_cast<double>(expected_snr), 1e-4));
+  CHECK_THAT(result.detections.signal_to_noise_global_mad()[0], Catch::Matchers::WithinRel(static_cast<double>(expected_snr), 1e-4));
 
   const float expected_extended_box = 50.F * config.max_to_std_ratio_value(); // ratio pinned by Group 1 tests
-  CHECK(result.detections.signal_to_noise_extended_box()[0] == Catch::Approx(expected_extended_box).epsilon(1e-4));
+  CHECK_THAT(result.detections.signal_to_noise_extended_box()[0], Catch::Matchers::WithinRel(static_cast<double>(expected_extended_box), 1e-4));
 
-  CHECK(result.detections.self_noise()[0] == Catch::Approx(2.5F));
-  CHECK(result.detections.excess_noise_factor()[0] == Catch::Approx(1.F).epsilon(1e-4));
+  CHECK_THAT(result.detections.self_noise()[0], Catch::Matchers::WithinRel(2.5F));
+  CHECK_THAT(result.detections.excess_noise_factor()[0], Catch::Matchers::WithinRel(static_cast<double>(1.F), 1e-4));
   CHECK(result.detections.beam_chi2()[0] == 0.F);
   CHECK(result.detections.boost()[0] == 0.F);
 }
@@ -161,22 +164,22 @@ TEST_CASE("process_band zero-pads postage stamps correctly for islands touching 
   const auto ratio = config.max_to_std_ratio_value();
 
   CHECK(result.detections.island_size()[tl] == 1);
-  CHECK(result.detections.local_noise()[tl] == Catch::Approx(expected_noise).epsilon(1e-4));
-  CHECK(result.detections.signal_to_noise()[tl] == Catch::Approx(50.F / expected_noise).epsilon(1e-4));
-  CHECK(result.detections.signal_to_noise_rms()[tl] == Catch::Approx(50.F / expected_stddev).epsilon(1e-4));
-  CHECK(result.detections.signal_to_noise_local_mad()[tl] == Catch::Approx(50.F / expected_lmad).epsilon(1e-4));
-  CHECK(result.detections.signal_to_noise_global_mad()[tl] == Catch::Approx(50.F / expected_noise).epsilon(1e-4));
-  CHECK(result.detections.signal_to_noise_extended_box()[tl] == Catch::Approx(50.F * ratio / 6.F).epsilon(1e-4));
-  CHECK(result.detections.self_noise()[tl] == Catch::Approx(1.1F));
+  CHECK_THAT(result.detections.local_noise()[tl], Catch::Matchers::WithinRel(static_cast<double>(expected_noise), 1e-4));
+  CHECK_THAT(result.detections.signal_to_noise()[tl], Catch::Matchers::WithinRel(static_cast<double>(50.F / expected_noise), 1e-4));
+  CHECK_THAT(result.detections.signal_to_noise_rms()[tl], Catch::Matchers::WithinRel(static_cast<double>(50.F / expected_stddev), 1e-4));
+  CHECK_THAT(result.detections.signal_to_noise_local_mad()[tl], Catch::Matchers::WithinRel(static_cast<double>(50.F / expected_lmad), 1e-4));
+  CHECK_THAT(result.detections.signal_to_noise_global_mad()[tl], Catch::Matchers::WithinRel(static_cast<double>(50.F / expected_noise), 1e-4));
+  CHECK_THAT(result.detections.signal_to_noise_extended_box()[tl], Catch::Matchers::WithinRel(static_cast<double>(50.F * ratio / 6.F), 1e-4));
+  CHECK_THAT(result.detections.self_noise()[tl], Catch::Matchers::WithinRel(1.1F));
 
   CHECK(result.detections.island_size()[br] == 1);
-  CHECK(result.detections.local_noise()[br] == Catch::Approx(expected_noise).epsilon(1e-4));
-  CHECK(result.detections.signal_to_noise()[br] == Catch::Approx(60.F / expected_noise).epsilon(1e-4));
-  CHECK(result.detections.signal_to_noise_rms()[br] == Catch::Approx(60.F / expected_stddev).epsilon(1e-4));
-  CHECK(result.detections.signal_to_noise_local_mad()[br] == Catch::Approx(60.F / expected_lmad).epsilon(1e-4));
-  CHECK(result.detections.signal_to_noise_global_mad()[br] == Catch::Approx(60.F / expected_noise).epsilon(1e-4));
-  CHECK(result.detections.signal_to_noise_extended_box()[br] == Catch::Approx(60.F * ratio / 6.F).epsilon(1e-4));
-  CHECK(result.detections.self_noise()[br] == Catch::Approx(9.9F));
+  CHECK_THAT(result.detections.local_noise()[br], Catch::Matchers::WithinRel(static_cast<double>(expected_noise), 1e-4));
+  CHECK_THAT(result.detections.signal_to_noise()[br], Catch::Matchers::WithinRel(static_cast<double>(60.F / expected_noise), 1e-4));
+  CHECK_THAT(result.detections.signal_to_noise_rms()[br], Catch::Matchers::WithinRel(static_cast<double>(60.F / expected_stddev), 1e-4));
+  CHECK_THAT(result.detections.signal_to_noise_local_mad()[br], Catch::Matchers::WithinRel(static_cast<double>(60.F / expected_lmad), 1e-4));
+  CHECK_THAT(result.detections.signal_to_noise_global_mad()[br], Catch::Matchers::WithinRel(static_cast<double>(60.F / expected_noise), 1e-4));
+  CHECK_THAT(result.detections.signal_to_noise_extended_box()[br], Catch::Matchers::WithinRel(static_cast<double>(60.F * ratio / 6.F), 1e-4));
+  CHECK_THAT(result.detections.self_noise()[br], Catch::Matchers::WithinRel(9.9F));
 }
 
 TEST_CASE("process_band computes a weighted, unequally-weighted multi-channel mean, with subtract_mean off and on",
@@ -229,10 +232,10 @@ TEST_CASE("process_band computes a weighted, unequally-weighted multi-channel me
     REQUIRE(result.detections.peak_y().size() == 1);
     CHECK(result.detections.peak_y()[0] == 2);
     CHECK(result.detections.peak_x()[0] == 2);
-    CHECK(result.detections.signal_to_noise()[0] == Catch::Approx(50.F / expected_noise).epsilon(1e-4));
-    CHECK(result.detections.signal_to_noise_global_mad()[0] == Catch::Approx(50.F / expected_noise).epsilon(1e-4));
+    CHECK_THAT(result.detections.signal_to_noise()[0], Catch::Matchers::WithinRel(static_cast<double>(50.F / expected_noise), 1e-4));
+    CHECK_THAT(result.detections.signal_to_noise_global_mad()[0], Catch::Matchers::WithinRel(static_cast<double>(50.F / expected_noise), 1e-4));
     CHECK(result.detections.signal_to_noise_rms()[0] == 0.F); // uniform donut
-    CHECK(result.detections.signal_to_noise_extended_box()[0] == Catch::Approx(50.F * ratio).epsilon(1e-4));
+    CHECK_THAT(result.detections.signal_to_noise_extended_box()[0], Catch::Matchers::WithinRel(static_cast<double>(50.F * ratio), 1e-4));
   }
 
   // subtract_mean on: mean_image=[4,0], inv_band_size=0.5 -> subtracts 2.0 everywhere: background 1.0->-1.0, peak
@@ -250,10 +253,10 @@ TEST_CASE("process_band computes a weighted, unequally-weighted multi-channel me
     REQUIRE(result.detections.peak_y().size() == 1);
     CHECK(result.detections.peak_y()[0] == 2);
     CHECK(result.detections.peak_x()[0] == 2);
-    CHECK(result.detections.signal_to_noise()[0] == Catch::Approx(48.F / expected_noise).epsilon(1e-4));
-    CHECK(result.detections.signal_to_noise_global_mad()[0] == Catch::Approx(48.F / expected_noise).epsilon(1e-4));
+    CHECK_THAT(result.detections.signal_to_noise()[0], Catch::Matchers::WithinRel(static_cast<double>(48.F / expected_noise), 1e-4));
+    CHECK_THAT(result.detections.signal_to_noise_global_mad()[0], Catch::Matchers::WithinRel(static_cast<double>(48.F / expected_noise), 1e-4));
     CHECK(result.detections.signal_to_noise_rms()[0] == 0.F); // uniform donut
-    CHECK(result.detections.signal_to_noise_extended_box()[0] == Catch::Approx(48.F * ratio).epsilon(1e-4));
+    CHECK_THAT(result.detections.signal_to_noise_extended_box()[0], Catch::Matchers::WithinRel(static_cast<double>(48.F * ratio), 1e-4));
   }
 }
 
@@ -466,17 +469,17 @@ TEST_CASE("process_band matches an independent Python reference on a wide-scale 
   {
     const auto i = find_index(e.peak_y, e.peak_x);
     CHECK(result.detections.island_size()[i] == 1);
-    CHECK(result.detections.local_noise()[i] == Catch::Approx(e.local_noise).epsilon(1e-4));
-    CHECK(result.detections.local_noise_median_ratio()[i] == Catch::Approx(e.local_noise_median_ratio).epsilon(1e-4));
-    CHECK(result.detections.signal_to_noise()[i] == Catch::Approx(e.signal_to_noise).epsilon(1e-4));
-    CHECK(result.detections.signal_to_noise_rms()[i] == Catch::Approx(e.signal_to_noise_rms).epsilon(1e-4));
+    CHECK_THAT(result.detections.local_noise()[i], Catch::Matchers::WithinRel(static_cast<double>(e.local_noise), 1e-4));
+    CHECK_THAT(result.detections.local_noise_median_ratio()[i], Catch::Matchers::WithinRel(static_cast<double>(e.local_noise_median_ratio), 1e-4));
+    CHECK_THAT(result.detections.signal_to_noise()[i], Catch::Matchers::WithinRel(static_cast<double>(e.signal_to_noise), 1e-4));
+    CHECK_THAT(result.detections.signal_to_noise_rms()[i], Catch::Matchers::WithinRel(static_cast<double>(e.signal_to_noise_rms), 1e-4));
     const auto expected_extended_box = e.flux * ratio / e.extreme;
-    CHECK(result.detections.signal_to_noise_extended_box()[i] == Catch::Approx(expected_extended_box).epsilon(1e-4));
-    CHECK(result.detections.signal_to_noise_local_mad()[i] == Catch::Approx(e.signal_to_noise_local_mad).epsilon(1e-4));
-    CHECK(result.detections.signal_to_noise_global_mad()[i] ==
-         Catch::Approx(e.signal_to_noise_global_mad).epsilon(1e-4));
-    CHECK(result.detections.self_noise()[i] == Catch::Approx(e.self_noise).epsilon(1e-4));
-    CHECK(result.detections.excess_noise_factor()[i] == Catch::Approx(e.excess_noise_factor).epsilon(1e-4));
+    CHECK_THAT(result.detections.signal_to_noise_extended_box()[i], Catch::Matchers::WithinRel(static_cast<double>(expected_extended_box), 1e-4));
+    CHECK_THAT(result.detections.signal_to_noise_local_mad()[i], Catch::Matchers::WithinRel(static_cast<double>(e.signal_to_noise_local_mad), 1e-4));
+    CHECK_THAT(result.detections.signal_to_noise_global_mad()[i],
+               Catch::Matchers::WithinRel(static_cast<double>(e.signal_to_noise_global_mad), 1e-4));
+    CHECK_THAT(result.detections.self_noise()[i], Catch::Matchers::WithinRel(static_cast<double>(e.self_noise), 1e-4));
+    CHECK_THAT(result.detections.excess_noise_factor()[i], Catch::Matchers::WithinRel(static_cast<double>(e.excess_noise_factor), 1e-4));
     CHECK(result.detections.beam_chi2()[i] == 0.F);
     CHECK(result.detections.boost()[i] == 0.F);
   }
@@ -537,10 +540,10 @@ TEST_CASE("process_band computes beam_chi2 via a fixed beam kernel, with the bea
   // fit = mean(48*1.0 + 50.0)/49 = 2.0; sum(diff^2) = 48*1^2 + 48^2 = 2352; extreme = 1.0 (uniform donut).
   const float ratio = config.max_to_std_ratio_value();
   const float expected_chi2 = 2352.F * ratio * ratio / 49.F;
-  CHECK(result.detections.beam_chi2()[0] == Catch::Approx(expected_chi2).epsilon(1e-4));
+  CHECK_THAT(result.detections.beam_chi2()[0], Catch::Matchers::WithinRel(static_cast<double>(expected_chi2), 1e-4));
 
   const float expected_extended_box = 50.F * ratio;
-  CHECK(result.detections.signal_to_noise_extended_box()[0] == Catch::Approx(expected_extended_box).epsilon(1e-4));
+  CHECK_THAT(result.detections.signal_to_noise_extended_box()[0], Catch::Matchers::WithinRel(static_cast<double>(expected_extended_box), 1e-4));
 }
 
 TEST_CASE("process_band computes beam_chi2 via the adaptive weighted-kernel path, with radius+1 dominating padding",
@@ -598,7 +601,7 @@ TEST_CASE("process_band computes beam_chi2 via the adaptive weighted-kernel path
   CHECK(result.detections.peak_y()[0] == 6);
   CHECK(result.detections.peak_x()[0] == 6);
   CHECK(result.detections.island_size()[0] == 1);
-  CHECK(result.detections.excess_noise_factor()[0] == Catch::Approx(1.F).epsilon(1e-4));
+  CHECK_THAT(result.detections.excess_noise_factor()[0], Catch::Matchers::WithinRel(static_cast<double>(1.F), 1e-4));
 
   // recompute chi2 independently via the Group 1-validated build_gaussian_beam_kernel, not process_band's internals
   const auto expected_kernel = build_gaussian_beam_kernel(/*halfsize=*/2, /*sigma_major=*/0.55F, /*sigma_minor=*/0.35F,
@@ -615,10 +618,10 @@ TEST_CASE("process_band computes beam_chi2 via the adaptive weighted-kernel path
   const float ratio = config.max_to_std_ratio_value(); // extreme = 1.0 (uniform donut)
   const float adjacent_noise = 1.F / ratio;
   const float expected_chi2 = xt::sum(diff * diff)() / (adjacent_noise * adjacent_noise * 25.F);
-  CHECK(result.detections.beam_chi2()[0] == Catch::Approx(expected_chi2).epsilon(1e-4));
+  CHECK_THAT(result.detections.beam_chi2()[0], Catch::Matchers::WithinRel(static_cast<double>(expected_chi2), 1e-4));
 
   const float expected_extended_box = 50.F * ratio;
-  CHECK(result.detections.signal_to_noise_extended_box()[0] == Catch::Approx(expected_extended_box).epsilon(1e-4));
+  CHECK_THAT(result.detections.signal_to_noise_extended_box()[0], Catch::Matchers::WithinRel(static_cast<double>(expected_extended_box), 1e-4));
   CHECK(result.detections.boost()[0] == 0.F);
 }
 
@@ -740,7 +743,7 @@ TEST_CASE("process_band's boost preserves the sign of the island's largest-magni
     CHECK(result.detections.peak_y()[0] == 3);
     CHECK(result.detections.peak_x()[0] == 3);
     CHECK(result.detections.island_size()[0] == 2);
-    CHECK(result.detections.boost()[0] == Catch::Approx(-6.25F).epsilon(1e-4));
+    CHECK_THAT(result.detections.boost()[0], Catch::Matchers::WithinRel(static_cast<double>(-6.25F), 1e-4));
   }
 
   // Part B: the peak pixel (3,3) has the larger-magnitude ratio. process_band overwrites item.stokes_cube with the
@@ -759,7 +762,7 @@ TEST_CASE("process_band's boost preserves the sign of the island's largest-magni
 
     REQUIRE(result.detections.peak_y().size() == 1);
     CHECK(result.detections.island_size()[0] == 2);
-    CHECK(result.detections.boost()[0] == Catch::Approx(25.F).epsilon(1e-4));
+    CHECK_THAT(result.detections.boost()[0], Catch::Matchers::WithinRel(static_cast<double>(25.F), 1e-4));
   }
 }
 

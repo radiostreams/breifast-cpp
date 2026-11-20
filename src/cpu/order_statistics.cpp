@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <limits>
 
-#include <tracy/Tracy.hpp>
 #include <xsimd/xsimd.hpp>
 
 namespace breifast::detail::median
@@ -204,19 +203,16 @@ template <typename Key> float select(std::span<const float> values)
 
 float radix_median_of(std::span<const float> values)
 {
-  ZoneScoped;
   return radix::select<radix::SignedKey>(values);
 }
 
 float radix_median_of_abs(std::span<const float> values)
 {
-  ZoneScoped;
   return radix::select<radix::AbsKey>(values);
 }
 
 template <typename T> float median_of_abs(std::span<const T> values, std::vector<T> &scratch)
 {
-  ZoneScoped;
   scratch.resize(values.size());
   std::transform(values.begin(), values.end(), scratch.begin(), [](T x) { return std::abs(x); });
   const size_t n = scratch.size();
@@ -240,7 +236,6 @@ template <typename T> float median_of_abs(std::span<const T> values, std::vector
 
 template <typename T> float median_of(std::span<const T> values, std::vector<T> &scratch)
 {
-  ZoneScoped;
   scratch.assign(values.begin(), values.end());
   const size_t n = scratch.size();
   const size_t mid = n / 2;

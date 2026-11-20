@@ -2,11 +2,12 @@
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
-#include <catch2/matchers/catch_matchers_string.hpp>
+#include <catch2/matchers/catch_matchers_vector.hpp>
 
 #include "cpu/island_stamps.hpp"
 
 using breifast::plane_lot::detail::stamp_extract;
+using Catch::Matchers::Equals;
 
 namespace
 {
@@ -84,7 +85,7 @@ TEST_CASE("stamp_extract matches numpy's padded slicing for windows inside, on t
   for (const auto &c : cases)
   {
     INFO("centre (" << c.centre_y << ", " << c.centre_x << ")");
-    CHECK(run_stamp_extract(c.centre_y, c.centre_x, 2) == c.expected);
+    CHECK_THAT(run_stamp_extract(c.centre_y, c.centre_x, 2), Equals(c.expected));
   }
 }
 
@@ -111,7 +112,7 @@ TEST_CASE("stamp_extract pads a window larger than the plane with zeros on every
       0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F,
   };
 
-  CHECK(run_stamp_extract(2, 3, 8) == expected);
+  CHECK_THAT(run_stamp_extract(2, 3, 8), Equals(expected));
 }
 
 TEST_CASE("stamp_extract returns zeros when the window does not touch the plane", "[stamp_extract]")
@@ -123,17 +124,17 @@ TEST_CASE("stamp_extract returns zeros when the window does not touch the plane"
                                           {8, 3}, {3, 10}})
   {
     INFO("centre (" << centre_y << ", " << centre_x << ")");
-    CHECK(run_stamp_extract(centre_y, centre_x, 2) == zeros);
+    CHECK_THAT(run_stamp_extract(centre_y, centre_x, 2), Equals(zeros));
   }
 }
 
 TEST_CASE("stamp_extract with radius 0 is the pixel itself or 0 outside the plane", "[stamp_extract]")
 {
-  CHECK(run_stamp_extract(0, 0, 0) == std::vector<float>{100.F});
-  CHECK(run_stamp_extract(5, 6, 0) == std::vector<float>{156.F});
-  CHECK(run_stamp_extract(2, 4, 0) == std::vector<float>{124.F});
-  CHECK(run_stamp_extract(6, 0, 0) == std::vector<float>{0.F});
-  CHECK(run_stamp_extract(0, -1, 0) == std::vector<float>{0.F});
+  CHECK_THAT(run_stamp_extract(0, 0, 0), Equals(std::vector<float>{100.F}));
+  CHECK_THAT(run_stamp_extract(5, 6, 0), Equals(std::vector<float>{156.F}));
+  CHECK_THAT(run_stamp_extract(2, 4, 0), Equals(std::vector<float>{124.F}));
+  CHECK_THAT(run_stamp_extract(6, 0, 0), Equals(std::vector<float>{0.F}));
+  CHECK_THAT(run_stamp_extract(0, -1, 0), Equals(std::vector<float>{0.F}));
 }
 
 TEST_CASE("stamp_extract overwrites the stale values of out_stamp", "[stamp_extract]")
@@ -142,20 +143,7 @@ TEST_CASE("stamp_extract overwrites the stale values of out_stamp", "[stamp_extr
   // was there. The corner window has 16 of its 25 pixels outside the plane.
   const auto from_zero = run_stamp_extract(0, 0, 2);
 
-  CHECK(run_stamp_extract(0, 0, 2, std::numeric_limits<float>::quiet_NaN()) == from_zero);
-  CHECK(run_stamp_extract(0, 0, 2, 1.0e30F) == from_zero);
-  CHECK(run_stamp_extract(-10, 3, 2, 1.0e30F) == std::vector<float>(25, 0.F));
-}
-
-TEST_CASE("stamp_extract rejects a plane or stamp of the wrong size and a negative radius", "[stamp_extract]")
-{
-  std::vector<float> stamp(25);
-  std::vector<float> short_stamp(24);
-  const std::vector<float> short_plane(n_y * n_x - 1);
-
-  using Catch::Matchers::ContainsSubstring;
-  CHECK_THROWS_WITH(stamp_extract(short_plane, n_y, n_x, 3, 3, 2, stamp), ContainsSubstring("plane size mismatch"));
-  CHECK_THROWS_WITH(stamp_extract(plane, n_y, n_x, 3, 3, 2, short_stamp), ContainsSubstring("out_stamp size mismatch"));
-  CHECK_THROWS_WITH(stamp_extract(plane, n_y, n_x, 3, 3, -1, stamp), ContainsSubstring("negative radius"));
-  CHECK_NOTHROW(stamp_extract(plane, n_y, n_x, 3, 3, 2, stamp));
+  CHECK_THAT(run_stamp_extract(0, 0, 2, std::numeric_limits<float>::quiet_NaN()), Equals(from_zero));
+  CHECK_THAT(run_stamp_extract(0, 0, 2, 1.0e30F), Equals(from_zero));
+  CHECK_THAT(run_stamp_extract(-10, 3, 2, 1.0e30F), Equals(std::vector<float>(25, 0.F)));
 }

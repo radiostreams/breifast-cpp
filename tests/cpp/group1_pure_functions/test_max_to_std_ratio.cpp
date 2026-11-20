@@ -2,6 +2,7 @@
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "plane_lot_dispatch.hpp"
 
@@ -33,15 +34,15 @@ TEST_CASE("max_to_std_ratio_value matches an independent Python reference of the
   };
   for (const auto &c : cases)
   {
-    CHECK(ratio_for_boxsize(c.boxsize) == Catch::Approx(c.expected).margin(0.01));
+    CHECK_THAT(ratio_for_boxsize(c.boxsize), Catch::Matchers::WithinAbs(c.expected, 0.01));
   }
 }
 
 TEST_CASE("max_to_std_ratio_value is 0 for a single-sample box (boxsize 0 or 1)", "[max_to_std_ratio]")
 {
   // radius = boxsize/2 = 0 for both, giving n = 1: the median of a single standard normal sample is exactly 0.
-  CHECK(ratio_for_boxsize(0) == Catch::Approx(0.0).margin(0.01));
-  CHECK(ratio_for_boxsize(1) == Catch::Approx(0.0).margin(0.01));
+  CHECK_THAT(ratio_for_boxsize(0), Catch::Matchers::WithinAbs(0.0, 0.01));
+  CHECK_THAT(ratio_for_boxsize(1), Catch::Matchers::WithinAbs(0.0, 0.01));
 }
 
 TEST_CASE("max_to_std_ratio_value is always non-negative", "[max_to_std_ratio]")
