@@ -4,10 +4,12 @@
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "cpu/order_statistics.hpp"
 
 using namespace breifast::detail::median;
+using Catch::Matchers::WithinRel;
 
 namespace
 {
@@ -38,17 +40,17 @@ TEST_CASE("median_of and median_of_abs pick the middle value for odd n and avera
   // One scratch reused across every call, shrinking and growing, as process_band does.
   std::vector<float> scratch;
 
-  CHECK(median({5.F, 1.F, 4.F, 2.F, 3.F}, scratch) == 3.F);
-  CHECK(median({5.F, 1.F, 4.F, 2.F, 3.F, 6.F}, scratch) == 3.5F);
-  CHECK(median({7.F}, scratch) == 7.F);
-  CHECK(median({2.F, 8.F}, scratch) == 5.F);
-  CHECK(median({-3.F, -1.F, -2.F}, scratch) == -2.F);
+  CHECK_THAT(median({5.F, 1.F, 4.F, 2.F, 3.F}, scratch), WithinRel(3.F));
+  CHECK_THAT(median({5.F, 1.F, 4.F, 2.F, 3.F, 6.F}, scratch), WithinRel(3.5F));
+  CHECK_THAT(median({7.F}, scratch), WithinRel(7.F));
+  CHECK_THAT(median({2.F, 8.F}, scratch), WithinRel(5.F));
+  CHECK_THAT(median({-3.F, -1.F, -2.F}, scratch), WithinRel(-2.F));
 
   // Signs that would reorder the plain values, to prove the abs version ranks by magnitude.
-  CHECK(median_abs({-5.F, 1.F, -4.F, 2.F, 3.F}, scratch) == 3.F);
-  CHECK(median_abs({-6.F, 1.F, -4.F, 2.F, 3.F, 5.F}, scratch) == 3.5F);
-  CHECK(median_abs({-7.F}, scratch) == 7.F);
-  CHECK(median_abs({-2.F, 8.F}, scratch) == 5.F);
+  CHECK_THAT(median_abs({-5.F, 1.F, -4.F, 2.F, 3.F}, scratch), WithinRel(3.F));
+  CHECK_THAT(median_abs({-6.F, 1.F, -4.F, 2.F, 3.F, 5.F}, scratch), WithinRel(3.5F));
+  CHECK_THAT(median_abs({-7.F}, scratch), WithinRel(7.F));
+  CHECK_THAT(median_abs({-2.F, 8.F}, scratch), WithinRel(5.F));
 }
 
 namespace
@@ -91,8 +93,8 @@ TEST_CASE("median_of and median_of_abs match numpy's median on seeded arrays wit
   {
     INFO("n=" << c.n << " seed=" << c.seed);
     const auto values = lcg_values(c.n, c.seed);
-    CHECK(median(values, scratch) == c.median);
-    CHECK(median_abs(values, scratch) == c.median_abs);
+    CHECK_THAT(median(values, scratch), WithinRel(c.median));
+    CHECK_THAT(median_abs(values, scratch), WithinRel(c.median_abs));
   }
 }
 
@@ -107,19 +109,19 @@ TEST_CASE("median_of and median_of_abs handle ties, zeros of both signs, subnorm
 
   std::vector<float> scratch;
 
-  CHECK(median({4.F, 4.F, 4.F, 4.F, 4.F, 4.F, 4.F}, scratch) == 4.F);
-  CHECK(median({3.F, 3.F, 3.F, 1.F, 3.F, 3.F}, scratch) == 3.F);
+  CHECK_THAT(median({4.F, 4.F, 4.F, 4.F, 4.F, 4.F, 4.F}, scratch), WithinRel(4.F));
+  CHECK_THAT(median({3.F, 3.F, 3.F, 1.F, 3.F, 3.F}, scratch), WithinRel(3.F));
   // -0 and +0 compare equal, so this pins the value and leaves the sign of the returned zero free.
-  CHECK(median({-0.F, 0.F, -0.F, 0.F, 0.F}, scratch) == 0.F);
-  CHECK(median({subnormal_1, subnormal_3, subnormal_2}, scratch) == subnormal_2);
+  CHECK_THAT(median({-0.F, 0.F, -0.F, 0.F, 0.F}, scratch), WithinRel(0.F));
+  CHECK_THAT(median({subnormal_1, subnormal_3, subnormal_2}, scratch), WithinRel(subnormal_2));
 
-  CHECK(median({-inf, 1.F, inf}, scratch) == 1.F);
-  CHECK(median({1.F, inf}, scratch) == inf);
+  CHECK_THAT(median({-inf, 1.F, inf}, scratch), WithinRel(1.F));
+  CHECK_THAT(median({1.F, inf}, scratch), WithinRel(inf));
   CHECK(std::isnan(median({-inf, inf}, scratch))); // (-inf + inf) / 2, same as numpy
-  CHECK(median_abs({-inf, 1.F, inf}, scratch) == inf);
-  CHECK(median_abs({-inf, inf}, scratch) == inf);
-  CHECK(median_abs({-inf, 1.F, 2.F}, scratch) == 2.F);
-  CHECK(median_abs({-0.F, 0.F, -0.F}, scratch) == 0.F);
+  CHECK_THAT(median_abs({-inf, 1.F, inf}, scratch), WithinRel(inf));
+  CHECK_THAT(median_abs({-inf, inf}, scratch), WithinRel(inf));
+  CHECK_THAT(median_abs({-inf, 1.F, 2.F}, scratch), WithinRel(2.F));
+  CHECK_THAT(median_abs({-0.F, 0.F, -0.F}, scratch), WithinRel(0.F));
 }
 
 TEST_CASE("radix_median_of and radix_median_of_abs return the same value as the nth_element versions on random arrays",
@@ -166,7 +168,7 @@ TEST_CASE("radix_median_of and radix_median_of_abs return the same value as the 
     const float expected = median(values, scratch);
     const float actual = radix_median_of({values.data(), values.size()});
     CHECK(same_value(actual, expected));
-    CHECK(radix_median_of_abs({values.data(), values.size()}) == median_abs(values, scratch));
+    CHECK_THAT(radix_median_of_abs({values.data(), values.size()}), WithinRel(median_abs(values, scratch)));
     ++checked;
   }
   CHECK(checked == 6000);

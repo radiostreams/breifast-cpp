@@ -4,7 +4,7 @@
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
-#include <catch2/matchers/catch_matchers_string.hpp>
+#include <catch2/matchers/catch_matchers_vector.hpp>
 #include <xtensor/containers/xtensor.hpp>
 #include <xtensor/core/xmath.hpp>
 
@@ -12,6 +12,7 @@
 
 using breifast::plane_lot::detail::stamp_abs_extreme;
 using breifast::plane_lot::detail::stamp_zero_inner_box;
+using Catch::Matchers::Equals;
 
 namespace
 {
@@ -44,7 +45,7 @@ TEST_CASE("stamp_zero_inner_box zeros the centre block of a 7x7 stamp like numpy
 
   stamp_zero_inner_box(stamp, 3, 1);
 
-  CHECK(stamp == expected);
+  CHECK_THAT(stamp, Equals(expected));
 }
 
 TEST_CASE("stamp_zero_inner_box handles inner_boxsize 0, the radius itself and anything wider", "[stamp_adjacent_noise]")
@@ -54,7 +55,7 @@ TEST_CASE("stamp_zero_inner_box handles inner_boxsize 0, the radius itself and a
   stamp_zero_inner_box(only_centre, 3, 0);
   auto expected_centre = counting_stamp();
   expected_centre[24] = 0.F;
-  CHECK(only_centre == expected_centre);
+  CHECK_THAT(only_centre, Equals(expected_centre));
 
   // Half-width equal to the radius, or wider (clipped to the stamp): the whole stamp.
   for (const long inner_boxsize : {3L, 4L, 100L})
@@ -62,27 +63,13 @@ TEST_CASE("stamp_zero_inner_box handles inner_boxsize 0, the radius itself and a
     INFO("inner_boxsize " << inner_boxsize);
     auto whole = counting_stamp();
     stamp_zero_inner_box(whole, 3, inner_boxsize);
-    CHECK(whole == std::vector<float>(49, 0.F));
+    CHECK_THAT(whole, Equals(std::vector<float>(49, 0.F)));
   }
 
   // Radius 0: a one-pixel stamp, zeroed by any inner_boxsize.
   std::vector<float> single = {7.F};
   stamp_zero_inner_box(single, 0, 0);
-  CHECK(single == std::vector<float>{0.F});
-}
-
-TEST_CASE("stamp_zero_inner_box rejects a negative radius or inner_boxsize and a stamp of the wrong size",
-          "[stamp_adjacent_noise]")
-{
-  auto stamp = counting_stamp();
-  std::vector<float> short_stamp(48);
-
-  using Catch::Matchers::ContainsSubstring;
-  CHECK_THROWS_WITH(stamp_zero_inner_box(stamp, -1, 1), ContainsSubstring("negative radius"));
-  CHECK_THROWS_WITH(stamp_zero_inner_box(stamp, 3, -1), ContainsSubstring("negative inner_boxsize"));
-  CHECK_THROWS_WITH(stamp_zero_inner_box(short_stamp, 3, 1), ContainsSubstring("stamp size mismatch"));
-  CHECK_THROWS_WITH(stamp_zero_inner_box(stamp, 2, 1), ContainsSubstring("stamp size mismatch"));
-  CHECK_NOTHROW(stamp_zero_inner_box(stamp, 3, 1));
+  CHECK_THAT(single, Equals(std::vector<float>{0.F}));
 }
 
 TEST_CASE("stamp_abs_extreme matches numpy's max(abs(min), abs(max)) on a seeded-random 5x5 stamp",

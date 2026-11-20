@@ -13,6 +13,16 @@ add_project_arguments('-march=' + get_option('march'), '-fno-math-errno', langua
 have_gpu = add_languages('cuda', required : get_option('gpu'), native : false)
 if have_gpu
   add_project_arguments('-arch=' + get_option('gpu_arch'), '-lineinfo', language : 'cuda')
+  cudart_dep = dependency('cudart', method : 'pkg-config')
+  cudart_libdir = cudart_dep.get_variable(pkgconfig : 'libdir')
+
+  cuda_host_include_args = []
+  foreach token : run_command('sh', '-c', 'printf %s "$NIX_CFLAGS_COMPILE"', check : false).stdout().split()
+    if token.startswith('/nix/store') and token.contains('cuda')
+      cuda_host_include_args += ['-isystem', token]
+    endif
+  endforeach
+  cuda_headers_dep = declare_dependency(compile_args : cuda_host_include_args)
 endif
 
 py = import('python').find_installation()
@@ -102,43 +112,29 @@ catch2_dep = declare_dependency(
                '-lCatch2Main', '-lCatch2'],
 )
 
-itt_root = '/ssoft/spack/pinot-noir/jed/v2/spack/opt/spack/linux-rhel9-x86_64_v3/gcc-11.4.1/intel-oneapi-vtune-2024.1.0-ggpuzpx5nqydg76zoguizove2pgh4c4i/vtune/2024.1'
+# ITT profiling (ittnotify.h / libittnotify.a). Machine-dependent: ITT_ROOT env var wins, then the
+# newest local oneAPI VTune (/opt/intel/oneapi/vtune/*), then the cluster spack path. Meson errors out
+# via check:true when none of them actually contain the header, so the failure stays explicit.
+itt_script = [
+  'sh', '-c',
+  'if [ -n "$ITT_ROOT" ] && [ -f "$ITT_ROOT/include/ittnotify.h" ]; then echo "$ITT_ROOT"; exit 0; fi; ' +
+  'best="$(ls -d /opt/intel/oneapi/vtune/*/ 2>/dev/null | sort -V | tail -1)"; ' +
+  'if [ -n "$best" ] && [ -f "${best}include/ittnotify.h" ]; then echo "${best%/}"; exit 0; fi; ' +
+  'fallback="/ssoft/spack/pinot-noir/jed/v2/spack/opt/spack/linux-rhel9-x86_64_v3/gcc-11.4.1/intel-oneapi-vtune-2024.1.0-ggpuzpx5nqydg76zoguizove2pgh4c4i/vtune/2024.1"; ' +
+  'if [ -f "$fallback/include/ittnotify.h" ]; then echo "$fallback"; exit 0; fi; exit 1'
+]
+itt_root = run_command(itt_script, check : true).stdout().strip()
 
 itt_dep = declare_dependency(
   compile_args : ['-isystem', itt_root / 'include'],
   link_args : [itt_root / 'lib64' / 'libittnotify.a', '-ldl'],
 )
 
-tracy_root = meson.project_source_root() / 'tracy'
-
-# Header-only view of Tracy, for every target that compiles an instrumented source file.
-# Without TRACY_ENABLE the zone macros expand to nothing, so this costs the wheel and the
-# test binary an include path and nothing else.
-tracy_headers_dep = declare_dependency(
-  compile_args : ['-isystem', tracy_root / 'public'],
-)
-
-# The client proper: only bench gets it, and only with -Dtracy=true.
-# no_exit makes the process block at exit until tracy-capture has drained the trace, without
-# which a batch run finishes before the capture tool has everything. only_localhost/no_broadcast
-# keep the listening socket and its discovery beacon off the cluster network.
-if get_option('tracy')
-  tracy_dep = declare_dependency(
-    sources : [tracy_root / 'public' / 'TracyClient.cpp'],
-    compile_args : ['-isystem', tracy_root / 'public',
-                    '-DTRACY_ENABLE', '-DTRACY_NO_EXIT',
-                    '-DTRACY_ONLY_LOCALHOST', '-DTRACY_NO_BROADCAST'],
-    dependencies : [dependency('threads')],
-    link_args : ['-ldl'],
-  )
-else
-  tracy_dep = tracy_headers_dep
-endif
-
 # The CPU kernels (src/cpu) and the dispatch. Compiled by every target that uses them, so that each target's
-# own Tracy and compiler arguments apply.
+# own compiler arguments apply.
 cpu_sources = [
   'src/plane_lot_dispatch.cpp',
+  'src/plane_lot_validation.cpp',
   'src/cpu/channel_reductions.cpp',
   'src/cpu/island_stamps.cpp',
   'src/cpu/islands.cpp',
@@ -148,13 +144,34 @@ cpu_sources = [
   'src/cpu/snr_filters.cpp',
   'src/cpu/windows.cpp',
 ]
+cpu_source_files = files(cpu_sources)
+
+if have_gpu
+  subdir('src/gpu')
+endif
+
+ext_sources = ['src/plane_lot_bindings.cpp'] + cpu_sources
+ext_cpp_args = []
+ext_link_args = ['-static-libstdc++', '-static-libgcc', '-Wl,-z,noexecstack']
+ext_link_with = []
+ext_deps = [py.dependency(), pybind11_dep, xtl_dep, xtensor_dep, xsimd_dep, xtensor_python_dep, numpy_dep,
+            tbb_dep, itt_dep]
+if have_gpu
+  ext_cpp_args += ['-DBREIFAST_HAVE_GPU']
+  ext_deps += [cuda_headers_dep]
+  ext_link_with += [gpu_lib, gpu_host_lib]
+  ext_link_args += ['-L' + cudart_libdir, '-lcudart_static', '-lrt', '-lpthread', '-ldl']
+endif
 
 ext_module = py.extension_module(
   'breifast_helpers',
-  ['src/plane_lot_bindings.cpp'] + cpu_sources + [tbb_build],
-  dependencies : [py.dependency(), pybind11_dep, xtl_dep, xtensor_dep, xsimd_dep, xtensor_python_dep, numpy_dep,
-                  tbb_dep, itt_dep, tracy_headers_dep],
-  link_args : ['-static-libstdc++', '-static-libgcc'],
+  ext_sources + [tbb_build],
+  include_directories : include_directories('src', 'src/gpu'),
+  dependencies : ext_deps,
+  cpp_args : ext_cpp_args,
+  link_args : ext_link_args,
+  link_with : ext_link_with,
+  link_language : 'cpp',
   install : true,
 )
 
@@ -170,7 +187,7 @@ bench = executable(
   'bench',
   ['src/bench.cpp'] + cpu_sources + [tbb_build],
   include_directories : include_directories('src'),
-  dependencies : [xtl_dep, xtensor_dep, xsimd_dep, tbb_dep, itt_dep, json_dep, tracy_dep],
+  dependencies : [xtl_dep, xtensor_dep, xsimd_dep, tbb_dep, itt_dep, json_dep],
   cpp_args : get_option('box_version') ? ['-DBOX_VERSION'] : [],
   link_args : ['-static-libstdc++', '-static-libgcc'],
   build_by_default : false,
@@ -180,6 +197,7 @@ test_breifast_core_sources = cpu_sources + [
   'tests/cpp/group1_pure_functions/test_build_gaussian_beam_kernel.cpp',
   'tests/cpp/group1_pure_functions/test_compute_rms_noise_map.cpp',
   'tests/cpp/group1_pure_functions/test_rms_noise_map.cpp',
+  'tests/cpp/group1_pure_functions/test_compact_mask.cpp',
   'tests/cpp/group1_pure_functions/test_combine_noise_map.cpp',
   'tests/cpp/group1_pure_functions/test_compute_rms_noise_map_precision.cpp',
   'tests/cpp/group1_pure_functions/test_max_to_std_ratio.cpp',
@@ -192,6 +210,8 @@ test_breifast_core_sources = cpu_sources + [
   'tests/cpp/group1_pure_functions/test_label_islands.cpp',
   'tests/cpp/group1_pure_functions/test_island_boost.cpp',
   'tests/cpp/group1_pure_functions/test_median.cpp',
+  'tests/cpp/group1_pure_functions/test_host_copies.cpp',
+  'tests/cpp/group1_pure_functions/test_host_memory.cpp',
   'tests/cpp/group1_pure_functions/test_or_accept_masks.cpp',
   'tests/cpp/group1_pure_functions/test_weighted_band_image.cpp',
   'tests/cpp/group2_snr_filters/test_compute_snr_and_apply_filters.cpp',
@@ -202,21 +222,18 @@ test_breifast_core_sources = cpu_sources + [
   'tests/cpp/group4_dispatch/test_run_batch_core.cpp',
   'tests/cpp/group4_dispatch/test_run_batch_core_random.cpp',
   'tests/cpp/group4_dispatch/test_run_batch_core_scratch_persistence.cpp',
+  'tests/cpp/group4_dispatch/test_validate_plane_inputs.cpp',
 ]
 
 test_breifast_core = executable(
   'test_breifast_core',
   test_breifast_core_sources + [tbb_build, catch2_build],
   include_directories : include_directories('src'),
-  dependencies : [xtl_dep, xtensor_dep, xsimd_dep, tbb_dep, catch2_dep, itt_dep, json_dep, tracy_headers_dep],
+  dependencies : [xtl_dep, xtensor_dep, xsimd_dep, tbb_dep, catch2_dep, itt_dep, json_dep],
   cpp_args : ['-DFIXTURES_DIR="' + meson.project_source_root() / 'tests' / 'fixtures' + '"'],
   link_args : ['-static-libstdc++', '-static-libgcc'],
 )
 test('breifast_core', test_breifast_core)
-
-if have_gpu
-  subdir('src/gpu')
-endif
 
 uv = find_program('uv', required : true)
 devshell_python = find_program('python3', required : true)
@@ -224,5 +241,13 @@ run_target('wheel',
   command : [uv, 'build', '--wheel', '--no-build-isolation',
              '--python', devshell_python,
              '-o', meson.project_source_root() / 'dist',
+             meson.project_source_root()],
+)
+
+run_target('wheel-gpu',
+  command : [uv, 'build', '--wheel', '--no-build-isolation',
+             '--config-setting', 'setup-args=-Dgpu=enabled',
+             '--python', devshell_python,
+             '-o', meson.project_source_root() / 'dist-gpu',
              meson.project_source_root()],
 )

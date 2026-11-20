@@ -2,7 +2,7 @@
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
-#include <catch2/matchers/catch_matchers_string.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "cpu/island_stamps.hpp"
 
@@ -28,8 +28,8 @@ TEST_CASE("stamp_donut_stats matches numpy on a seeded-random 9x9 stamp with a z
 
   const auto stats = stamp_donut_stats(stamp, 4);
 
-  CHECK(stats.stddev == Approx(2.610630869687416).epsilon(1e-6));
-  CHECK(stats.lmad == Approx(2.5861778259277344F).epsilon(1e-6));
+  CHECK_THAT(stats.stddev, Catch::Matchers::WithinRel(2.610630869687416, 1e-6));
+  CHECK_THAT(stats.lmad, Catch::Matchers::WithinRel(static_cast<double>(2.5861778259277344F), 1e-6));
 }
 
 TEST_CASE("stamp_donut_stats averages the two middle ranks for an even count of nonzero pixels", "[stamp_donut_stats]")
@@ -44,8 +44,8 @@ TEST_CASE("stamp_donut_stats averages the two middle ranks for an even count of 
 
   const auto stats = stamp_donut_stats(stamp, 1);
 
-  CHECK(stats.stddev == Approx(4.0).epsilon(1e-12));
-  CHECK(stats.lmad == Approx(4.F * 1.4826F).epsilon(1e-6));
+  CHECK_THAT(stats.stddev, Catch::Matchers::WithinRel(4.0, 1e-12));
+  CHECK_THAT(stats.lmad, Catch::Matchers::WithinRel(static_cast<double>(4.F * 1.4826F), 1e-6));
 }
 
 TEST_CASE("stamp_donut_stats gives zeros for an all-zero stamp and a zero spread for one nonzero pixel",
@@ -65,15 +65,5 @@ TEST_CASE("stamp_donut_stats gives zeros for an all-zero stamp and a zero spread
   one[7] = -2.5F;
   const auto single = stamp_donut_stats(one, 2);
   CHECK(single.stddev == 0.0);
-  CHECK(single.lmad == Approx(3.7065F).epsilon(1e-6));
-}
-
-TEST_CASE("stamp_donut_stats rejects a negative radius and a stamp of the wrong size", "[stamp_donut_stats]")
-{
-  using Catch::Matchers::ContainsSubstring;
-  CHECK_THROWS_WITH(stamp_donut_stats(std::vector<float>(9, 1.F), -1), ContainsSubstring("negative radius"));
-  CHECK_THROWS_WITH(stamp_donut_stats(std::vector<float>(8, 1.F), 1), ContainsSubstring("size mismatch"));
-  CHECK_THROWS_WITH(stamp_donut_stats(std::vector<float>(10, 1.F), 1), ContainsSubstring("size mismatch"));
-  CHECK_THROWS_WITH(stamp_donut_stats(std::vector<float>(), 0), ContainsSubstring("size mismatch"));
-  CHECK_NOTHROW(stamp_donut_stats(std::vector<float>(9, 1.F), 1));
+  CHECK_THAT(single.lmad, Catch::Matchers::WithinRel(static_cast<double>(3.7065F), 1e-6));
 }

@@ -2,10 +2,14 @@
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_range_equals.hpp>
+#include <catch2/matchers/catch_matchers_vector.hpp>
 
 #include "plane_lot_dispatch.hpp"
 
 using namespace breifast;
+using Catch::Matchers::Equals;
+using Catch::Matchers::RangeEquals;
 
 namespace
 {
@@ -70,27 +74,27 @@ void check_same_result(const ProcessPlaneResult &actual, const ProcessPlaneResul
 {
   const auto &a = actual.detections;
   const auto &e = expected.detections;
-  CHECK(a.peak_y() == e.peak_y());
-  CHECK(a.peak_x() == e.peak_x());
-  CHECK(a.island_size() == e.island_size());
-  CHECK(a.stokes_label() == e.stokes_label());
-  CHECK(a.band_label() == e.band_label());
-  CHECK(a.flux() == e.flux());
-  CHECK(a.local_noise() == e.local_noise());
-  CHECK(a.local_noise_median_ratio() == e.local_noise_median_ratio());
-  CHECK(a.signal_to_noise() == e.signal_to_noise());
-  CHECK(a.signal_to_noise_rms() == e.signal_to_noise_rms());
-  CHECK(a.signal_to_noise_extended_box() == e.signal_to_noise_extended_box());
-  CHECK(a.signal_to_noise_local_mad() == e.signal_to_noise_local_mad());
-  CHECK(a.signal_to_noise_global_mad() == e.signal_to_noise_global_mad());
-  CHECK(a.self_noise() == e.self_noise());
-  CHECK(a.excess_noise_factor() == e.excess_noise_factor());
-  CHECK(a.beam_chi2() == e.beam_chi2());
-  CHECK(a.boost() == e.boost());
+  CHECK_THAT(a.peak_y(), Equals(e.peak_y()));
+  CHECK_THAT(a.peak_x(), Equals(e.peak_x()));
+  CHECK_THAT(a.island_size(), Equals(e.island_size()));
+  CHECK_THAT(a.stokes_label(), Equals(e.stokes_label()));
+  CHECK_THAT(a.band_label(), Equals(e.band_label()));
+  CHECK_THAT(a.flux(), Equals(e.flux()));
+  CHECK_THAT(a.local_noise(), Equals(e.local_noise()));
+  CHECK_THAT(a.local_noise_median_ratio(), Equals(e.local_noise_median_ratio()));
+  CHECK_THAT(a.signal_to_noise(), Equals(e.signal_to_noise()));
+  CHECK_THAT(a.signal_to_noise_rms(), Equals(e.signal_to_noise_rms()));
+  CHECK_THAT(a.signal_to_noise_extended_box(), Equals(e.signal_to_noise_extended_box()));
+  CHECK_THAT(a.signal_to_noise_local_mad(), Equals(e.signal_to_noise_local_mad()));
+  CHECK_THAT(a.signal_to_noise_global_mad(), Equals(e.signal_to_noise_global_mad()));
+  CHECK_THAT(a.self_noise(), Equals(e.self_noise()));
+  CHECK_THAT(a.excess_noise_factor(), Equals(e.excess_noise_factor()));
+  CHECK_THAT(a.beam_chi2(), Equals(e.beam_chi2()));
+  CHECK_THAT(a.boost(), Equals(e.boost()));
   CHECK(actual.min_sigma == expected.min_sigma);
   CHECK(actual.max_sigma == expected.max_sigma);
-  CHECK(actual.histograms == expected.histograms);
-  CHECK(actual.median_noises == expected.median_noises);
+  CHECK_THAT(actual.histograms, RangeEquals(expected.histograms));
+  CHECK_THAT(actual.median_noises, Equals(expected.median_noises));
 }
 } // namespace
 

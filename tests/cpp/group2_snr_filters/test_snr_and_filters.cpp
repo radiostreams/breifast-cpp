@@ -5,13 +5,17 @@
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_range_equals.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
+#include <catch2/matchers/catch_matchers_vector.hpp>
 
 #include "cpu/snr_filters.hpp"
 
 using breifast::plane_lot::detail::snr_and_filters;
 using breifast::plane_lot::detail::SnrFilterParams;
 using breifast::plane_lot::detail::SnrFilterSummary;
+using Catch::Matchers::Equals;
+using Catch::Matchers::RangeEquals;
 
 namespace
 {
@@ -153,9 +157,9 @@ TEST_CASE("snr_and_filters matches a seeded-random 37-pixel plane with every sta
 
   const auto out = run_snr_and_filters(0.F, 0);
 
-  CHECK(out.snr == expected_snr);
-  CHECK(out.mask == expected_mask);
-  CHECK(out.histograms == expected_histograms);
+  CHECK_THAT(out.snr, Equals(expected_snr));
+  CHECK_THAT(out.mask, Equals(expected_mask));
+  CHECK_THAT(out.histograms, RangeEquals(expected_histograms));
   CHECK(out.summary.min_sigma == -2.18333697F);
   CHECK(out.summary.max_sigma == 4.03591585F);
 }
@@ -169,9 +173,9 @@ TEST_CASE("snr_and_filters overwrites the stale values of out_snr and the histog
 
   for (const auto *other : {&from_nan, &from_garbage})
   {
-    CHECK(other->snr == from_zero.snr);
-    CHECK(other->mask == from_zero.mask);
-    CHECK(other->histograms == from_zero.histograms);
+    CHECK_THAT(other->snr, Equals(from_zero.snr));
+    CHECK_THAT(other->mask, Equals(from_zero.mask));
+    CHECK_THAT(other->histograms, RangeEquals(from_zero.histograms));
     CHECK(other->summary.min_sigma == from_zero.summary.min_sigma);
     CHECK(other->summary.max_sigma == from_zero.summary.max_sigma);
   }
@@ -183,69 +187,9 @@ TEST_CASE("snr_and_filters returns the empty summary and zero histograms when no
 
   CHECK(out.summary.min_sigma == std::numeric_limits<float>::infinity());
   CHECK(out.summary.max_sigma == std::numeric_limits<float>::lowest());
-  CHECK(out.mask == std::string(n_pixels, '0'));
+  CHECK_THAT(out.mask, Equals(std::string(n_pixels, '0')));
   for (const auto &histogram : out.histograms)
   {
-    CHECK(histogram == std::vector<long>(2 * max_sigma_bin, 0));
+    CHECK_THAT(histogram, Equals(std::vector<long>(2 * max_sigma_bin, 0)));
   }
-}
-
-TEST_CASE("snr_and_filters rejects buffers and parameters it cannot use", "[snr_and_filters]")
-{
-  std::vector<float> out_snr(n_pixels);
-  std::vector<unsigned char> mask_bytes(n_pixels, 1);
-  std::array<std::vector<long>, 3> histograms = {std::vector<long>(2 * max_sigma_bin), std::vector<long>(2 * max_sigma_bin),
-                                                 std::vector<long>(2 * max_sigma_bin)};
-  SnrFilterParams params;
-  params.band_start = 1;
-  params.band_stop = 3;
-  params.max_sigma_bin = static_cast<long>(max_sigma_bin);
-
-  const auto call = [&](std::span<const float> noise, std::span<const float> snr_cut, std::span<const float> flux_cut,
-                        const SnrFilterParams &p, std::span<float> snr_out, size_t mask_size,
-                        std::span<long> first_histogram)
-  {
-    return snr_and_filters(plane, noise, snr_cut, flux_cut, p, snr_out,
-                           {reinterpret_cast<bool *>(mask_bytes.data()), mask_size},
-                           {first_histogram, histograms[1], histograms[2]});
-  };
-  const std::span<long> histogram0(histograms[0]);
-
-  using Catch::Matchers::ContainsSubstring;
-  // Sizes that differ from the plane.
-  CHECK_THROWS_WITH(call(std::span<const float>(noise_map).first(n_pixels - 1), snr_cutoff, flux_cutoff, params, out_snr,
-                         n_pixels, histogram0),
-                    ContainsSubstring("size mismatch with plane"));
-  CHECK_THROWS_WITH(call(noise_map, snr_cutoff, flux_cutoff, params, std::span<float>(out_snr).first(n_pixels - 1),
-                         n_pixels, histogram0),
-                    ContainsSubstring("size mismatch with plane"));
-  CHECK_THROWS_WITH(call(noise_map, snr_cutoff, flux_cutoff, params, out_snr, n_pixels - 1, histogram0),
-                    ContainsSubstring("size mismatch with plane"));
-  // Histograms.
-  SnrFilterParams no_bins = params;
-  no_bins.max_sigma_bin = 0;
-  CHECK_THROWS_WITH(call(noise_map, snr_cutoff, flux_cutoff, no_bins, out_snr, n_pixels, histogram0),
-                    ContainsSubstring("max_sigma_bin must be positive"));
-  CHECK_THROWS_WITH(call(noise_map, snr_cutoff, flux_cutoff, params, out_snr, n_pixels, histogram0.first(2 * max_sigma_bin - 1)),
-                    ContainsSubstring("histogram size mismatch"));
-  // The band matters when a cutoff cube is given.
-  for (const auto &[start, stop] : {std::pair<long, long>{-1, 2}, {1, 1}, {2, 1}})
-  {
-    SnrFilterParams bad_band = params;
-    bad_band.band_start = start;
-    bad_band.band_stop = stop;
-    CHECK_THROWS_WITH(call(noise_map, snr_cutoff, {}, bad_band, out_snr, n_pixels, histogram0),
-                      ContainsSubstring("invalid band"));
-    CHECK_THROWS_WITH(call(noise_map, {}, flux_cutoff, bad_band, out_snr, n_pixels, histogram0),
-                      ContainsSubstring("invalid band"));
-  }
-  // A cutoff cube with two channels cannot serve the band [1, 3).
-  const std::span<const float> two_channels = std::span<const float>(snr_cutoff).first(2 * n_pixels);
-  CHECK_THROWS_WITH(call(noise_map, two_channels, {}, params, out_snr, n_pixels, histogram0),
-                    ContainsSubstring("fewer channels"));
-  CHECK_THROWS_WITH(call(noise_map, {}, two_channels, params, out_snr, n_pixels, histogram0),
-                    ContainsSubstring("fewer channels"));
-  // Everything valid, and no cutoff at all.
-  CHECK_NOTHROW(call(noise_map, snr_cutoff, flux_cutoff, params, out_snr, n_pixels, histogram0));
-  CHECK_NOTHROW(call(noise_map, {}, {}, params, out_snr, n_pixels, histogram0));
 }

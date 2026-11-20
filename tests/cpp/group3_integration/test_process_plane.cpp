@@ -1,11 +1,14 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
+#include <catch2/matchers/catch_matchers_vector.hpp>
 
 #include "plane_lot_dispatch.hpp"
 
 #include "../test_helpers.hpp"
 
 using namespace breifast;
+using Catch::Matchers::Equals;
 
 TEST_CASE("process_plane accumulates detections across all bands of a plane, processed in an order that doesn't "
          "let single-channel bands corrupt a later combined-channel band's flux",
@@ -81,19 +84,19 @@ TEST_CASE("process_plane accumulates detections across all bands of a plane, pro
   CHECK(result.detections.peak_y()[b0] == 3);
   CHECK(result.detections.peak_x()[b0] == 3);
   CHECK(result.detections.island_size()[b0] == 1);
-  CHECK(result.detections.signal_to_noise_global_mad()[b0] == Catch::Approx(40.46944556859571).epsilon(1e-4));
+  CHECK_THAT(result.detections.signal_to_noise_global_mad()[b0], Catch::Matchers::WithinRel(40.46944556859571, 1e-4));
 
   const auto b1 = find_band("B1");
   CHECK(result.detections.peak_y()[b1] == 3);
   CHECK(result.detections.peak_x()[b1] == 3);
   CHECK(result.detections.island_size()[b1] == 1);
-  CHECK(result.detections.signal_to_noise_global_mad()[b1] == Catch::Approx(8.993210126354603).epsilon(1e-4));
+  CHECK_THAT(result.detections.signal_to_noise_global_mad()[b1], Catch::Matchers::WithinRel(8.993210126354603, 1e-4));
 
   const auto combined = find_band("B0~1");
   CHECK(result.detections.peak_y()[combined] == 3);
   CHECK(result.detections.peak_x()[combined] == 3);
   CHECK(result.detections.island_size()[combined] == 1);
-  CHECK(result.detections.signal_to_noise_global_mad()[combined] == Catch::Approx(16.86226898691488).epsilon(1e-4));
+  CHECK_THAT(result.detections.signal_to_noise_global_mad()[combined], Catch::Matchers::WithinRel(16.86226898691488, 1e-4));
 
   // One median_noises entry per process_band() call, in the same reversed (B0~1, B1, B0) order
   // process_plane actually processes bands in -- not construction order. Each value is
@@ -101,9 +104,9 @@ TEST_CASE("process_plane accumulates detections across all bands of a plane, pro
   // 3.0 for B1, 2.0 for the weighted-mean B0~1 -- cross-checked against the
   // signal_to_noise_global_mad values above, e.g. B0's flux 60 / 1.4826 == 40.469...).
   REQUIRE(result.median_noises.size() == 3);
-  CHECK(result.median_noises[0] == Catch::Approx(2.9652).epsilon(1e-4));  // B0~1
-  CHECK(result.median_noises[1] == Catch::Approx(4.4478).epsilon(1e-4));  // B1
-  CHECK(result.median_noises[2] == Catch::Approx(1.4826).epsilon(1e-4));  // B0
+  CHECK_THAT(result.median_noises[0], Catch::Matchers::WithinRel(2.9652, 1e-4));  // B0~1
+  CHECK_THAT(result.median_noises[1], Catch::Matchers::WithinRel(4.4478, 1e-4));  // B1
+  CHECK_THAT(result.median_noises[2], Catch::Matchers::WithinRel(1.4826, 1e-4));  // B0
 }
 
 TEST_CASE("process_plane's histograms reflect only the last band processed, not accumulated across bands",
@@ -162,9 +165,9 @@ TEST_CASE("process_plane's histograms reflect only the last band processed, not 
   std::vector<long> expected(20, 0);
   expected[10] = 3;
   expected[13] = 1;
-  CHECK(result.histograms[0] == expected);
-  CHECK(result.histograms[1] == expected);
-  CHECK(result.histograms[2] == expected);
+  CHECK_THAT(result.histograms[0], Equals(expected));
+  CHECK_THAT(result.histograms[1], Equals(expected));
+  CHECK_THAT(result.histograms[2], Equals(expected));
 }
 
 TEST_CASE("process_plane only computes variance_stats for multi-channel items", "[process_plane]")

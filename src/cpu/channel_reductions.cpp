@@ -1,8 +1,7 @@
 #include "channel_reductions.hpp"
 
 #include <algorithm>
-#include <stdexcept>
-#include <tracy/Tracy.hpp>
+#include <cassert>
 #include <type_traits>
 
 #include "scalar_reductions.hpp"
@@ -13,19 +12,9 @@ namespace breifast::plane_lot::detail
 bool or_accept_masks(std::span<const bool> accept_mask, const size_t n_pixels, const long band_start,
                      const long band_stop, std::span<bool> out_mask)
 {
-  ZoneScopedN("mask_accumulate");
-  if (band_start < 0 || band_start >= band_stop)
-  {
-    throw std::runtime_error("or_accept_masks: invalid band");
-  }
-  if (accept_mask.size() < static_cast<size_t>(band_stop) * n_pixels)
-  {
-    throw std::runtime_error("or_accept_masks: accept_mask has fewer channels than the band needs");
-  }
-  if (out_mask.size() != n_pixels)
-  {
-    throw std::runtime_error("or_accept_masks: out_mask size mismatch with n_pixels");
-  }
+  assert(band_start >= 0 && band_start < band_stop);
+  assert(accept_mask.size() >= static_cast<size_t>(band_stop) * n_pixels);
+  assert(out_mask.size() == n_pixels);
 
   bool *const __restrict out = out_mask.data();
   std::copy_n(accept_mask.data() + static_cast<size_t>(band_start) * n_pixels, n_pixels, out);
@@ -44,29 +33,13 @@ void weighted_band_image(std::span<const float> cube, std::span<const float> wei
                          const size_t n_pixels, const long band_start, const long band_stop,
                          const float inv_weights_sum, const float inv_band_size, std::span<float> out_plane)
 {
-  ZoneScopedN("band_accumulate");
-  if (band_start < 0 || band_start >= band_stop)
-  {
-    throw std::runtime_error("weighted_band_image: invalid band");
-  }
-  const size_t n_channels_needed = static_cast<size_t>(band_stop);
-  if (cube.size() < n_channels_needed * n_pixels)
-  {
-    throw std::runtime_error("weighted_band_image: cube has fewer channels than the band needs");
-  }
-  if (weights.size() < n_channels_needed)
-  {
-    throw std::runtime_error("weighted_band_image: weights has fewer entries than the band needs");
-  }
+  assert(band_start >= 0 && band_start < band_stop);
+  [[maybe_unused]] const size_t n_channels_needed = static_cast<size_t>(band_stop);
+  assert(cube.size() >= n_channels_needed * n_pixels);
+  assert(weights.size() >= n_channels_needed);
   const bool subtract_mean = !mean_image.empty();
-  if (subtract_mean && mean_image.size() < n_channels_needed * n_pixels)
-  {
-    throw std::runtime_error("weighted_band_image: mean_image has fewer channels than the band needs");
-  }
-  if (out_plane.size() != n_pixels)
-  {
-    throw std::runtime_error("weighted_band_image: out_plane size mismatch with n_pixels");
-  }
+  assert(!subtract_mean || mean_image.size() >= n_channels_needed * n_pixels);
+  assert(out_plane.size() == n_pixels);
 
   float *const __restrict out = out_plane.data();
   const auto accumulate = [&](size_t i_channel, auto first, auto subtract)
@@ -115,16 +88,9 @@ void spectral_variance_moments(std::span<const float> cube, std::span<const bool
                                const size_t n_pixels, std::span<float> out_sum2, std::span<float> out_sum3,
                                std::span<float> out_sum4)
 {
-  ZoneScopedN("compute_spectral_variance_stats");
   const size_t n_channels = nonzero_channels.size();
-  if (cube.size() != n_channels * n_pixels)
-  {
-    throw std::runtime_error("spectral_variance_moments: cube size mismatch with nonzero_channels and n_pixels");
-  }
-  if (out_sum2.size() != n_pixels || out_sum3.size() != n_pixels || out_sum4.size() != n_pixels)
-  {
-    throw std::runtime_error("spectral_variance_moments: output size mismatch with n_pixels");
-  }
+  assert(cube.size() == n_channels * n_pixels);
+  assert(out_sum2.size() == n_pixels && out_sum3.size() == n_pixels && out_sum4.size() == n_pixels);
 
   std::fill(out_sum2.begin(), out_sum2.end(), 0.F);
   std::fill(out_sum3.begin(), out_sum3.end(), 0.F);

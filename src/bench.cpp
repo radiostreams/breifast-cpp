@@ -1,10 +1,12 @@
 // Standalone executable that replays one real process_lot()/run_batch_core() call. Loads a lot dumped by breifast.py's
 // BREIFAST_DUMP_LOT hook and converted to a manifest.json + raw-array directory by small_test/dump_lot_for_cpp.py.
 //
-// Usage: bench <manifest_dir> [num_threads] [repeat] [max_items]
+// Usage: bench <manifest_dir> [num_threads] [repeat] [max_items] [gpu] [pinned]
 //   num_threads: number of threads to bused by compute loops, <=0 means automatic (all CPUs). Default 0.
 //   repeat: number of times to re-run run_batch_core().
 //   max_items: keep only the first max_items planes, <=0 means all. Default 0.
+//   gpu: run run_batch_core_gpu() instead of the CPU path. Only in the bench_gpu build (-DBREIFAST_BENCH_GPU).
+//   pinned: with gpu, take the cubes from the pinned host memory pool, as the extension module does.
 
 #include <algorithm>
 #include <chrono>
@@ -23,9 +25,12 @@
 #include <ittnotify.h>
 #include <nlohmann/json.hpp>
 #include <oneapi/tbb/info.h>
-#include <tracy/Tracy.hpp>
 
 #include "plane_lot_dispatch.hpp"
+#ifdef BREIFAST_BENCH_GPU
+#include "gpu/gpu_device.hpp"
+#include "gpu/gpu_plane.hpp"
+#endif
 
 namespace
 {
@@ -126,10 +131,10 @@ PlaneConfig load_config(const nlohmann::json &m, const std::string &base_dir)
   return config;
 }
 
-LotBatch load_lot(const nlohmann::json &m, const std::string &base_dir)
+LotBatch load_lot(const nlohmann::json &m, const std::string &base_dir, int max_items)
 {
   LotBatch lot;
-  for (size_t i = 0; i < 30; ++i)
+  for (size_t i = 0; i < 30 && (max_items <= 0 || lot.planes.size() < static_cast<size_t>(max_items)); ++i)
   {
     for (const auto &group_json : m.at("groups"))
     {
@@ -196,13 +201,22 @@ int main(int argc, char **argv)
 {
   if (argc < 2)
   {
-    std::fprintf(stderr, "usage: %s <manifest_dir> [num_threads] [repeat] [max_items]\n", argv[0]);
+    std::fprintf(stderr, "usage: %s <manifest_dir> [num_threads] [repeat] [max_items] [gpu] [pinned]\n", argv[0]);
     return 1;
   }
   const std::string base_dir = argv[1];
   const int num_threads = argc > 2 ? std::atoi(argv[2]) : 0;
   const int repeat = argc > 3 ? std::atoi(argv[3]) : 1;
   const int max_items = argc > 4 ? std::atoi(argv[4]) : 0;
+  const bool use_gpu = argc > 5 && std::string(argv[5]) == "gpu";
+  const bool pin_cubes = argc > 6 && std::string(argv[6]) == "pinned";
+#ifndef BREIFAST_BENCH_GPU
+  if (use_gpu)
+  {
+    std::fprintf(stderr, "this build has no GPU path: use bench_gpu\n");
+    return 1;
+  }
+#endif
 
   std::ifstream manifest_file(base_dir + "/manifest.json");
   if (!manifest_file)
@@ -214,7 +228,13 @@ int main(int argc, char **argv)
   manifest_file >> manifest;
 
   const PlaneConfig config = load_config(manifest, base_dir);
-  LotBatch base_lot = load_lot(manifest, base_dir);
+#ifdef BREIFAST_BENCH_GPU
+  if (use_gpu && pin_cubes)
+  {
+    breifast::gpu::use_pinned_host_memory(); // before load_lot: every cube then comes from the pinned pool
+  }
+#endif
+  LotBatch base_lot = load_lot(manifest, base_dir, max_items);
   if (max_items > 0 && static_cast<size_t>(max_items) < base_lot.planes.size())
   {
     base_lot.planes.resize(max_items);
@@ -225,6 +245,7 @@ int main(int argc, char **argv)
   std::printf("hardware_concurrency=%u, tbb::info::default_concurrency=%d\n", std::thread::hardware_concurrency(),
               tbb::info::default_concurrency());
 
+  if (!use_gpu)
   {
     const size_t n_sample = std::min<size_t>(36, base_lot.planes.size());
     std::vector<double> item_times;
@@ -253,15 +274,24 @@ int main(int argc, char **argv)
   double total = 0.0;
   for (int i = 0; i < repeat; ++i)
   {
+    // Outside the timer, as the bindings' copy: with `pinned`, the cubes come from the pinned pool (pinned on the first
+    // iteration, reused after).
+    const auto copy_start = std::chrono::steady_clock::now();
     LotBatch lot = base_lot;
+    std::printf("  lot copy: %.3fs\n",
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - copy_start).count());
     const auto counters_before = read_proc_counters();
     const auto t0 = std::chrono::steady_clock::now();
     __itt_resume();
+#ifdef BREIFAST_BENCH_GPU
+    const auto results = use_gpu ? breifast::gpu::run_batch_core_gpu(lot.planes, lot.groups, config)
+                                 : run_lot_core(lot, config, num_threads);
+#else
     const auto results = run_lot_core(lot, config, num_threads);
+#endif
     __itt_pause();
     const auto t1 = std::chrono::steady_clock::now();
     const auto counters_after = read_proc_counters();
-    FrameMark;
     const double elapsed = std::chrono::duration<double>(t1 - t0).count();
     total += elapsed;
     size_t n_detections = 0;

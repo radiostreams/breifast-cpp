@@ -1,26 +1,66 @@
 # CUDA targets, included from the top-level meson.build when -Dgpu is enabled.
 # nvcc takes C++20 at most, so nothing in here includes xtensor or needs C++23.
 
-gpu_include = include_directories('.')
+gpu_include = include_directories('.', '..')
 
 gpu_lib = static_library('breifast_gpu',
   [
-    'gpu_pipeline.cu',
     'gpu_channel_reductions.cu',
-    'gpu_pointwise.cu',
     'gpu_snr_filters.cu',
     'gpu_order_statistics.cu',
-    'gpu_windows.cu',
+    'gpu_noise_map.cu',
     'gpu_islands.cu',
+    'gpu_process_band.cu',
     'gpu_island_stamps.cu',
   ],
   include_directories : gpu_include,
 )
 
-test_gpu = executable('test_gpu',
-  ['tests/test_gpu_smoke.cu', catch2_build],
+# gpu_lot_integration.cpp stays a source of its own: a program that does not call run_batch_core_gpu (test_gpu) then
+# links neither TBB nor validate_plane_inputs. Its users (the extension, test_gpu_parity) link both. TBB headers only
+# here; tbb_build[0], the install directory, orders the compile after TBB is built, where the whole target would
+# archive its .so outputs.
+gpu_host_lib = static_library('breifast_gpu_host',
+  [
+    'gpu_plane.cpp',
+    'gpu_device.cpp',
+    'gpu_lot_integration.cpp',
+    tbb_build[0],
+  ],
   include_directories : gpu_include,
-  dependencies : [catch2_dep],
-  link_with : [gpu_lib],
+  dependencies : [xtl_dep, xtensor_dep, xsimd_dep, cuda_headers_dep, tbb_dep.partial_dependency(compile_args : true)],
+)
+
+test_gpu = executable('test_gpu',
+  ['tests/test_gpu_runtime.cu', 'tests/test_gpu_channel_reductions.cu', 'tests/test_gpu_noise_map.cu',
+   'tests/test_gpu_order_statistics.cu', 'tests/test_gpu_snr_filters.cu', 'tests/test_gpu_islands.cu',
+   'tests/test_gpu_island_stamps.cu', 'tests/test_gpu_process_band.cu', 'tests/test_gpu_plane.cpp', catch2_build],
+  include_directories : gpu_include,
+  dependencies : [catch2_dep, xtl_dep, xtensor_dep, xsimd_dep, cuda_headers_dep],
+  link_with : [gpu_lib, gpu_host_lib],
 )
 test('gpu', test_gpu)
+
+test_gpu_parity = executable('test_gpu_parity',
+  ['tests/test_gpu_parity.cpp', cpu_source_files, tbb_build, catch2_build],
+  include_directories : gpu_include,
+  dependencies : [catch2_dep, xtl_dep, xtensor_dep, xsimd_dep, tbb_dep, itt_dep, cuda_headers_dep],
+  link_with : [gpu_lib, gpu_host_lib],
+  link_language : 'cpp',
+  link_args : ['-L' + cudart_libdir, '-lcudart_static', '-lrt', '-lpthread', '-ldl',
+                '-Wl,-rpath,' + tbb_install_dir / 'lib64', '-Wl,-rpath,' + tbb_install_dir / 'lib'],
+)
+test('gpu_parity', test_gpu_parity)
+
+# bench.cpp with its GPU path: replays a lot natively, without Python, for profiling (ncu, nsys).
+bench_gpu = executable('bench_gpu',
+  ['../bench.cpp', cpu_source_files, tbb_build],
+  include_directories : gpu_include,
+  dependencies : [xtl_dep, xtensor_dep, xsimd_dep, tbb_dep, itt_dep, json_dep, cuda_headers_dep],
+  cpp_args : ['-DBREIFAST_BENCH_GPU'],
+  link_with : [gpu_lib, gpu_host_lib],
+  link_language : 'cpp',
+  link_args : ['-L' + cudart_libdir, '-lcudart_static', '-lrt', '-lpthread', '-ldl',
+               '-Wl,-rpath,' + tbb_install_dir / 'lib64', '-Wl,-rpath,' + tbb_install_dir / 'lib'],
+  build_by_default : false,
+)

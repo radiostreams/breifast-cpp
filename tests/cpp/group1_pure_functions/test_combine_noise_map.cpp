@@ -3,13 +3,14 @@
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
-#include <catch2/matchers/catch_matchers_string.hpp>
+#include <catch2/matchers/catch_matchers_vector.hpp>
 
 #include "cpu/pointwise.hpp"
 
 using breifast::plane_lot::detail::combine_noise_map_constant;
 using breifast::plane_lot::detail::combine_noise_map_rms;
 using Catch::Approx;
+using Catch::Matchers::Equals;
 
 namespace
 {
@@ -52,11 +53,7 @@ TEST_CASE("combine_noise_map_rms matches a seeded-random 23-pixel map against a 
 
   combine_noise_map_rms(rms, rms_floor, selfnoise_offset, dde_noise, selfnoise_scale, dde_scale, out_noise_map);
 
-  for (size_t i_pixel = 0; i_pixel < n_pixels; ++i_pixel)
-  {
-    INFO("pixel " << i_pixel);
-    CHECK(out_noise_map[i_pixel] == Approx(expected[i_pixel]).epsilon(1e-5));
-  }
+  CHECK_THAT(out_noise_map, Catch::Matchers::Approx(expected).epsilon(1e-5));
 }
 
 TEST_CASE("combine_noise_map_constant matches a seeded-random 23-pixel map against a numpy reference",
@@ -72,11 +69,7 @@ TEST_CASE("combine_noise_map_constant matches a seeded-random 23-pixel map again
 
   combine_noise_map_constant(base_noise, selfnoise_offset, dde_noise, selfnoise_scale, dde_scale, out_noise_map);
 
-  for (size_t i_pixel = 0; i_pixel < n_pixels; ++i_pixel)
-  {
-    INFO("pixel " << i_pixel);
-    CHECK(out_noise_map[i_pixel] == Approx(expected[i_pixel]).epsilon(1e-5));
-  }
+  CHECK_THAT(out_noise_map, Catch::Matchers::Approx(expected).epsilon(1e-5));
 }
 
 TEST_CASE("combine_noise_map_rms raises the pixels below the floor to it and keeps the others", "[combine_noise_map]")
@@ -89,7 +82,7 @@ TEST_CASE("combine_noise_map_rms raises the pixels below the floor to it and kee
   combine_noise_map_rms(rms_values, 2.F, zeros, zeros, selfnoise_scale, dde_scale, out_noise_map);
 
   const std::vector<float> expected = {2.F, 2.F, 4.F, 2.F, 2.F, 2.F, 3.5F};
-  CHECK(out_noise_map == expected);
+  CHECK_THAT(out_noise_map, Equals(expected));
 }
 
 TEST_CASE("combine_noise_map overwrites the stale values of out_noise_map", "[combine_noise_map]")
@@ -108,39 +101,8 @@ TEST_CASE("combine_noise_map overwrites the stale values of out_noise_map", "[co
     return out_noise_map;
   };
 
-  CHECK(run_rms(std::numeric_limits<float>::quiet_NaN()) == run_rms(0.F));
-  CHECK(run_rms(1.0e30F) == run_rms(0.F));
-  CHECK(run_constant(std::numeric_limits<float>::quiet_NaN()) == run_constant(0.F));
-  CHECK(run_constant(1.0e30F) == run_constant(0.F));
-}
-
-TEST_CASE("combine_noise_map rejects spans that do not hold one value per pixel", "[combine_noise_map]")
-{
-  const std::vector<float> short_values(n_pixels - 1, 0.5F);
-  const std::vector<float> long_values(n_pixels + 1, 0.5F);
-  std::vector<float> out_noise_map(n_pixels);
-  std::vector<float> short_out(n_pixels - 1);
-
-  using Catch::Matchers::ContainsSubstring;
-  CHECK_THROWS_WITH(combine_noise_map_rms(short_values, rms_floor, selfnoise_offset, dde_noise, selfnoise_scale,
-                                          dde_scale, out_noise_map),
-                    ContainsSubstring("rms size mismatch"));
-  CHECK_THROWS_WITH(combine_noise_map_rms(long_values, rms_floor, selfnoise_offset, dde_noise, selfnoise_scale,
-                                          dde_scale, out_noise_map),
-                    ContainsSubstring("rms size mismatch"));
-  CHECK_THROWS_WITH(combine_noise_map_rms(rms, rms_floor, short_values, dde_noise, selfnoise_scale, dde_scale,
-                                          out_noise_map),
-                    ContainsSubstring("selfnoise_offset or dde_noise size mismatch"));
-  CHECK_THROWS_WITH(combine_noise_map_rms(rms, rms_floor, selfnoise_offset, long_values, selfnoise_scale, dde_scale,
-                                          out_noise_map),
-                    ContainsSubstring("selfnoise_offset or dde_noise size mismatch"));
-  CHECK_THROWS_WITH(combine_noise_map_constant(base_noise, short_values, dde_noise, selfnoise_scale, dde_scale,
-                                               out_noise_map),
-                    ContainsSubstring("selfnoise_offset or dde_noise size mismatch"));
-  CHECK_THROWS_WITH(combine_noise_map_constant(base_noise, selfnoise_offset, long_values, selfnoise_scale,
-                                               dde_scale, out_noise_map),
-                    ContainsSubstring("selfnoise_offset or dde_noise size mismatch"));
-  CHECK_THROWS_WITH(combine_noise_map_constant(base_noise, selfnoise_offset, dde_noise, selfnoise_scale, dde_scale,
-                                               short_out),
-                    ContainsSubstring("selfnoise_offset or dde_noise size mismatch"));
+  CHECK_THAT(run_rms(std::numeric_limits<float>::quiet_NaN()), Equals(run_rms(0.F)));
+  CHECK_THAT(run_rms(1.0e30F), Equals(run_rms(0.F)));
+  CHECK_THAT(run_constant(std::numeric_limits<float>::quiet_NaN()), Equals(run_constant(0.F)));
+  CHECK_THAT(run_constant(1.0e30F), Equals(run_constant(0.F)));
 }

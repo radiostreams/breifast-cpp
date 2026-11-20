@@ -1,10 +1,16 @@
 #include <algorithm>
+#include <cassert>
 #include <span>
 #include <type_traits>
 
-#include <ittnotify.h>
+#include <oneapi/tbb/concurrent_unordered_map.h>
+#include <oneapi/tbb/enumerable_thread_specific.h>
+#include <oneapi/tbb/mutex.h>
+#include <oneapi/tbb/parallel_for.h>
+#include <oneapi/tbb/task_arena.h>
+#include <oneapi/tbb/task_group.h>
 
-#include <tracy/Tracy.hpp>
+#include <ittnotify.h>
 
 #include <xsimd/xsimd.hpp>
 #include <xtensor/core/xnoalias.hpp>
@@ -24,59 +30,6 @@
 
 namespace breifast
 {
-float PlaneConfig::max_to_std_ratio(const size_t n)
-{
-  const auto compute = [](const size_t n)
-  {
-    constexpr size_t n_samples = 1'000;
-    constexpr float x_ampl = 10.F;
-    float x_prev = -10.F;
-    float f_prev = 0.5F * (1.F + std::erf(x_prev / std::sqrt(2.F)));
-    float F_prev = 1.F - std::pow(1.f - f_prev, n);
-    for (size_t i = 1; i < n_samples; ++i)
-    {
-      const auto x_val = -x_ampl + static_cast<float>(i) * 2.F * x_ampl / static_cast<float>(n_samples - 1);
-      const auto f_val = 0.5F * (1.F + std::erf(x_val / std::sqrt(2.F)));
-      const auto F_val = 1.F - std::pow(1.f - f_val, static_cast<float>(n));
-      if (F_val >= 0.5F)
-      {
-        return std::abs(x_prev + (x_val - x_prev) * (0.5f - F_prev) / (F_val - F_prev));
-      }
-      x_prev = x_val;
-      f_prev = f_val;
-      F_prev = F_val;
-    }
-    return std::abs(x_prev);
-  };
-
-  static tbb::concurrent_unordered_map<size_t, float> cache;
-  static tbb::mutex compute_mutex;
-  const auto it = cache.find(n);
-  if (it != cache.cend())
-  {
-    return it->second;
-  }
-  else
-  {
-    tbb::mutex::scoped_lock lock{compute_mutex};
-    const auto value = compute(n);
-    cache.emplace(n, value);
-    return value;
-  }
-}
-
-float PlaneConfig::max_to_std_ratio_value() const
-{
-  if (max_to_std_ratio_value_.has_value())
-  {
-    return *max_to_std_ratio_value_;
-  }
-  const auto radius = boxsize / 2;
-  const auto n = (2 * radius + 1) * (2 * radius + 1);
-  max_to_std_ratio_value_ = max_to_std_ratio(n);
-  return *max_to_std_ratio_value_;
-}
-
 const xt::xtensor<float, 2> &compute_rms_noise_map(ProcessBandScratch &scratch, const xt::xtensor<float, 2> &plane,
                                                    long boxsize)
 {
@@ -128,33 +81,6 @@ void compute_snr_and_apply_filters(ProcessBandScratch &scratch, const xt::xtenso
   }
 }
 
-xt::xtensor<float, 2> build_gaussian_beam_kernel(long halfsize, float sigma_major, float sigma_minor, float rotate)
-{
-  const auto size = 2 * halfsize + 1;
-  xt::xtensor<float, 2> kernel;
-  kernel.resize({static_cast<size_t>(size), static_cast<size_t>(size)});
-
-  const float cos_r = std::cos(rotate);
-  const float sin_r = std::sin(rotate);
-  float sum = 0.F;
-  for (long i = 0; i < size; ++i)
-  {
-    const float dy = static_cast<float>(i - halfsize);
-    for (long j = 0; j < size; ++j)
-    {
-      const float dx = static_cast<float>(j - halfsize);
-      const float rot_dy = cos_r * dy - sin_r * dx;
-      const float rot_dx = sin_r * dy + cos_r * dx;
-      const float value = std::exp(
-          -(rot_dy * rot_dy / (2.F * sigma_major * sigma_major) + rot_dx * rot_dx / (2.F * sigma_minor * sigma_minor)));
-      kernel(i, j) = value;
-      sum += value;
-    }
-  }
-  kernel /= sum;
-  return kernel;
-}
-
 namespace
 {
 /// The weights of the band's channels and the scalars derived from them.
@@ -189,18 +115,11 @@ void band_plane(ProcessBandScratch &scratch, const PlaneBatchItem &item, const P
   auto &plane = scratch.plane;
   plane.resize({n_y, n_x});
   const auto &cube = item.stokes_cube;
-  if (cube.shape(1) != n_y || cube.shape(2) != n_x)
-  {
-    throw std::runtime_error("stokes_cube shape mismatch with plane");
-  }
   std::span<const float> mean_image_span;
   if (do_subtract_mean)
   {
     const auto &mean_image = *group.mean_image;
-    if (mean_image.shape(1) != n_y || mean_image.shape(2) != n_x)
-    {
-      throw std::runtime_error("mean_image shape mismatch with plane");
-    }
+    assert(mean_image.shape(1) == n_y && mean_image.shape(2) == n_x);
     mean_image_span = std::span<const float>(mean_image.data(), mean_image.size());
   }
   plane_lot::detail::weighted_band_image({cube.data(), cube.size()}, {weights.data(), weights.size()}, mean_image_span,
@@ -225,12 +144,9 @@ NoiseStage noise_stage(ProcessBandScratch &scratch, const PlaneBatchGroup &group
   const size_t n_y = plane.shape(0);
   const size_t n_x = plane.shape(1);
 
-  // Precondition: group.selfnoise_offset/dde_noise must match the plane's shape.
-  if (group.selfnoise_offset.shape() != std::array<size_t, 2>{n_y, n_x} ||
-      group.dde_noise.shape() != std::array<size_t, 2>{n_y, n_x})
-  {
-    throw std::runtime_error("selfnoise_offset/dde_noise shape mismatch with plane");
-  }
+  // validate_plane_inputs() checked these shapes.
+  [[maybe_unused]] const std::array<size_t, 2> plane_shape{n_y, n_x};
+  assert(group.selfnoise_offset.shape() == plane_shape && group.dde_noise.shape() == plane_shape);
   const std::span<const float> selfnoise_span(group.selfnoise_offset.data(), group.selfnoise_offset.size());
   const std::span<const float> dde_span(group.dde_noise.data(), group.dde_noise.size());
 
@@ -255,50 +171,6 @@ NoiseStage noise_stage(ProcessBandScratch &scratch, const PlaneBatchGroup &group
   }
   const float median_noise = detail::median::radix_median_of({noise_map.data(), noise_map.size()});
   return {median_noise, rms_floor};
-}
-
-struct BeamKernel
-{
-  size_t halfsize = 0;
-  std::optional<xt::xtensor<float, 2>> kernel; ///< empty when the beam is disabled
-};
-
-/// Half size and kernel of the beam for the band: the fixed kernel of the config, or a Gaussian built from the band's
-/// weighted beam axes.
-BeamKernel beam_kernel_for_band(const PlaneBatchItem &item, const BandSlice &band, const PlaneConfig &config,
-                                const BandScalars &scalars)
-{
-  BeamKernel beam;
-  if (config.beam_size_enabled)
-  {
-    if (config.fixed_beam_kernel.has_value())
-    {
-      beam.halfsize = config.fixed_beam_halfsize;
-      beam.kernel = xt::xtensor<float, 2>(*config.fixed_beam_kernel);
-    }
-    else
-    {
-      float beam_kernel_halfsize_flt = 0.F;
-      for (auto i_channel = band.start; i_channel < band.stop; ++i_channel)
-      {
-        beam_kernel_halfsize_flt += (*item.beam_major_axis)(i_channel);
-      }
-      beam_kernel_halfsize_flt *= 3 / static_cast<float>(band.size());
-      beam.halfsize = static_cast<long>(beam_kernel_halfsize_flt) + 1;
-
-      const auto &weights_sliced = scalars.weights_sliced;
-      const auto weights_sum = scalars.weights_sum;
-      const auto beam_major_sliced = xt::view(*item.beam_major_axis, band.xrange());
-      const auto beam_minor_sliced = xt::view(*item.beam_minor_axis, band.xrange());
-      const auto beam_position_angle_sliced = xt::view(*item.beam_position_angle, band.xrange());
-      const float beam_major_weighted = xt::sum(beam_major_sliced * weights_sliced)() / weights_sum;
-      const float beam_minor_weighted = xt::sum(beam_minor_sliced * weights_sliced)() / weights_sum;
-      const auto beam_position_angle_weighted = xt::sum(beam_position_angle_sliced * weights_sliced)() / weights_sum;
-      beam.kernel = build_gaussian_beam_kernel(beam.halfsize, beam_major_weighted, beam_minor_weighted,
-                                               beam_position_angle_weighted);
-    }
-  }
-  return beam;
 }
 
 /// The per-island quantities that the detection record needs besides the peak, the island size and the noise maps.
@@ -373,7 +245,6 @@ IslandStatistics island_statistics(ProcessBandScratch &scratch, const PlaneConfi
 inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, const PlaneBatchGroup &group,
                          const BandSlice &band, const PlaneConfig &config, ProcessPlaneResult &result)
 {
-  ZoneScoped;
   if (!xt::any(xt::view(item.nonzero_channels, band.xrange())))
   {
     return;
@@ -382,17 +253,11 @@ inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, cons
   const size_t n_y = item.stokes_cube.shape(1);
   const size_t n_x = item.stokes_cube.shape(2);
   const auto n_pixels = n_y * n_x;
-  if (band.start < 0 || static_cast<size_t>(band.stop) > item.stokes_cube.shape(0))
-  {
-    throw std::runtime_error("band exceeds the stokes_cube channels");
-  }
+  assert(band.start >= 0 && static_cast<size_t>(band.stop) <= item.stokes_cube.shape(0));
 
   // Masking
   auto &image_mask = scratch.image_mask;
-  if (group.accept_mask.shape(1) != n_y || group.accept_mask.shape(2) != n_x)
-  {
-    throw std::runtime_error("accept_mask shape mismatch with plane");
-  }
+  assert(group.accept_mask.shape(1) == n_y && group.accept_mask.shape(2) == n_x);
   image_mask.resize({n_y, n_x});
   if (!plane_lot::detail::or_accept_masks(std::span<const bool>(group.accept_mask.data(), group.accept_mask.size()),
                                           n_pixels, band.start, band.stop,
@@ -431,7 +296,7 @@ inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, cons
     return;
   }
 
-  const auto beam = beam_kernel_for_band(item, band, config, scalars);
+  const auto beam = beam_kernel_for_band(item, band, config);
 
   breifast::islands::label_islands(scratch.islands, image_mask, scratch.snr, noise_map);
 
@@ -439,7 +304,6 @@ inline void process_band(ProcessBandScratch &scratch, PlaneBatchItem &item, cons
 
   auto &detection_arrays = result.detections;
   detection_arrays.reserve(result.detections.size() + scratch.islands.peak_per_label.size());
-  ZoneNamedN(detections_zone, "detections", true);
   for (size_t label = 1; label <= islands.peak_per_label.size(); ++label)
   {
     const auto &island = islands.peak_per_label[label - 1];
@@ -487,7 +351,6 @@ SpectralVarianceStats compute_spectral_variance_stats(const PlaneBatchItem &item
 ProcessPlaneResult process_plane(ProcessBandScratch &scratch, const PlaneConfig &config, PlaneBatchItem &item,
                                  const PlaneBatchGroup &group)
 {
-  ZoneScoped;
   ProcessPlaneResult result;
   for (auto it = config.band_slices.rbegin(); it != config.band_slices.rend(); ++it)
   {
@@ -505,6 +368,7 @@ std::vector<ProcessPlaneResult> run_batch_core(std::vector<PlaneBatchItem> &item
                                                const std::vector<PlaneBatchGroup> &groups, const PlaneConfig &config,
                                                int num_threads)
 {
+  validate_plane_inputs(items, groups, config);
   std::vector<ProcessPlaneResult> results(items.size());
 
   // One task_arena per NUMA node, each pinned to it, so a thread's scratch buffers land on the same
@@ -580,17 +444,7 @@ std::vector<ProcessPlaneResult> run_batch_core(std::vector<PlaneBatchItem> &item
     for (auto index = range.begin(); index != range.end(); ++index)
     {
       auto &item = items[index];
-      const auto group_index = item.group_index;
-      const auto &group = groups[group_index];
-
-      try
-      {
-        results[index] = process_plane(scratch, config, item, group);
-      }
-      catch (const std::exception &e)
-      {
-        std::cerr << e.what() << std::endl;
-      }
+      results[index] = process_plane(scratch, config, item, groups[item.group_index]);
     }
   };
   const auto run_slice = [&](size_t node)
@@ -601,12 +455,13 @@ std::vector<ProcessPlaneResult> run_batch_core(std::vector<PlaneBatchItem> &item
   };
 
   __itt_resume();
+  // A plane that throws cancels the planes not started yet, and wait() rethrows its exception once every slice has
+  // stopped. The calling thread runs queued slices while it waits instead of sitting idle.
   tbb::task_group task_group;
-  for (size_t node = 0; node + 1 < arenas.size(); ++node)
+  for (size_t node = 0; node < arenas.size(); ++node)
   {
     task_group.run([&, node]() { run_slice(node); });
   }
-  run_slice(arenas.size() - 1); // the calling thread takes the last node's slice instead of sitting idle
   task_group.wait();
   __itt_pause();
 

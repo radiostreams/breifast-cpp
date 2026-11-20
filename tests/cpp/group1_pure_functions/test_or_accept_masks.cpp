@@ -8,6 +8,7 @@
 #include "cpu/channel_reductions.hpp"
 
 using breifast::plane_lot::detail::or_accept_masks;
+using Catch::Matchers::Equals;
 
 namespace
 {
@@ -65,7 +66,7 @@ TEST_CASE("or_accept_masks matches a seeded-random 4x37 mask against a Python re
   const auto result = run_or_accept_masks(channels, 1, 4);
 
   CHECK(result.any);
-  CHECK(result.mask == expected);
+  CHECK_THAT(result.mask, Equals(expected));
 }
 
 TEST_CASE("or_accept_masks overwrites the stale true pixels of out_mask", "[or_accept_masks]")
@@ -81,7 +82,7 @@ TEST_CASE("or_accept_masks overwrites the stale true pixels of out_mask", "[or_a
   const auto result = run_or_accept_masks(channels, 2, 3, true);
 
   CHECK(result.any);
-  CHECK(result.mask == "0000000000000000001");
+  CHECK_THAT(result.mask, Equals("0000000000000000001"));
 }
 
 TEST_CASE("or_accept_masks returns false and an all-false mask when the band has no true pixel", "[or_accept_masks]")
@@ -97,7 +98,7 @@ TEST_CASE("or_accept_masks returns false and an all-false mask when the band has
   const auto result = run_or_accept_masks(channels, 1, 3, true);
 
   CHECK_FALSE(result.any);
-  CHECK(result.mask == "0000000000000000");
+  CHECK_THAT(result.mask, Equals("0000000000000000"));
 }
 
 TEST_CASE("or_accept_masks sees a true pixel in the last channel and the last pixel", "[or_accept_masks]")
@@ -112,46 +113,5 @@ TEST_CASE("or_accept_masks sees a true pixel in the last channel and the last pi
   const auto result = run_or_accept_masks(channels, 0, 3);
 
   CHECK(result.any);
-  CHECK(result.mask == "000000000000000000000000000000001");
-}
-
-TEST_CASE("or_accept_masks rejects a band that is negative or empty or reversed", "[or_accept_masks]")
-{
-  const xt::xtensor<bool, 1> accept_mask = {true, false, true, false, false, true, false, true};
-  xt::xtensor<bool, 1> out_mask = {false, false, false, false};
-  const std::span<const bool> accept_span(accept_mask.data(), accept_mask.size());
-  const std::span<bool> out_span(out_mask.data(), out_mask.size());
-
-  using Catch::Matchers::ContainsSubstring;
-  CHECK_THROWS_WITH(or_accept_masks(accept_span, 4, -1, 1, out_span), ContainsSubstring("invalid band"));
-  CHECK_THROWS_WITH(or_accept_masks(accept_span, 4, 1, 1, out_span), ContainsSubstring("invalid band"));
-  CHECK_THROWS_WITH(or_accept_masks(accept_span, 4, 2, 1, out_span), ContainsSubstring("invalid band"));
-}
-
-TEST_CASE("or_accept_masks rejects a mask with fewer channels than the band needs", "[or_accept_masks]")
-{
-  // Two channels of four pixels, and a band that ends at channel 3.
-  const xt::xtensor<bool, 1> accept_mask = {true, false, true, false, false, true, false, true};
-  xt::xtensor<bool, 1> out_mask = {false, false, false, false};
-  const std::span<const bool> accept_span(accept_mask.data(), accept_mask.size());
-  const std::span<bool> out_span(out_mask.data(), out_mask.size());
-
-  using Catch::Matchers::ContainsSubstring;
-  CHECK_THROWS_WITH(or_accept_masks(accept_span, 4, 0, 3, out_span), ContainsSubstring("fewer channels"));
-  CHECK_THROWS_WITH(or_accept_masks(accept_span, 4, 2, 3, out_span), ContainsSubstring("fewer channels"));
-  CHECK_NOTHROW(or_accept_masks(accept_span, 4, 0, 2, out_span));
-}
-
-TEST_CASE("or_accept_masks rejects an out_mask that does not hold n_pixels", "[or_accept_masks]")
-{
-  const xt::xtensor<bool, 1> accept_mask = {true, false, true, false, false, true, false, true};
-  xt::xtensor<bool, 1> too_short = {false, false, false};
-  xt::xtensor<bool, 1> too_long = {false, false, false, false, false};
-  const std::span<const bool> accept_span(accept_mask.data(), accept_mask.size());
-
-  using Catch::Matchers::ContainsSubstring;
-  CHECK_THROWS_WITH(or_accept_masks(accept_span, 4, 0, 2, {too_short.data(), too_short.size()}),
-                    ContainsSubstring("out_mask size mismatch"));
-  CHECK_THROWS_WITH(or_accept_masks(accept_span, 4, 0, 2, {too_long.data(), too_long.size()}),
-                    ContainsSubstring("out_mask size mismatch"));
+  CHECK_THAT(result.mask, Equals("000000000000000000000000000000001"));
 }

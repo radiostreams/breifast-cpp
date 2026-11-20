@@ -1,9 +1,10 @@
 #pragma once
+
 #include <cstddef>
 #include <sstream>
 #include <string>
 
-// Host-side interface of the GPU library: no CUDA headers, so C++23 translation units can include it.
+// Public and CUDA-free: the extension module includes it.
 namespace breifast::gpu
 {
 struct GpuDeviceSummary
@@ -31,21 +32,8 @@ struct GpuDeviceSummary
 
 /// Properties of the GPU with index `device_id` among the devices visible to the process.
 GpuDeviceSummary gpu_device_summary(int device_id = 0);
+void require_cuda_device();
 
-/// A `cudaStream_t`, opaque here so this header needs no CUDA includes. `nullptr` is the default stream.
-using GpuStream = void *;
-
-/**
- * @brief OR of the accept masks of the channels `[band_start, band_stop)`, and whether any pixel ends up true.
- *
- * All pointers are device pointers. The work is enqueued on `stream` and the call returns before it finishes.
- * @param accept_mask `[n_channels, n_pixels]` bools, channel major.
- * @param n_pixels `Y * X` of one channel.
- * @param band_start First channel of the band.
- * @param band_stop One past the last channel of the band, `band_start < band_stop`.
- * @param out_mask `[n_pixels]` bools, true where any channel of the band is true.
- * @param out_any One int, nonzero when any pixel of `out_mask` is true. Written by this call, no host read-back.
- */
-void gpu_mask_or(const bool *accept_mask, size_t n_pixels, int band_start, int band_stop, bool *out_mask, int *out_any,
-                 GpuStream stream = nullptr);
+/// Makes HostMemoryPool hand out page-locked blocks, which the GPU copies from at full speed and asynchronously.
+void use_pinned_host_memory();
 } // namespace breifast::gpu

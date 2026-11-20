@@ -4,7 +4,7 @@
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
-#include <catch2/matchers/catch_matchers_string.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "cpu/islands.hpp"
 
@@ -49,9 +49,9 @@ TEST_CASE("island_boost matches numpy for three islands of a seeded-random basel
   REQUIRE(labels.size() == n_y * n_x);
   REQUIRE(baseline.size() == n_y * n_x);
 
-  CHECK(island_boost(labels, baseline, n_y, n_x, 1, 7.5F) == Approx(17.838232040405273).epsilon(1e-6));
-  CHECK(island_boost(labels, baseline, n_y, n_x, 2, 7.5F) == Approx(15.0).epsilon(1e-6));
-  CHECK(island_boost(labels, baseline, n_y, n_x, 3, 7.5F) == Approx(-18.930294036865234).epsilon(1e-6));
+  CHECK_THAT(island_boost(labels, baseline, n_y, n_x, 1, 7.5F), Catch::Matchers::WithinRel(17.838232040405273, 1e-6));
+  CHECK_THAT(island_boost(labels, baseline, n_y, n_x, 2, 7.5F), Catch::Matchers::WithinRel(15.0, 1e-6));
+  CHECK_THAT(island_boost(labels, baseline, n_y, n_x, 3, 7.5F), Catch::Matchers::WithinRel(-18.930294036865234, 1e-6));
 }
 
 TEST_CASE("island_boost gives the first pixel in raster order when two ratios tie on magnitude", "[island_boost]")
@@ -79,28 +79,4 @@ TEST_CASE("island_boost is the plain ratio for a one-pixel island and infinite w
   // flux and wins the argmax.
   CHECK(island_boost(image, flux_baseline, 2, 3, 3, 6.F) == std::numeric_limits<float>::infinity());
   CHECK(island_boost(image, flux_baseline, 2, 3, 3, -6.F) == -std::numeric_limits<float>::infinity());
-}
-
-TEST_CASE("island_boost with a label that has no pixel throws", "[island_boost]")
-{
-  const std::vector<size_t> image = {1, 0, 1, 0};
-  using Catch::Matchers::ContainsSubstring;
-  CHECK_THROWS_WITH(island_boost(image, std::vector<float>{1.F, 1.F, 1.F, 1.F}, 2, 2, 2, 1.F),
-                    ContainsSubstring("no pixel carries the label"));
-}
-
-TEST_CASE("island_boost rejects label and baseline images that do not hold n_y * n_x values", "[island_boost]")
-{
-  const std::vector<size_t> labels_2x2 = {1, 0, 1, 0};
-  const std::vector<float> baseline_2x2 = {1.F, 1.F, 1.F, 1.F};
-  using Catch::Matchers::ContainsSubstring;
-  CHECK_THROWS_WITH(island_boost(std::vector<size_t>{1, 0, 1}, baseline_2x2, 2, 2, 1, 1.F),
-                    ContainsSubstring("labels size"));
-  CHECK_THROWS_WITH(island_boost(std::vector<size_t>(5, 1), baseline_2x2, 2, 2, 1, 1.F),
-                    ContainsSubstring("labels size"));
-  CHECK_THROWS_WITH(island_boost(labels_2x2, std::vector<float>{1.F, 1.F, 1.F}, 2, 2, 1, 1.F),
-                    ContainsSubstring("baseline_flux size"));
-  CHECK_THROWS_WITH(island_boost(labels_2x2, std::vector<float>(5, 1.F), 2, 2, 1, 1.F),
-                    ContainsSubstring("baseline_flux size"));
-  CHECK_NOTHROW(island_boost(labels_2x2, baseline_2x2, 2, 2, 1, 1.F));
 }

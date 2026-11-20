@@ -1,5 +1,6 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "cpu/islands.hpp"
 
@@ -37,10 +38,10 @@ TEST_CASE("label_islands on a single rectangular island reports correct size, pe
   REQUIRE(result.peak_per_label.size() == 1);
   const auto &peak = result.peak_per_label.front();
   CHECK(peak.island_size == 4);
-  CHECK(peak.value == Catch::Approx(9.F)); // |-9| is the largest abs value in the island
+  CHECK_THAT(peak.value, Catch::Matchers::WithinRel(9.F)); // |-9| is the largest abs value in the island
   CHECK(peak.coordinates.first == 0);      // y
   CHECK(peak.coordinates.second == 2);     // x
-  CHECK(peak.local_noise == Catch::Approx(4.F));
+  CHECK_THAT(peak.local_noise, Catch::Matchers::WithinRel(4.F));
 
   const auto label = result.labels(0, 2);
   CHECK(label != 0);
@@ -72,15 +73,15 @@ TEST_CASE("label_islands assigns two disjoint islands independent, distinct labe
 
   const auto &peak_a = result.peak_per_label.at(label_a - 1);
   CHECK(peak_a.island_size == 2);
-  CHECK(peak_a.value == Catch::Approx(5.F));
+  CHECK_THAT(peak_a.value, Catch::Matchers::WithinRel(5.F));
   CHECK(peak_a.coordinates.first == 0);
   CHECK(peak_a.coordinates.second == 1);
-  CHECK(peak_a.local_noise == Catch::Approx(2.F));
+  CHECK_THAT(peak_a.local_noise, Catch::Matchers::WithinRel(2.F));
 
   const auto &peak_b = result.peak_per_label.at(label_b - 1);
   CHECK(peak_b.island_size == 1);
-  CHECK(peak_b.value == Catch::Approx(7.F));
-  CHECK(peak_b.local_noise == Catch::Approx(9.F));
+  CHECK_THAT(peak_b.value, Catch::Matchers::WithinRel(7.F));
+  CHECK_THAT(peak_b.local_noise, Catch::Matchers::WithinRel(9.F));
 }
 
 TEST_CASE("label_islands does not merge diagonally-adjacent pixels (4-connectivity only)", "[label_islands]")
@@ -114,7 +115,7 @@ TEST_CASE("label_islands merges a bridge shape into a single island via union-fi
   REQUIRE(result.peak_per_label.size() == 1);
   const auto &peak = result.peak_per_label.front();
   CHECK(peak.island_size == 5);
-  CHECK(peak.value == Catch::Approx(8.F));
+  CHECK_THAT(peak.value, Catch::Matchers::WithinRel(8.F));
   CHECK(peak.coordinates.first == 0);
   CHECK(peak.coordinates.second == 2);
 
@@ -175,8 +176,8 @@ TEST_CASE("label_islands matches a seeded-random 5x6 mask against a Python refer
     CHECK(peak.island_size == e.size);
     CHECK(peak.coordinates.first == e.y);
     CHECK(peak.coordinates.second == e.x);
-    CHECK(peak.value == Catch::Approx(e.value).epsilon(1e-4));
-    CHECK(peak.local_noise == Catch::Approx(e.local_noise).epsilon(1e-4));
+    CHECK_THAT(peak.value, Catch::Matchers::WithinRel(static_cast<double>(e.value), 1e-4));
+    CHECK_THAT(peak.local_noise, Catch::Matchers::WithinRel(static_cast<double>(e.local_noise), 1e-4));
   }
 }
 
@@ -240,7 +241,7 @@ TEST_CASE("label_islands matches a seeded-random 8x8 mask against a Python refer
     CHECK(peak.island_size == e.size);
     CHECK(peak.coordinates.first == e.y);
     CHECK(peak.coordinates.second == e.x);
-    CHECK(peak.value == Catch::Approx(e.value).epsilon(1e-4));
-    CHECK(peak.local_noise == Catch::Approx(e.local_noise).epsilon(1e-4));
+    CHECK_THAT(peak.value, Catch::Matchers::WithinRel(static_cast<double>(e.value), 1e-4));
+    CHECK_THAT(peak.local_noise, Catch::Matchers::WithinRel(static_cast<double>(e.local_noise), 1e-4));
   }
 }

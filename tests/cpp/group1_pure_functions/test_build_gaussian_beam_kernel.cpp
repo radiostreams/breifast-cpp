@@ -3,6 +3,7 @@
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "plane_lot_dispatch.hpp"
 
@@ -46,7 +47,7 @@ TEST_CASE("build_gaussian_beam_kernel normalizes to sum 1", "[build_gaussian_bea
   for (const auto &c : kernel_cases)
   {
     const auto kernel = build_gaussian_beam_kernel(c.halfsize, c.sigma_major, c.sigma_minor, c.rotate);
-    CHECK(xt::sum(kernel)() == Catch::Approx(1.0).epsilon(1e-5));
+    CHECK_THAT(xt::sum(kernel)(), Catch::Matchers::WithinRel(1.0, 1e-5));
   }
 }
 
@@ -94,8 +95,8 @@ TEST_CASE("build_gaussian_beam_kernel is rotation-invariant and transpose-symmet
       {
         for (size_t j = 0; j < kernel.shape(1); ++j)
         {
-          CHECK(kernel(i, j) == Catch::Approx(reference(i, j)).epsilon(1e-4));
-          CHECK(kernel(i, j) == Catch::Approx(kernel(j, i)).epsilon(1e-4));
+          CHECK_THAT(kernel(i, j), Catch::Matchers::WithinRel(static_cast<double>(reference(i, j)), 1e-4));
+          CHECK_THAT(kernel(i, j), Catch::Matchers::WithinRel(static_cast<double>(kernel(j, i)), 1e-4));
         }
       }
     }
@@ -119,7 +120,7 @@ TEST_CASE("build_gaussian_beam_kernel swaps axes under a 90-degree rotation", "[
       {
         for (size_t j = 0; j < kernel_rotated.shape(1); ++j)
         {
-          CHECK(kernel_rotated(i, j) == Catch::Approx(kernel_swapped(i, j)).epsilon(1e-4));
+          CHECK_THAT(kernel_rotated(i, j), Catch::Matchers::WithinRel(static_cast<double>(kernel_swapped(i, j)), 1e-4));
         }
       }
     }
@@ -142,7 +143,7 @@ TEST_CASE("build_gaussian_beam_kernel is periodic with period pi in rotate", "[b
     {
       for (size_t j = 0; j < kernel.shape(1); ++j)
       {
-        CHECK(kernel(i, j) == Catch::Approx(kernel_plus_pi(i, j)).epsilon(1e-4));
+        CHECK_THAT(kernel(i, j), Catch::Matchers::WithinRel(static_cast<double>(kernel_plus_pi(i, j)), 1e-4));
       }
     }
   }
@@ -165,7 +166,7 @@ TEST_CASE("build_gaussian_beam_kernel is unaffected by the sign of sigma", "[bui
       {
         for (size_t j = 0; j < kernel_positive.shape(1); ++j)
         {
-          CHECK(kernel_positive(i, j) == Catch::Approx(kernel_negative(i, j)).epsilon(1e-4));
+          CHECK_THAT(kernel_positive(i, j), Catch::Matchers::WithinRel(static_cast<double>(kernel_negative(i, j)), 1e-4));
         }
       }
     }
@@ -203,7 +204,7 @@ TEST_CASE("build_gaussian_beam_kernel matches a Python reference for an anisotro
   {
     for (size_t j = 0; j < 7; ++j)
     {
-      CHECK(kernel(i, j) == Catch::Approx(expected[i][j]).epsilon(1e-4));
+      CHECK_THAT(kernel(i, j), Catch::Matchers::WithinRel(static_cast<double>(expected[i][j]), 1e-4));
     }
   }
 }
