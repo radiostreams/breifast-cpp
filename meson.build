@@ -112,9 +112,11 @@ catch2_dep = declare_dependency(
                '-lCatch2Main', '-lCatch2'],
 )
 
-# ITT profiling (ittnotify.h / libittnotify.a). Machine-dependent: ITT_ROOT env var wins, then the
-# newest local oneAPI VTune (/opt/intel/oneapi/vtune/*), then the cluster spack path. Meson errors out
-# via check:true when none of them actually contain the header, so the failure stays explicit.
+# ITT profiling (ittnotify.h / libittnotify.a), found as upstream finds it: ITT_ROOT env var wins, then the newest
+# local oneAPI VTune (/opt/intel/oneapi/vtune/*), then the EPFL cluster's spack path. Optional here: without any of
+# them the build goes on with __itt_pause/__itt_resume as no-ops (src/itt_compat.hpp), so that machines without
+# VTune (the SARAO/Rhodes nodes breifast runs on) can build the module at all.
+fs = import('fs')
 itt_script = [
   'sh', '-c',
   'if [ -n "$ITT_ROOT" ] && [ -f "$ITT_ROOT/include/ittnotify.h" ]; then echo "$ITT_ROOT"; exit 0; fi; ' +
@@ -123,12 +125,17 @@ itt_script = [
   'fallback="/ssoft/spack/pinot-noir/jed/v2/spack/opt/spack/linux-rhel9-x86_64_v3/gcc-11.4.1/intel-oneapi-vtune-2024.1.0-ggpuzpx5nqydg76zoguizove2pgh4c4i/vtune/2024.1"; ' +
   'if [ -f "$fallback/include/ittnotify.h" ]; then echo "$fallback"; exit 0; fi; exit 1'
 ]
-itt_root = run_command(itt_script, check : true).stdout().strip()
-
-itt_dep = declare_dependency(
-  compile_args : ['-isystem', itt_root / 'include'],
-  link_args : [itt_root / 'lib64' / 'libittnotify.a', '-ldl'],
-)
+itt_found = run_command(itt_script, check : false)
+if itt_found.returncode() == 0
+  itt_root = itt_found.stdout().strip()
+  itt_dep = declare_dependency(
+    compile_args : ['-isystem', itt_root / 'include', '-DBREIFAST_HAVE_ITT'],
+    link_args : [itt_root / 'lib64' / 'libittnotify.a', '-ldl'],
+  )
+else
+  message('ITT (VTune) not found: building without the profiling hooks')
+  itt_dep = declare_dependency()
+endif
 
 # The CPU kernels (src/cpu) and the dispatch. Compiled by every target that uses them, so that each target's
 # own compiler arguments apply.
@@ -150,8 +157,10 @@ if have_gpu
   subdir('src/gpu')
 endif
 
-ext_sources = ['src/plane_lot_bindings.cpp'] + cpu_sources
-ext_cpp_args = []
+ext_sources = ['src/plane_lot_bindings.cpp', 'src/spectron/spectron_bindings.cpp',
+               'src/spectron/spectron_plane.cpp'] + cpu_sources
+# the spectron port reproduces numpy's float32/float64 rounding step by step: no fused multiply-adds
+ext_cpp_args = ['-ffp-contract=off']
 ext_link_args = ['-static-libstdc++', '-static-libgcc', '-Wl,-z,noexecstack']
 ext_link_with = []
 ext_deps = [py.dependency(), pybind11_dep, xtl_dep, xtensor_dep, xsimd_dep, xtensor_python_dep, numpy_dep,
@@ -175,13 +184,15 @@ ext_module = py.extension_module(
   install : true,
 )
 
-pytest = find_program('pytest', required : true)
-test('breifast_helpers',
-  pytest,
-  args : [meson.project_source_root() / 'tests'],
-  env : {'PYTHONPATH' : meson.current_build_dir()},
-  depends : [ext_module],
-)
+pytest = find_program('pytest', required : false)
+if pytest.found()
+  test('breifast_helpers',
+    pytest,
+    args : [meson.project_source_root() / 'tests'],
+    env : {'PYTHONPATH' : meson.current_build_dir()},
+    depends : [ext_module],
+  )
+endif
 
 bench = executable(
   'bench',
@@ -232,22 +243,26 @@ test_breifast_core = executable(
   dependencies : [xtl_dep, xtensor_dep, xsimd_dep, tbb_dep, catch2_dep, itt_dep, json_dep],
   cpp_args : ['-DFIXTURES_DIR="' + meson.project_source_root() / 'tests' / 'fixtures' + '"'],
   link_args : ['-static-libstdc++', '-static-libgcc'],
+  build_by_default : false,
 )
 test('breifast_core', test_breifast_core)
 
-uv = find_program('uv', required : true)
+uv = find_program('uv', required : false)
 devshell_python = find_program('python3', required : true)
-run_target('wheel',
-  command : [uv, 'build', '--wheel', '--no-build-isolation',
-             '--python', devshell_python,
-             '-o', meson.project_source_root() / 'dist',
-             meson.project_source_root()],
-)
 
-run_target('wheel-gpu',
-  command : [uv, 'build', '--wheel', '--no-build-isolation',
-             '--config-setting', 'setup-args=-Dgpu=enabled',
-             '--python', devshell_python,
-             '-o', meson.project_source_root() / 'dist-gpu',
-             meson.project_source_root()],
-)
+if uv.found()
+  run_target('wheel',
+    command : [uv, 'build', '--wheel', '--no-build-isolation',
+               '--python', devshell_python,
+               '-o', meson.project_source_root() / 'dist',
+               meson.project_source_root()],
+  )
+
+  run_target('wheel-gpu',
+    command : [uv, 'build', '--wheel', '--no-build-isolation',
+               '--config-setting', 'setup-args=-Dgpu=enabled',
+               '--python', devshell_python,
+               '-o', meson.project_source_root() / 'dist-gpu',
+               meson.project_source_root()],
+  )
+endif
