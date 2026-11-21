@@ -10,8 +10,6 @@
 #include <oneapi/tbb/task_arena.h>
 #include <oneapi/tbb/task_group.h>
 
-#include <ittnotify.h>
-
 #include <xsimd/xsimd.hpp>
 #include <xtensor/core/xnoalias.hpp>
 #include <xtensor/core/xtensor_forward.hpp>

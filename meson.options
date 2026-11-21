@@ -6,5 +6,3 @@ option('gpu', type : 'feature', value : 'disabled',
   description : 'Build the CUDA targets in src/gpu (needs nvcc)')
 option('gpu_arch', type : 'string', value : 'sm_90',
   description : 'GPU architecture passed to nvcc -arch (sm_90 is the H100)')
-option('vtune_root', type : 'string', value : '',
-  description : 'VTune install whose ITT API bench links (include/, lib64/libittnotify.a); empty builds bench without it')

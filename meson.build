@@ -112,53 +112,29 @@ catch2_dep = declare_dependency(
                '-lCatch2Main', '-lCatch2'],
 )
 
-# VTune's ITT API, used by bench to pause/resume collection. Optional: point -Dvtune_root at a VTune install to
-# enable it; without it bench runs uninstrumented. Nothing else links it.
+# ITT profiling (ittnotify.h / libittnotify.a), found as upstream finds it: ITT_ROOT env var wins, then the newest
+# local oneAPI VTune (/opt/intel/oneapi/vtune/*), then the EPFL cluster's spack path. Optional here: without any of
+# them the build goes on with __itt_pause/__itt_resume as no-ops (src/itt_compat.hpp), so that machines without
+# VTune (the SARAO/Rhodes nodes breifast runs on) can build the module at all.
 fs = import('fs')
-itt_root = get_option('vtune_root')
-if itt_root != '' and fs.exists(itt_root / 'lib64' / 'libittnotify.a')
+itt_script = [
+  'sh', '-c',
+  'if [ -n "$ITT_ROOT" ] && [ -f "$ITT_ROOT/include/ittnotify.h" ]; then echo "$ITT_ROOT"; exit 0; fi; ' +
+  'best="$(ls -d /opt/intel/oneapi/vtune/*/ 2>/dev/null | sort -V | tail -1)"; ' +
+  'if [ -n "$best" ] && [ -f "${best}include/ittnotify.h" ]; then echo "${best%/}"; exit 0; fi; ' +
+  'fallback="/ssoft/spack/pinot-noir/jed/v2/spack/opt/spack/linux-rhel9-x86_64_v3/gcc-11.4.1/intel-oneapi-vtune-2024.1.0-ggpuzpx5nqydg76zoguizove2pgh4c4i/vtune/2024.1"; ' +
+  'if [ -f "$fallback/include/ittnotify.h" ]; then echo "$fallback"; exit 0; fi; exit 1'
+]
+itt_found = run_command(itt_script, check : false)
+if itt_found.returncode() == 0
+  itt_root = itt_found.stdout().strip()
   itt_dep = declare_dependency(
     compile_args : ['-isystem', itt_root / 'include', '-DBREIFAST_HAVE_ITT'],
     link_args : [itt_root / 'lib64' / 'libittnotify.a', '-ldl'],
   )
 else
+  message('ITT (VTune) not found: building without the profiling hooks')
   itt_dep = declare_dependency()
-endif
-
-tracy_root = meson.project_source_root() / 'tracy'
-
-# Header-only view of Tracy, for every target that compiles an instrumented source file.
-# Without TRACY_ENABLE the zone macros expand to nothing, so this costs the wheel and the
-# test binary an include path and nothing else. The tracy/ checkout is not in the repository:
-# without it (and with -Dtracy=false) a no-op stand-in header from compat/tracy is used instead.
-if fs.is_dir(tracy_root / 'public')
-  tracy_headers_dep = declare_dependency(
-    compile_args : ['-isystem', tracy_root / 'public'],
-  )
-else
-  if get_option('tracy')
-    error('-Dtracy=true needs the Tracy sources checked out in ' + tracy_root)
-  endif
-  tracy_headers_dep = declare_dependency(
-    compile_args : ['-isystem', meson.project_source_root() / 'compat' / 'tracy'],
-  )
-endif
-
-# The client proper: only bench gets it, and only with -Dtracy=true.
-# no_exit makes the process block at exit until tracy-capture has drained the trace, without
-# which a batch run finishes before the capture tool has everything. only_localhost/no_broadcast
-# keep the listening socket and its discovery beacon off the cluster network.
-if get_option('tracy')
-  tracy_dep = declare_dependency(
-    sources : [tracy_root / 'public' / 'TracyClient.cpp'],
-    compile_args : ['-isystem', tracy_root / 'public',
-                    '-DTRACY_ENABLE', '-DTRACY_NO_EXIT',
-                    '-DTRACY_ONLY_LOCALHOST', '-DTRACY_NO_BROADCAST'],
-    dependencies : [dependency('threads')],
-    link_args : ['-ldl'],
-  )
-else
-  tracy_dep = tracy_headers_dep
 endif
 
 # The CPU kernels (src/cpu) and the dispatch. Compiled by every target that uses them, so that each target's
@@ -188,7 +164,7 @@ ext_cpp_args = ['-ffp-contract=off']
 ext_link_args = ['-static-libstdc++', '-static-libgcc', '-Wl,-z,noexecstack']
 ext_link_with = []
 ext_deps = [py.dependency(), pybind11_dep, xtl_dep, xtensor_dep, xsimd_dep, xtensor_python_dep, numpy_dep,
-            tbb_dep, itt_dep, tracy_headers_dep]
+            tbb_dep, itt_dep]
 if have_gpu
   ext_cpp_args += ['-DBREIFAST_HAVE_GPU']
   ext_deps += [cuda_headers_dep]
