@@ -22,6 +22,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -60,9 +61,16 @@ struct BandArrayF
   }
 };
 
+/// Opaque per-run store the binding keeps its C-contiguous copies of non-contiguous input images in.
+struct InputCache;
+
 /// Per-run settings: the closure variables of process_plane that do not change from plane to plane.
 struct Config
 {
+  /// C-contiguous copies of per-run input images that arrived with other memory layouts, made once per run
+  /// (see spectron_bindings.cpp). Lives and dies with the run's Config.
+  mutable std::shared_ptr<InputCache> input_cache;
+
   long ny = 0, nx = 0, nfreq = 0;
   struct Slice
   {

@@ -2,6 +2,10 @@
 #include "spectron_bindings.hpp"
 #include "spectron_plane.hpp"
 
+#include <algorithm>
+#include <map>
+#include <string>
+
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 
@@ -24,29 +28,135 @@ std::string where(const char *name)
   return std::string("process_plane_spectron: ") + name;
 }
 
-/// Checks that the last two axes of `a` are a C-contiguous (ny, nx) plane.
-void check_planes(const py::array &a, long ny, long nx, const char *name)
+/// Checks that the last two axes of `a` are (ny, nx).
+void check_shape(const py::array &a, long ny, long nx, const char *name)
 {
   const auto nd = a.ndim();
   if (nd < 2 || a.shape(nd - 2) != ny || a.shape(nd - 1) != nx)
     throw std::invalid_argument(where(name) + ": planes must be (ny, nx)");
-  if (a.strides(nd - 1) != static_cast<long>(a.itemsize()) || a.strides(nd - 2) != nx * a.itemsize())
+}
+
+/// Whether the last two axes of `a` are a C-contiguous (ny, nx) plane.
+bool contiguous_planes(const py::array &a)
+{
+  const auto nd = a.ndim();
+  return a.strides(nd - 1) == static_cast<long>(a.itemsize()) &&
+         a.strides(nd - 2) == a.shape(nd - 1) * static_cast<long>(a.itemsize());
+}
+
+/// Checks that the last two axes of `a` are a C-contiguous (ny, nx) plane: for caller-owned arrays the kernel
+/// writes into (the accumulators), which procres allocates in C order.
+void check_planes(const py::array &a, long ny, long nx, const char *name)
+{
+  check_shape(a, ny, nx, name);
+  if (!contiguous_planes(a))
     throw std::invalid_argument(where(name) + ": planes must be C-contiguous");
 }
 
-template <typename T> const T *plane2(const py::object &o, long ny, long nx, const char *name)
+/// Copies `nb` strided (ny, nx) planes into C-contiguous `dst` (nb * ny * nx), in 64 x 64 tiles so that a
+/// transposed source -- a store kept in (l, m) order read in (m, l) order -- is read cache-friendly.
+/// Strides in bytes.
+template <typename T>
+void gather_planes(const char *src, long nb, long sb, long sy, long sx, long ny, long nx, T *dst)
+{
+  constexpr long B = 64;
+  for (long b = 0; b < nb; ++b)
+    for (long y0 = 0; y0 < ny; y0 += B)
+      for (long x0 = 0; x0 < nx; x0 += B)
+        for (long y = y0; y < std::min(y0 + B, ny); ++y)
+        {
+          const char *row = src + b * sb + y * sy;
+          T *out = dst + (static_cast<size_t>(b) * ny + y) * nx;
+          for (long x = x0; x < std::min(x0 + B, nx); ++x)
+            out[x] = *reinterpret_cast<const T *>(row + x * sx);
+        }
+}
+
+/// The reverse of gather_planes: C-contiguous `src` back into strided planes.
+template <typename T>
+void scatter_planes(const T *src, long nb, char *dst, long sb, long sy, long sx, long ny, long nx)
+{
+  constexpr long B = 64;
+  for (long b = 0; b < nb; ++b)
+    for (long y0 = 0; y0 < ny; y0 += B)
+      for (long x0 = 0; x0 < nx; x0 += B)
+        for (long y = y0; y < std::min(y0 + B, ny); ++y)
+        {
+          char *row = dst + b * sb + y * sy;
+          const T *in = src + (static_cast<size_t>(b) * ny + y) * nx;
+          for (long x = x0; x < std::min(x0 + B, nx); ++x)
+            *reinterpret_cast<T *>(row + x * sx) = in[x];
+        }
+}
+} // namespace
+
+/// C-contiguous copies of per-run input images that came with planes in another memory order (the current
+/// forward-difference and convolution stores keep (l, m) last; procres reads them by name as (m, l), which
+/// gives a transposed view). Keyed by buffer address, shape and strides; each entry holds a reference to its
+/// source array, so the address cannot be reused by another array while the run lasts.
+struct InputCache
+{
+  struct Entry
+  {
+    py::object source;
+    std::vector<char> data;
+  };
+  std::mutex lock;
+  std::map<std::string, std::shared_ptr<Entry>> entries;
+};
+
+namespace
+{
+/// The C-contiguous data of a per-run (nb, ny, nx) or (ny, nx) image: its own buffer when its planes are
+/// C-contiguous, else a copy made once per run and kept on the Config. Sets `band_stride` (elements; 0 for a
+/// single or broadcast band).
+template <typename T> const T *run_image(const Config &config, const py::array &a, long &band_stride)
+{
+  const long nd = a.ndim();
+  const long nb = nd == 3 ? a.shape(0) : 1;
+  const bool broadcast = nd == 3 && (nb == 1 || a.strides(0) == 0);
+  if (contiguous_planes(a))
+  {
+    band_stride = broadcast || nd == 2 ? 0 : static_cast<long>(a.strides(0) / a.itemsize());
+    return static_cast<const T *>(a.data());
+  }
+  std::string key = std::to_string(reinterpret_cast<uintptr_t>(a.data())) + ":" + std::string(1, a.dtype().kind()) + std::to_string(a.itemsize());
+  for (long i = 0; i < nd; ++i)
+    key += ":" + std::to_string(a.shape(i)) + "/" + std::to_string(a.strides(i));
+  if (!config.input_cache)
+    config.input_cache = std::make_shared<InputCache>();
+  auto &cache = *config.input_cache;
+  std::lock_guard<std::mutex> guard(cache.lock);
+  auto &entry = cache.entries[key];
+  const long ny = a.shape(nd - 2), nx = a.shape(nd - 1);
+  const long ncopy = broadcast ? 1 : nb;
+  if (!entry)
+  {
+    entry = std::make_shared<InputCache::Entry>();
+    entry->source = a;
+    entry->data.resize(static_cast<size_t>(ncopy) * ny * nx * sizeof(T));
+    gather_planes<T>(static_cast<const char *>(a.data()), ncopy, nd == 3 ? a.strides(0) : 0, a.strides(nd - 2),
+                     a.strides(nd - 1), ny, nx, reinterpret_cast<T *>(entry->data.data()));
+  }
+  band_stride = ncopy > 1 ? ny * nx : 0;
+  return reinterpret_cast<const T *>(entry->data.data());
+}
+
+template <typename T> const T *plane2(const Config &config, const py::object &o, long ny, long nx, const char *name)
 {
   if (o.is_none())
     return nullptr;
   py::array a = o;
   if (a.ndim() != 2 || !is_dtype<T>(a))
     throw std::invalid_argument(where(name) + ": expected a 2D array of the right dtype");
-  check_planes(a, ny, nx, name);
-  return static_cast<const T *>(a.data());
+  check_shape(a, ny, nx, name);
+  long unused;
+  return run_image<T>(config, a, unused);
 }
 
 /// A 2D float32 or float64 array: exactly one of the two pointers is set (or neither, for None).
-void plane2f(const py::object &o, long ny, long nx, const char *name, const float *&p32, const double *&p64)
+void plane2f(const Config &config, const py::object &o, long ny, long nx, const char *name, const float *&p32,
+             const double *&p64)
 {
   p32 = nullptr;
   p64 = nullptr;
@@ -54,14 +164,15 @@ void plane2f(const py::object &o, long ny, long nx, const char *name, const floa
     return;
   py::array a = o;
   if (is_dtype<float>(a))
-    p32 = plane2<float>(o, ny, nx, name);
+    p32 = plane2<float>(config, o, ny, nx, name);
   else if (is_dtype<double>(a))
-    p64 = plane2<double>(o, ny, nx, name);
+    p64 = plane2<double>(config, o, ny, nx, name);
   else
     throw std::invalid_argument(where(name) + ": expected float32 or float64");
 }
 
-template <typename T> BandArray<T> band3(const py::object &o, long nfreq, long ny, long nx, const char *name)
+template <typename T>
+BandArray<T> band3(const Config &config, const py::object &o, long nfreq, long ny, long nx, const char *name)
 {
   BandArray<T> b;
   if (o.is_none())
@@ -69,22 +180,21 @@ template <typename T> BandArray<T> band3(const py::object &o, long nfreq, long n
   py::array a = o;
   if (a.ndim() != 3 || !is_dtype<T>(a) || (a.shape(0) != nfreq && a.shape(0) != 1))
     throw std::invalid_argument(where(name) + ": expected a (nfreq, ny, nx) array of the right dtype");
-  check_planes(a, ny, nx, name);
-  b.data = static_cast<const T *>(a.data());
-  b.band_stride = a.shape(0) == 1 ? 0 : static_cast<long>(a.strides(0) / a.itemsize());
+  check_shape(a, ny, nx, name);
+  b.data = run_image<T>(config, a, b.band_stride);
   return b;
 }
 
-BandArrayF band3f(const py::object &o, long nfreq, long ny, long nx, const char *name)
+BandArrayF band3f(const Config &config, const py::object &o, long nfreq, long ny, long nx, const char *name)
 {
   BandArrayF b;
   if (o.is_none())
     return b;
   py::array a = o;
   if (is_dtype<float>(a))
-    b.f32 = band3<float>(o, nfreq, ny, nx, name);
+    b.f32 = band3<float>(config, o, nfreq, ny, nx, name);
   else if (is_dtype<double>(a))
-    b.f64 = band3<double>(o, nfreq, ny, nx, name);
+    b.f64 = band3<double>(config, o, nfreq, ny, nx, name);
   else
     throw std::invalid_argument(where(name) + ": expected float32 or float64");
   return b;
@@ -123,38 +233,48 @@ py::dict process_plane_spectron(const Config &config, py::array cube, long stoke
   const long ny = config.ny, nx = config.nx, nfreq = config.nfreq;
   if (!is_dtype<float>(cube) || cube.ndim() != 4 || cube.shape(1) != nfreq || !cube.writeable())
     throw std::invalid_argument(where("cube") + ": expected a writeable float32 (stokes, nfreq, ny, nx) array");
-  check_planes(cube, ny, nx, "cube");
+  check_shape(cube, ny, nx, "cube");
+  // planes in another memory order (a store kept in (l, m) order, read as (m, l)) are copied into C-contiguous
+  // buffers for the plane, and the slot the kernel changes is written back after it
+  const bool cube_strided = !contiguous_planes(cube);
   if (slice_threshold.size() != config.band_slices.size())
     throw std::invalid_argument(where("slice_threshold") + ": one threshold per band slice");
 
   PlaneInputs in;
   auto *base = static_cast<char *>(cube.mutable_data());
-  in.cube = reinterpret_cast<float *>(base + stokes_index * cube.strides(0));
-  in.cube_band_stride = static_cast<long>(cube.strides(1) / 4);
-  if (!u_index.is_none())
+  char *slot = base + stokes_index * cube.strides(0);
+  char *slot_u = u_index.is_none() ? nullptr : base + u_index.cast<long>() * cube.strides(0);
+  const long sb = cube.strides(1), sy = cube.strides(2), sx = cube.strides(3);
+  thread_local std::vector<float> slot_buf, slot_u_buf;
+  if (!cube_strided)
   {
-    in.cube_u = reinterpret_cast<float *>(base + u_index.cast<long>() * cube.strides(0));
-    in.cube_u_band_stride = in.cube_band_stride;
+    in.cube = reinterpret_cast<float *>(slot);
+    in.cube_band_stride = static_cast<long>(sb / 4);
+    if (slot_u)
+    {
+      in.cube_u = reinterpret_cast<float *>(slot_u);
+      in.cube_u_band_stride = in.cube_band_stride;
+    }
   }
   in.nonzero_gate = vec1<uint8_t>(nonzero_gate, nfreq, "nonzero_gate");
   in.weights = vec1<float>(weights, nfreq, "weights");
   in.chanwidth = vec1<float>(chanwidth, nfreq, "chanwidth");
-  in.accept_mask = band3<uint8_t>(py::array(accept_mask).view("uint8"), nfreq, ny, nx, "accept_mask");
-  in.mean_image = band3<float>(mean_image, nfreq, ny, nx, "mean_image");
+  in.accept_mask = band3<uint8_t>(config, py::array(accept_mask).view("uint8"), nfreq, ny, nx, "accept_mask");
+  in.mean_image = band3<float>(config, mean_image, nfreq, ny, nx, "mean_image");
   if (config.subtract_mean && !in.mean_image)
     throw std::invalid_argument(where("mean_image") + ": needed with subtract_mean");
-  in.snr_cutoff = band3f(snr_cutoff, nfreq, ny, nx, "snr_cutoff");
-  in.flux_cutoff = band3f(flux_cutoff, nfreq, ny, nx, "flux_cutoff");
-  plane2f(selfnoise_offset, ny, nx, "selfnoise_offset", in.selfnoise_offset_f32, in.selfnoise_offset_f64);
-  plane2f(dde_noise, ny, nx, "dde_noise", in.dde_noise_f32, in.dde_noise_f64);
-  plane2f(nm_noise, ny, nx, "nm_noise", in.nm_noise_f32, in.nm_noise_f64);
-  plane2f(selfnoise, ny, nx, "selfnoise", in.selfnoise_f32, in.selfnoise_f64);
+  in.snr_cutoff = band3f(config, snr_cutoff, nfreq, ny, nx, "snr_cutoff");
+  in.flux_cutoff = band3f(config, flux_cutoff, nfreq, ny, nx, "flux_cutoff");
+  plane2f(config, selfnoise_offset, ny, nx, "selfnoise_offset", in.selfnoise_offset_f32, in.selfnoise_offset_f64);
+  plane2f(config, dde_noise, ny, nx, "dde_noise", in.dde_noise_f32, in.dde_noise_f64);
+  plane2f(config, nm_noise, ny, nx, "nm_noise", in.nm_noise_f32, in.nm_noise_f64);
+  plane2f(config, selfnoise, ny, nx, "selfnoise", in.selfnoise_f32, in.selfnoise_f64);
   if ((!in.selfnoise_offset_f32 && !in.selfnoise_offset_f64) || (!in.dde_noise_f32 && !in.dde_noise_f64) ||
       (!in.nm_noise_f32 && !in.nm_noise_f64) || (!in.selfnoise_f32 && !in.selfnoise_f64))
     throw std::invalid_argument(where("noise terms") + ": selfnoise_offset, dde_noise, nm_noise and selfnoise are required");
-  in.nm_noise_band = band3<double>(nm_noise_band, nfreq, ny, nx, "nm_noise_band");
-  in.noise_scale_sqrt = plane2<double>(noise_scale_sqrt, ny, nx, "noise_scale_sqrt");
-  in.baseline_flux = plane2<float>(baseline_flux, ny, nx, "baseline_flux");
+  in.nm_noise_band = band3<double>(config, nm_noise_band, nfreq, ny, nx, "nm_noise_band");
+  in.noise_scale_sqrt = plane2<double>(config, noise_scale_sqrt, ny, nx, "noise_scale_sqrt");
+  in.baseline_flux = plane2<float>(config, baseline_flux, ny, nx, "baseline_flux");
   if (config.beam_size && !config.fixed_beam)
   {
     in.bmaj = vec1<float>(bmaj, nfreq, "bmaj");
@@ -213,7 +333,24 @@ py::dict process_plane_spectron(const Config &config, py::array cube, long stoke
   PlaneResult out;
   {
     py::gil_scoped_release release;
+    if (cube_strided)
+    {
+      const size_t n = static_cast<size_t>(nfreq) * ny * nx;
+      slot_buf.resize(n);
+      gather_planes<float>(slot, nfreq, sb, sy, sx, ny, nx, slot_buf.data());
+      in.cube = slot_buf.data();
+      in.cube_band_stride = ny * nx;
+      if (slot_u)
+      {
+        slot_u_buf.resize(n);
+        gather_planes<float>(slot_u, nfreq, sb, sy, sx, ny, nx, slot_u_buf.data());
+        in.cube_u = slot_u_buf.data();
+        in.cube_u_band_stride = ny * nx;
+      }
+    }
     process_plane(config, in, out);
+    if (cube_strided) // the kernel changes only the detection slot (P formed in it, single-band SNR planes)
+      scatter_planes<float>(slot_buf.data(), nfreq, slot, sb, sy, sx, ny, nx);
   }
 
   py::dict r;
@@ -355,5 +492,5 @@ void init_spectron_bindings(py::module_ &m)
         py::arg("accumulators") = py::none(),
         "spectron's process_plane for one (interval, Stokes) plane; modifies `cube` in place as procres does");
   m.def("max_to_std_ratio", &breifast::spectron::max_to_std_ratio);
-  m.attr("SPECTRON_KERNEL_VERSION") = 5;
+  m.attr("SPECTRON_KERNEL_VERSION") = 6;
 }
