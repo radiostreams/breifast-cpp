@@ -19,6 +19,7 @@ namespace rms_noise_map_tests
 using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_median;
 using breifast::gpu::gpu_rms_noise_map;
+using breifast::gpu::gpu_rms_noise_map_scratch_size;
 using breifast::gpu::MedianScratch;
 using breifast::gpu::Stream;
 using breifast::gpu::test::download;
@@ -64,16 +65,13 @@ std::vector<float> run_gpu_rms_noise_map(const std::vector<float> &plane_values,
   const size_t n_plane_pixels = n_rows * n_cols;
 
   const auto device_plane = upload(plane_values);
-  auto device_rows = upload(std::vector<float>(n_plane_pixels, prefill));
-  auto device_prefix = upload(std::vector<double>(n_plane_pixels, prefill));
+  auto device_scratch = upload(std::vector<double>(gpu_rms_noise_map_scratch_size(n_rows, n_cols, box), prefill));
   auto device_out = upload(std::vector<float>(n_plane_pixels, prefill));
-  DeviceVector<std::byte> scan_storage;
 
   const Stream stream;
   MedianScratch scratch;
   DeviceVector<float> median(1);
-  gpu_rms_noise_map(device_plane, n_rows, n_cols, box, device_rows, device_prefix, scan_storage, device_out, median,
-                    scratch, stream);
+  gpu_rms_noise_map(device_plane, n_rows, n_cols, box, device_scratch, device_out, median, scratch, stream);
   const float folded_median = download_scalar(median.data(), stream);
   gpu_median(device_out, n_plane_pixels, median, scratch, stream);
   CHECK(folded_median == download_scalar(median.data(), stream));
@@ -204,6 +202,20 @@ TEST_CASE("gpu_rms_noise_map stays accurate on a large plane with a wide box", "
   constexpr long box = 400;
 
   const std::vector<float> big_plane = make_plane(rows * cols, 777ULL);
+  const std::vector<float> expected = host_rms_integral_image(big_plane, rows, cols, box);
+  const auto out_rms = run_gpu_rms_noise_map(big_plane, rows, cols, box);
+
+  REQUIRE(out_rms.size() == rows * cols);
+  CHECK_THAT(out_rms, Catch::Matchers::Approx(expected).epsilon(1e-5));
+}
+
+TEST_CASE("gpu_rms_noise_map handles partial parts and an odd box", "[gpu][rms_noise_map]")
+{
+  constexpr size_t rows = 1300; // neither side a multiple of the part size: the last parts are partial
+  constexpr size_t cols = 2100;
+  constexpr long box = 401;
+
+  const std::vector<float> big_plane = make_plane(rows * cols, 4242ULL);
   const std::vector<float> expected = host_rms_integral_image(big_plane, rows, cols, box);
   const auto out_rms = run_gpu_rms_noise_map(big_plane, rows, cols, box);
 

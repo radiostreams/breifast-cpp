@@ -134,6 +134,7 @@ TEST_CASE("gpu_process_band reaches the detection stage", "[gpu][process_band]")
 
 namespace band_workspace_tests
 {
+using breifast::gpu::gpu_rms_noise_map_scratch_size;
 using breifast::gpu::GpuBandResult;
 using breifast::gpu::GpuBandWorkspace;
 using breifast::gpu::GpuPlaneInput;
@@ -163,7 +164,7 @@ TEST_CASE("GpuBandWorkspace grows every buffer to what the plane needs", "[gpu][
   CHECK(workspace.noise_map.size() == n_pixels);
   CHECK(workspace.snr.size() == n_pixels);
   CHECK(workspace.mask.size() == n_pixels);
-  CHECK(workspace.row_sums.size() == n_pixels);
+  CHECK(workspace.rms_scratch.size() == gpu_rms_noise_map_scratch_size(64, 128, 5)); // make_plane()'s size and box
   CHECK(workspace.rms_map.size() == n_pixels);
   CHECK(workspace.labels.size() == n_pixels);
   CHECK(workspace.label_scratch.root_ranks.size() == n_pixels);

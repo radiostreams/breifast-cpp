@@ -109,9 +109,7 @@ struct GpuBandWorkspace
   DeviceVector<float> noise_map;
   DeviceVector<float> snr;
   DeviceVector<bool> mask;
-  DeviceVector<float> row_sums;
-  DeviceVector<double> row_prefix;                 // per-row prefix sums of the squares, input of the window sums
-  DeviceVector<std::byte> row_prefix_scan_storage; // temporary storage of that scan (grown by window_kernel)
+  DeviceVector<double> rms_scratch; // gpu_rms_noise_map's scratch
   DeviceVector<float> rms_map;
 
   DeviceVector<unsigned int> labels;

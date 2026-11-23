@@ -141,19 +141,19 @@ void gpu_snr_and_filters(const float *plane, const float *noise_map, const float
  * @brief Local RMS noise map: a sliding `boxsize x boxsize` window over `plane`, edge-corrected, square root of the
  * mean of `plane^2`.
  *
- * Two separable passes with double accumulators, the horizontal running sums into `row_window_sums` then the vertical
- * pass. Also gpu_median() of the RMS map: the vertical pass is its first pass. Device pointers; the work is enqueued on
+ * Box sums from the 2D prefix of `plane^2`, computed by parts of the image (each part's outputs plus the box's reach)
+ * so that a part's prefix stays in L2. Also gpu_median() of the RMS map. Device pointers; the work is enqueued on
  * `stream`. `boxsize <= 0` is treated as 1.
  * @param plane `[n_y, n_x]` floats, row major.
- * @param row_window_sums Caller scratch of `n_y * n_x` floats, overwritten.
- * @param row_prefix Caller scratch of `n_y * n_x` doubles, overwritten: the per-row prefix sums of `plane^2`.
- * @param row_prefix_scan_storage Caller scratch for the scan's temporary storage; grown as needed.
+ * @param scratch Caller scratch of gpu_rms_noise_map_scratch_size() doubles, overwritten.
  * @param out_rms `[n_y, n_x]` floats, written completely.
  * @param out_median One device float.
  */
-void gpu_rms_noise_map(const float *plane, size_t n_y, size_t n_x, long boxsize, float *row_window_sums,
-                       double *row_prefix, DeviceVector<std::byte> &row_prefix_scan_storage, float *out_rms,
-                       float *out_median, MedianScratch &scratch, cudaStream_t stream = nullptr);
+void gpu_rms_noise_map(const float *plane, size_t n_y, size_t n_x, long boxsize, double *scratch, float *out_rms,
+                       float *out_median, MedianScratch &median_scratch, cudaStream_t stream = nullptr);
+
+/// Doubles of scratch gpu_rms_noise_map() needs for a `[n_y, n_x]` plane and a box of `boxsize`.
+std::size_t gpu_rms_noise_map_scratch_size(std::size_t n_y, std::size_t n_x, long boxsize);
 
 /**
  * @brief Exact median of `values`, numpy semantics: odd `n` picks rank `n/2`, even `n` averages ranks `n/2 - 1` and
