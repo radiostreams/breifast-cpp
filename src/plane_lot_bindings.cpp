@@ -1,5 +1,6 @@
 #include "plane_lot_bindings.hpp"
 #include "plane_lot_dispatch.hpp"
+#include "spectron/spectron_bindings.hpp"
 
 #include <array>
 #include <optional>
@@ -314,4 +315,5 @@ PYBIND11_MODULE(breifast_helpers, m)
 
   xt::import_numpy();
   init_plane_lot_bindings(m);
+  init_spectron_bindings(m);
 }

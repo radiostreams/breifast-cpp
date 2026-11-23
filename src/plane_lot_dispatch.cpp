@@ -10,8 +10,6 @@
 #include <oneapi/tbb/task_arena.h>
 #include <oneapi/tbb/task_group.h>
 
-#include <ittnotify.h>
-
 #include <xsimd/xsimd.hpp>
 #include <xtensor/core/xnoalias.hpp>
 #include <xtensor/core/xtensor_forward.hpp>
@@ -27,6 +25,7 @@
 #include "plane_lot_dispatch.hpp"
 #include "cpu/channel_reductions.hpp"
 #include "cpu/scalar_reductions.hpp"
+#include "itt_compat.hpp"
 
 namespace breifast
 {
