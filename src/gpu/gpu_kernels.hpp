@@ -33,7 +33,38 @@ struct LabelScratch
   DeviceVector<std::byte> scan_storage;
 };
 
-/// Device scratch of gpu_label_stats and gpu_island_boost: the per-island reduction keys and partial results.
+/// Blocks per stamp of the multi-block stamp kernels (donut median, abs extreme, donut std).
+inline constexpr unsigned int stamp_blocks = 64;
+
+/// Device scratch of gpu_stamp_abs_extreme for one island.
+struct StampExtremeState
+{
+  float min[stamp_blocks]; ///< min over each block's pixels
+  float max[stamp_blocks]; ///< max over each block's pixels
+  std::uint32_t done;      ///< blocks done
+};
+
+/// Device scratch of gpu_donut_std for one island.
+struct DonutStandardDeviationState
+{
+  double sum[stamp_blocks];          ///< sum of the nonzero pixels of each block
+  double sum_squares[stamp_blocks];  ///< sum of their squares
+  std::uint32_t count[stamp_blocks]; ///< their count
+  std::uint32_t done;                ///< blocks done
+};
+
+/// Device scratch of gpu_donut_median_abs for one island.
+struct DonutMedianState
+{
+  std::uint32_t histogram[MedianScratch::histogram_bins]; ///< digit histogram of the current pass
+  std::uint32_t select[3]; ///< below, prefix, coverage: the radix-select state, in finish_radix_pass's order
+  std::uint32_t lower_max; ///< largest key below the prefix
+  std::uint32_t done;      ///< blocks done with the current pass
+  std::uint32_t count;     ///< nonzero pixels of the stamp, the median's n
+};
+
+/// Device scratch of gpu_label_stats, gpu_island_boost, gpu_donut_median_abs, gpu_stamp_abs_extreme and gpu_donut_std:
+/// the per-island reduction keys and partial results.
 struct IslandScratch
 {
   /// Grows every array to hold `n_islands` islands; the contents are unspecified after growing.
@@ -43,12 +74,18 @@ struct IslandScratch
     local_noise_max.ensure(n_islands);
     sizes.ensure(n_islands);
     boost_keys.ensure(n_islands + 1); // indexed by label, 1..n_islands
+    donut_median.ensure(n_islands);
+    stamp_extreme.ensure(n_islands);
+    donut_standard_deviation.ensure(n_islands);
   }
 
   DeviceVector<unsigned long long> value_keys;
   DeviceVector<float> local_noise_max;
   DeviceVector<unsigned int> sizes;
   DeviceVector<unsigned long long> boost_keys;
+  DeviceVector<DonutMedianState> donut_median;
+  DeviceVector<StampExtremeState> stamp_extreme;
+  DeviceVector<DonutStandardDeviationState> donut_standard_deviation;
 };
 
 /**
@@ -196,40 +233,46 @@ struct StampWindows
 /**
  * @brief Scaled median absolute value of the nonzero pixels of each stamp: the `lmad` of stamp_donut_stats.
  *
- * One block per stamp. The block keeps the pixels with `value != 0`, takes the median of `abs(value)` with a
- * block-level digit select (the even-count average of the two middle ranks), and writes `scale * median`, or 0 when
- * the stamp has no nonzero pixel. Device pointers; the work is enqueued on `stream`.
+ * Each stamp is spread over stamp_blocks consecutive blocks. Three radix select passes over the stamp's
+ * nonzero pixels find the median of `abs(value)` (the even-count average of the two middle ranks), and the call
+ * writes `scale * median`, or 0 when the stamp has no nonzero pixel. Device pointers; the work is enqueued on `stream`.
  * @param stamps The stamp of each island.
  * @param n_islands Number of islands, at least 1.
  * @param scale Multiplier applied to the median, `1.4826` for the donut.
  * @param out_lmad `[n_islands]` floats, written.
+ * @param scratch Grown to `n_islands` islands by IslandScratch::ensure.
  */
 void gpu_donut_median_abs(const StampWindows &stamps, unsigned int n_islands, float scale, float *out_lmad,
-                          cudaStream_t stream = nullptr);
+                          IslandScratch &scratch, cudaStream_t stream = nullptr);
 
 /**
  * @brief Population standard deviation of the nonzero pixels of each stamp: the `stddev` of stamp_donut_stats.
  *
- * One block per stamp. Over the nonzero pixels (count `m`) it reduces `sum` and `sumsq` in double and writes
+ * stamp_blocks blocks per stamp each reduce `sum` and `sumsq` in double over the nonzero pixels of their share; the
+ * last block of a stamp merges the partials in block order and, over the `m` nonzero pixels, writes
  * `sqrt(sumsq/m - (sum/m)^2)`, or 0 when the stamp has no nonzero pixel. Population (divide by `m`), matching
  * `xt::stddev`. Device pointers; the work is enqueued on `stream`.
  * @param stamps The stamp of each island.
  * @param n_islands Number of islands, at least 1.
  * @param out_std `[n_islands]` floats, written.
+ * @param scratch Per-island partials, grown to at least `n_islands` (IslandScratch::ensure).
  */
-void gpu_donut_std(const StampWindows &stamps, unsigned int n_islands, float *out_std, cudaStream_t stream = nullptr);
+void gpu_donut_std(const StampWindows &stamps, unsigned int n_islands, float *out_std, IslandScratch &scratch,
+                   cudaStream_t stream = nullptr);
 
 /**
  * @brief `max(|min|, |max|)` over each stamp, the local-noise extreme of stamp_abs_extreme.
  *
- * One block per stamp, min and max reduced over the stamp and combined into one number per stamp. NaN pixels are
- * ignored, and a stamp with no other value gives `FLT_MAX`. Device pointers; the work is enqueued on `stream`.
+ * stamp_blocks blocks per stamp each reduce min and max over their share of the pixels; the last block of a stamp
+ * merges the partials in block order and combines them into one number per stamp. NaN pixels are ignored, and a stamp
+ * with no other value gives `FLT_MAX`. Device pointers; the work is enqueued on `stream`.
  * @param stamps The stamp of each island.
  * @param n_islands Number of islands, at least 1.
  * @param out_extreme `[n_islands]` floats, written.
+ * @param scratch Per-island partials, grown to at least `n_islands` (IslandScratch::ensure).
  */
 void gpu_stamp_abs_extreme(const StampWindows &stamps, unsigned int n_islands, float *out_extreme,
-                           cudaStream_t stream = nullptr);
+                           IslandScratch &scratch, cudaStream_t stream = nullptr);
 
 /**
  * @brief Reduced chi2 of each stamp against the beam kernel, over the nonzero stamp pixels.

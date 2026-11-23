@@ -21,6 +21,7 @@ using breifast::gpu::gpu_donut_std;
 using breifast::gpu::gpu_gather_at_peaks;
 using breifast::gpu::gpu_stamp_abs_extreme;
 using breifast::gpu::gpu_stamp_beam_chi2;
+using breifast::gpu::IslandScratch;
 using breifast::gpu::Stamp;
 using breifast::gpu::StampWindows;
 using breifast::gpu::Stream;
@@ -91,7 +92,9 @@ std::vector<float> run_donut(const std::vector<std::vector<float>> &stamps, floa
   DeviceVector<float> device_out(n_stamps);
 
   const Stream stream;
-  gpu_donut_median_abs(layout.windows, n_stamps, scale, device_out, stream);
+  IslandScratch scratch;
+  scratch.ensure(n_stamps);
+  gpu_donut_median_abs(layout.windows, n_stamps, scale, device_out, scratch, stream);
   return download(device_out, stream);
 }
 
@@ -160,8 +163,11 @@ std::vector<float> run_abs_extreme(const std::vector<std::vector<float>> &stamps
   const StampLayout layout(stamps);
   DeviceVector<float> device_out(n_stamps);
 
+  IslandScratch scratch;
+  scratch.ensure(n_stamps);
+
   const Stream stream;
-  gpu_stamp_abs_extreme(layout.windows, n_stamps, device_out, stream);
+  gpu_stamp_abs_extreme(layout.windows, n_stamps, device_out, scratch, stream);
   return download(device_out, stream);
 }
 
@@ -210,8 +216,11 @@ std::vector<float> run_donut_std(const std::vector<std::vector<float>> &stamps)
   const StampLayout layout(stamps);
   DeviceVector<float> device_out(n_stamps);
 
+  IslandScratch scratch;
+  scratch.ensure(n_stamps);
+
   const Stream stream;
-  gpu_donut_std(layout.windows, n_stamps, device_out, stream);
+  gpu_donut_std(layout.windows, n_stamps, device_out, scratch, stream);
   return download(device_out, stream);
 }
 

@@ -7,108 +7,135 @@
 
 #include "gpu_device_utils.cuh"
 #include "radix_keys.cuh"
+#include "radix_select.cuh"
 
 namespace breifast::gpu
 {
 namespace
 {
-__global__ void donut_median_abs_kernel(const StampWindows windows, float scale, float *out_lmad)
+
+// One radix select pass over the nonzero pixels of every stamp, for gpu_donut_median_abs: stamp_blocks
+// consecutive blocks per stamp, striding over its pixels. A block counts the digit at `shift` of the abs keys that
+// match the prefix into a histogram of its own in shared memory, then adds it to its stamp's. The last block of a stamp
+// picks the digit for the next pass (finish_radix_pass), and after the last pass writes `scale * median`. The first
+// pass sees every nonzero pixel, so its last block also records their count, the median's n; a stamp with none gets 0
+// and the later passes skip it.
+__global__ void donut_median_abs_kernel(const StampWindows windows, int shift, uint32_t mask, float scale,
+                                        DonutMedianState *states, float *out_lmad)
 {
-  const auto i_stamp = blockIdx.x;
-  const Stamp stamp(windows, i_stamp);
-  const size_t stamp_pixels = stamp.size();
-
-  __shared__ uint32_t histogram[radix_bins];
-  __shared__ uint32_t non_zero_count;
-  __shared__ uint32_t below;
-  __shared__ uint32_t prefix;
-  __shared__ uint32_t coverage;
-  __shared__ uint32_t lower_max;
-  if (threadIdx.x == 0)
+  const unsigned int i_stamp = blockIdx.x / stamp_blocks;
+  const unsigned int i_block = blockIdx.x % stamp_blocks;
+  DonutMedianState &state = states[i_stamp];
+  const bool first_pass = shift == select_shifts[0];
+  if (!first_pass && state.count == 0)
   {
-    below = 0;
-    prefix = 0;
-    coverage = 0;
-    lower_max = 0;
+    return;
   }
 
-  // One byte of the nonzero pixels' abs keys per pass. coverage starts at 0, so the first pass sees every nonzero pixel
-  // and its histogram sums to their count.
-  for (int shift = 24; shift >= 0; shift -= 8)
+  __shared__ uint32_t local[select_bins];
+  for (uint32_t bin = threadIdx.x; bin < select_bins; bin += blockDim.x)
   {
-    for (size_t i = threadIdx.x; i < radix_bins; i += blockDim.x)
-    {
-      histogram[i] = 0;
-    }
-    __syncthreads();
-
-    for (size_t i_pixel = threadIdx.x; i_pixel < stamp_pixels; i_pixel += blockDim.x)
-    {
-      const float value = stamp[i_pixel];
-      const uint32_t key = abs_key(value);
-      if (value != 0.0f && (key & coverage) == prefix)
-      {
-        atomicAdd(&histogram[(key >> shift) & 0xFFU], 1U);
-      }
-    }
-    __syncthreads();
-
-    if (threadIdx.x == 0)
-    {
-      if (shift == 24)
-      {
-        non_zero_count = 0;
-        for (uint32_t i = 0; i < radix_bins; ++i)
-        {
-          non_zero_count += histogram[i];
-        }
-      }
-      if (non_zero_count > 0)
-      {
-        select_radix_digit(histogram, non_zero_count / 2, shift, below, prefix, coverage);
-      }
-    }
-    __syncthreads();
-
-    if (non_zero_count == 0)
-    {
-      if (threadIdx.x == 0)
-      {
-        out_lmad[i_stamp] = 0;
-      }
-      return;
-    }
-  }
-
-  if (non_zero_count % 2 == 0)
-  {
-    for (size_t i_pixel = threadIdx.x; i_pixel < stamp_pixels; i_pixel += blockDim.x)
-    {
-      const float value = stamp[i_pixel];
-      const uint32_t key = abs_key(value);
-      if (value != 0.0f && key < prefix)
-      {
-        atomicMax(&lower_max, key);
-      }
-    }
+    local[bin] = 0;
   }
   __syncthreads();
 
+  const uint32_t below = state.select[0];
+  const uint32_t prefix = state.select[1];
+  const uint32_t coverage = state.select[2];
+  // Last pass, even count: also the largest key below the 22-bit prefix, for rank count/2 - 1.
+  const bool track_lower = shift == 0 && state.count % 2 == 0;
+  uint32_t local_lower = 0;
+
+  const Stamp stamp(windows, i_stamp);
+  const size_t stamp_pixels = stamp.size();
+  const size_t stride = size_t{stamp_blocks} * blockDim.x;
+  for (size_t i = size_t{i_block} * blockDim.x + threadIdx.x; i < stamp_pixels; i += stride)
+  {
+    const float value = stamp[i];
+    if (value == 0.F)
+    {
+      continue;
+    }
+    const uint32_t key = abs_key(value);
+    if ((key & coverage) == prefix)
+    {
+      atomicAdd(&local[(key >> shift) & mask], 1U);
+    }
+    else if (track_lower && key < prefix)
+    {
+      local_lower = max(local_lower, key);
+    }
+  }
+  __syncthreads();
+  for (uint32_t bin = threadIdx.x; bin < select_bins; bin += blockDim.x)
+  {
+    if (local[bin] != 0)
+    {
+      atomicAdd(&state.histogram[bin], local[bin]);
+    }
+  }
+  if (track_lower)
+  {
+    const uint32_t block_lower = block_reduce(local_lower, UintMax{});
+    if (threadIdx.x == 0 && block_lower != 0)
+    {
+      atomicMax(&state.lower_max, block_lower);
+    }
+  }
+
+  __threadfence();
+  __shared__ bool last_block;
   if (threadIdx.x == 0)
   {
-    out_lmad[i_stamp] = scale * median_of_keys(non_zero_count, below, prefix, lower_max, true);
+    last_block = atomicAdd(&state.done, 1U) == stamp_blocks - 1;
   }
+  __syncthreads();
+  if (!last_block)
+  {
+    return;
+  }
+
+  uint32_t count = state.count;
+  if (first_pass)
+  {
+    uint32_t thread_total = 0;
+    for (uint32_t bin = threadIdx.x; bin < select_bins; bin += blockDim.x)
+    {
+      thread_total += __ldcg(&state.histogram[bin]);
+    }
+    count = block_reduce(thread_total, cuda::std::plus<>{});
+    if (count == 0)
+    {
+      if (threadIdx.x == 0)
+      {
+        out_lmad[i_stamp] = 0.F;
+      }
+      return; // the state stays zero: the later passes skip this stamp
+    }
+    if (threadIdx.x == 0)
+    {
+      state.count = count;
+    }
+  }
+  finish_radix_pass(state.histogram, count, shift, mask, true, below, prefix, coverage, state.select, &state.lower_max,
+                    &state.done, scale, &out_lmad[i_stamp]);
 }
 
-__global__ void stamp_abs_extreme_kernel(const StampWindows windows, float *out_extreme)
+// min and max over every stamp, for gpu_stamp_abs_extreme: stamp_blocks consecutive blocks per stamp, striding over
+// its pixels. Each block stores its min and max in its stamp's state; the last block merges them in block order and
+// writes `max(|min|, |max|)`.
+__global__ void stamp_abs_extreme_kernel(const StampWindows windows, StampExtremeState *states, float *out_extreme)
 {
-  const size_t i_stamp = blockIdx.x;
-  const Stamp stamp(windows, blockIdx.x);
+  const unsigned int i_stamp = blockIdx.x / stamp_blocks;
+  const unsigned int i_block = blockIdx.x % stamp_blocks;
+  StampExtremeState &state = states[i_stamp];
+  const Stamp stamp(windows, i_stamp);
   const size_t stamp_pixels = stamp.size();
 
   float min_value = FLT_MAX;
   float max_value = -FLT_MAX;
-  for (size_t i = threadIdx.x; i < stamp_pixels; i += blockDim.x)
+  const size_t stride = size_t{stamp_blocks} * blockDim.x;
+  for (size_t i = size_t{i_block} * blockDim.x + threadIdx.x; i < stamp_pixels; i += stride)
   {
     const float value = stamp[i];
     min_value = fminf(min_value, value);
@@ -120,6 +147,32 @@ __global__ void stamp_abs_extreme_kernel(const StampWindows windows, float *out_
 
   if (threadIdx.x == 0)
   {
+    state.min[i_block] = min_value;
+    state.max[i_block] = max_value;
+  }
+  __threadfence();
+
+  __shared__ bool last_block;
+  if (threadIdx.x == 0)
+  {
+    last_block = atomicAdd(&state.done, 1U) == stamp_blocks - 1;
+  }
+  __syncthreads();
+
+  if (!last_block)
+  {
+    return;
+  }
+
+  if (threadIdx.x == 0)
+  {
+    min_value = FLT_MAX;
+    max_value = -FLT_MAX;
+    for (unsigned int i = 0; i < stamp_blocks; ++i)
+    {
+      min_value = fminf(min_value, __ldcg(&state.min[i]));
+      max_value = fmaxf(max_value, __ldcg(&state.max[i]));
+    }
     out_extreme[i_stamp] = fmaxf(fabsf(min_value), fabsf(max_value));
   }
 }
@@ -145,28 +198,35 @@ __global__ void gather_at_peaks_kernel(const float *plane, const float *noise_ma
 struct Moments
 {
   double sum;
-  double sumsq;
+  double sum_squares;
   uint32_t count;
 };
 
 __host__ __device__ Moments operator+(const Moments &a, const Moments &b)
 {
-  return {a.sum + b.sum, a.sumsq + b.sumsq, a.count + b.count};
+  return {a.sum + b.sum, a.sum_squares + b.sum_squares, a.count + b.count};
 }
 
-__global__ void donut_std_kernel(const StampWindows windows, float *out_std)
+// Moments of the nonzero pixels of every stamp, for gpu_donut_std: stamp_blocks consecutive blocks per stamp, striding
+// over its pixels. Each block stores its sum, sum of squares and count in its stamp's state; the last block merges them
+// in block order and writes the population standard deviation, or 0 when the stamp has no nonzero pixel.
+__global__ void donut_std_kernel(const StampWindows windows, DonutStandardDeviationState *states, float *out_std)
 {
-  const Stamp stamp(windows, blockIdx.x);
+  const unsigned int i_stamp = blockIdx.x / stamp_blocks;
+  const unsigned int i_block = blockIdx.x % stamp_blocks;
+  DonutStandardDeviationState &state = states[i_stamp];
+  const Stamp stamp(windows, i_stamp);
   const size_t stamps_pixels = stamp.size();
 
   Moments moments{0.0, 0.0, 0U};
-  for (size_t i_pixel = threadIdx.x; i_pixel < stamps_pixels; i_pixel += blockDim.x)
+  const size_t stride = size_t{stamp_blocks} * blockDim.x;
+  for (size_t i_pixel = size_t{i_block} * blockDim.x + threadIdx.x; i_pixel < stamps_pixels; i_pixel += stride)
   {
     const auto value = stamp[i_pixel];
     if (value != 0.F)
     {
       moments.sum += value;
-      moments.sumsq += value * value;
+      moments.sum_squares += value * value;
       ++moments.count;
     }
   }
@@ -175,15 +235,46 @@ __global__ void donut_std_kernel(const StampWindows windows, float *out_std)
 
   if (threadIdx.x == 0)
   {
-    if (total.count == 0)
+    state.sum[i_block] = total.sum;
+    state.sum_squares[i_block] = total.sum_squares;
+    state.count[i_block] = total.count;
+  }
+  __threadfence();
+
+  __shared__ bool last_block;
+  if (threadIdx.x == 0)
+  {
+    last_block = atomicAdd(&state.done, 1U) == stamp_blocks - 1;
+  }
+  __syncthreads();
+
+  if (!last_block)
+  {
+    return;
+  }
+
+  if (threadIdx.x == 0)
+  {
+    double sum = 0.0;
+    double sum_square = 0.0;
+    uint32_t count = 0U;
+    for (unsigned int i = 0; i < stamp_blocks; ++i)
     {
-      out_std[blockIdx.x] = 0.F;
+      sum += __ldcg(&state.sum[i]);
+      sum_square += __ldcg(&state.sum_squares[i]);
+      count += __ldcg(&state.count[i]);
+    }
+
+    if (count == 0)
+    {
+      out_std[i_stamp] = 0.F;
       return;
     }
-    const auto mean = total.sum / static_cast<float>(total.count);
-    const auto meansq = total.sumsq / static_cast<float>(total.count);
-    const auto var = meansq - mean * mean;
-    out_std[blockIdx.x] = sqrtf(static_cast<float>(var));
+
+    const auto mean = sum / static_cast<float>(count);
+    const auto mean_square = sum_square / static_cast<float>(count);
+    const auto var = mean_square - mean * mean;
+    out_std[i_stamp] = sqrtf(static_cast<float>(var));
   }
 }
 
@@ -220,27 +311,46 @@ __global__ void stamp_beam_chi2_kernel(const StampWindows windows, const float *
   count = block_reduce(count, cuda::std::plus<>{});
   if (threadIdx.x == 0)
   {
-    out_chi2[i_stamp] = (count > 0 && adjacent_noise != 0)
-                            ? resid2 / (adjacent_noise * adjacent_noise * count)
-                            : 0.F;
+    out_chi2[i_stamp] = (count > 0 && adjacent_noise != 0) ? resid2 / (adjacent_noise * adjacent_noise * count) : 0.F;
   }
 }
 } // namespace
 
 void gpu_donut_median_abs(const StampWindows &stamps, unsigned int n_islands, float scale, float *out_lmad,
-                          cudaStream_t stream)
+                          IslandScratch &scratch, cudaStream_t stream)
 {
-  launch_per_island(donut_median_abs_kernel, n_islands, stream, stamps, scale, out_lmad);
+  assert(n_islands > 0);
+  assert(scratch.donut_median.size() >= n_islands);
+  // One memset per call: the passes clear each stamp's histogram and block counter behind them.
+  CHECK_GPU(cudaMemsetAsync(scratch.donut_median.data(), 0, n_islands * sizeof(DonutMedianState), stream));
+  for (int pass = 0; pass < 3; ++pass)
+  {
+    launch(donut_median_abs_kernel, n_islands * stamp_blocks, block_size, stream, stamps, select_shifts[pass],
+           select_masks[pass], scale, scratch.donut_median.data(), out_lmad);
+  }
 }
 
-void gpu_donut_std(const StampWindows &stamps, unsigned int n_islands, float *out_std, cudaStream_t stream)
+void gpu_donut_std(const StampWindows &stamps, unsigned int n_islands, float *out_std, IslandScratch &scratch,
+                   cudaStream_t stream)
 {
-  launch_per_island(donut_std_kernel, n_islands, stream, stamps, out_std);
+  assert(n_islands > 0);
+  assert(scratch.donut_standard_deviation.size() >= n_islands);
+  // Clears the block counters; every block overwrites its own partials.
+  CHECK_GPU(cudaMemsetAsync(scratch.donut_standard_deviation.data(), 0,
+                            n_islands * sizeof(DonutStandardDeviationState), stream));
+  launch(donut_std_kernel, n_islands * stamp_blocks, block_size, stream, stamps,
+         scratch.donut_standard_deviation.data(), out_std);
 }
 
-void gpu_stamp_abs_extreme(const StampWindows &stamps, unsigned int n_islands, float *out_extreme, cudaStream_t stream)
+void gpu_stamp_abs_extreme(const StampWindows &stamps, unsigned int n_islands, float *out_extreme,
+                           IslandScratch &scratch, cudaStream_t stream)
 {
-  launch_per_island(stamp_abs_extreme_kernel, n_islands, stream, stamps, out_extreme);
+  assert(n_islands > 0);
+  assert(scratch.stamp_extreme.size() >= n_islands);
+  // Clears the block counters; every block overwrites its own partials.
+  CHECK_GPU(cudaMemsetAsync(scratch.stamp_extreme.data(), 0, n_islands * sizeof(StampExtremeState), stream));
+  launch(stamp_abs_extreme_kernel, n_islands * stamp_blocks, block_size, stream, stamps, scratch.stamp_extreme.data(),
+         out_extreme);
 }
 
 void gpu_stamp_beam_chi2(const StampWindows &stamps, const float *kernel, const float kernel_sum,

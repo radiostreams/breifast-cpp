@@ -31,6 +31,76 @@ struct RadixValues
   __device__ float operator()(const size_t i) const { return values[i]; }
 };
 
+// Run by every thread of the block that finishes a radix select pass last, once every block's counts are in
+// `histogram`: finds the bin that holds rank n/2 of the `n` keys and records it in `state` (below, prefix, coverage) for
+// the next pass; after the last pass (shift 0), writes the median times `scale` to `out_median`. `below`, `prefix` and
+// `coverage` are the state the pass started from. Clears the histogram and `done` for the next pass.
+__device__ inline void finish_radix_pass(uint32_t *histogram, const size_t n, const int shift, const uint32_t mask,
+                                         const bool abs_mode, const uint32_t below, const uint32_t prefix,
+                                         const uint32_t coverage, uint32_t *state, const uint32_t *lower_max,
+                                         uint32_t *done, const float scale, float *out_median)
+{
+  // Thread t owns bins [8t, 8t + 8).
+  uint32_t counts[bins_per_thread];
+  uint32_t thread_total = 0;
+  for (uint32_t j = 0; j < bins_per_thread; ++j)
+  {
+    counts[j] = __ldcg(&histogram[threadIdx.x * bins_per_thread + j]);
+    thread_total += counts[j];
+  }
+  using BlockScan = cub::BlockScan<uint32_t, block_size>;
+  __shared__ typename BlockScan::TempStorage scan_storage;
+  __shared__ uint32_t selected_bin;
+  uint32_t before = 0;
+  BlockScan(scan_storage).ExclusiveSum(thread_total, before);
+  const size_t rank = n / 2;
+  size_t first = size_t{below} + before;
+  for (uint32_t j = 0; j < bins_per_thread; ++j)
+  {
+    if (counts[j] != 0 && first <= rank && rank < first + counts[j])
+    {
+      const uint32_t bin = threadIdx.x * bins_per_thread + j;
+      selected_bin = bin;
+      state[0] = static_cast<uint32_t>(first);
+      state[1] = prefix | (bin << shift);
+      state[2] = coverage | (mask << shift);
+    }
+    first += counts[j];
+  }
+  __syncthreads();
+
+  if (shift == 0)
+  {
+    // Rank n/2 - 1 when it is not a repeat: the highest non-empty bin below the selected one, else the largest key
+    // below the 22-bit prefix.
+    uint32_t thread_lower = 0;
+    for (uint32_t j = 0; j < bins_per_thread; ++j)
+    {
+      const uint32_t bin = threadIdx.x * bins_per_thread + j;
+      if (counts[j] != 0 && bin < selected_bin)
+      {
+        thread_lower = bin + 1;
+      }
+    }
+    const uint32_t lower_bin = block_reduce(thread_lower, UintMax{});
+    if (threadIdx.x == 0)
+    {
+      const uint32_t key = prefix | selected_bin;
+      const uint32_t lower = lower_bin != 0 ? (prefix | (lower_bin - 1)) : __ldcg(lower_max);
+      *out_median = median_of_keys(n, __ldcg(&state[0]), key, lower, abs_mode) * scale;
+    }
+  }
+
+  for (uint32_t j = 0; j < bins_per_thread; ++j) // every thread has read its bins: the next pass starts from zero
+  {
+    histogram[threadIdx.x * bins_per_thread + j] = 0;
+  }
+  if (threadIdx.x == 0)
+  {
+    *done = 0;
+  }
+}
+
 // One pass of the radix select over the keys whose resolved high digits equal the prefix. A block counts into a
 // histogram of its own in shared memory, then adds it to the device-wide one once; the grid is capped and strides over
 // the values, so that the merge costs one atomic per bin per block. Scratch: histogram[select_bins], then state =
@@ -124,66 +194,8 @@ __global__ void radix_select_pass_kernel(const Source source, size_t n, uint32_t
   {
     return;
   }
-
-  // Every block's counts are in: the bin that holds rank n/2. Thread t owns bins [8t, 8t + 8).
-  uint32_t counts[bins_per_thread];
-  uint32_t thread_total = 0;
-  for (uint32_t j = 0; j < bins_per_thread; ++j)
-  {
-    counts[j] = __ldcg(&histogram[threadIdx.x * bins_per_thread + j]);
-    thread_total += counts[j];
-  }
-  using BlockScan = cub::BlockScan<uint32_t, block_size>;
-  __shared__ typename BlockScan::TempStorage scan_storage;
-  __shared__ uint32_t selected_bin;
-  uint32_t before = 0;
-  BlockScan(scan_storage).ExclusiveSum(thread_total, before);
-  const size_t rank = n / 2;
-  size_t first = size_t{below} + before;
-  for (uint32_t j = 0; j < bins_per_thread; ++j)
-  {
-    if (counts[j] != 0 && first <= rank && rank < first + counts[j])
-    {
-      const uint32_t bin = threadIdx.x * bins_per_thread + j;
-      selected_bin = bin;
-      state[0] = static_cast<uint32_t>(first);
-      state[1] = prefix | (bin << shift);
-      state[2] = coverage | (mask << shift);
-    }
-    first += counts[j];
-  }
-  __syncthreads();
-
-  if (shift == 0)
-  {
-    // Rank n/2 - 1 when it is not a repeat: the highest non-empty bin below the selected one, else the largest key
-    // below the 22-bit prefix.
-    uint32_t thread_lower = 0;
-    for (uint32_t j = 0; j < bins_per_thread; ++j)
-    {
-      const uint32_t bin = threadIdx.x * bins_per_thread + j;
-      if (counts[j] != 0 && bin < selected_bin)
-      {
-        thread_lower = bin + 1;
-      }
-    }
-    const uint32_t lower_bin = block_reduce(thread_lower, UintMax{});
-    if (threadIdx.x == 0)
-    {
-      const uint32_t key = prefix | selected_bin;
-      const uint32_t lower = lower_bin != 0 ? (prefix | (lower_bin - 1)) : __ldcg(lower_max);
-      *out_median = median_of_keys(n, __ldcg(&state[0]), key, lower, abs_mode) * scale;
-    }
-  }
-
-  for (uint32_t j = 0; j < bins_per_thread; ++j) // every thread has read its bins: the next pass starts from zero
-  {
-    histogram[threadIdx.x * bins_per_thread + j] = 0;
-  }
-  if (threadIdx.x == 0)
-  {
-    *done = 0;
-  }
+  finish_radix_pass(histogram, n, shift, mask, abs_mode, below, prefix, coverage, state, lower_max, done, scale,
+                    out_median);
 }
 
 /// Median of the `n` values of `values` (of their absolute values in `abs_mode`), times `scale`, into `out_median`: three

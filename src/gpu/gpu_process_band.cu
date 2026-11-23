@@ -142,9 +142,9 @@ void gpu_process_band(const GpuPlaneInput &plane, const GpuBand &band, GpuBandWo
         .radius = plane.boxsize / 2,
         .inner_half = plane.inner_boxsize,
     };
-    gpu_stamp_abs_extreme(donut, n_islands, result.islands.stamp_extreme, stream);
-    gpu_donut_std(donut, n_islands, result.islands.donut_std, stream);
-    gpu_donut_median_abs(donut, n_islands, 1.4826F, result.islands.donut_lmad, stream);
+    gpu_stamp_abs_extreme(donut, n_islands, result.islands.stamp_extreme, workspace.island_scratch, stream);
+    gpu_donut_std(donut, n_islands, result.islands.donut_std, workspace.island_scratch, stream);
+    gpu_donut_median_abs(donut, n_islands, 1.4826F, result.islands.donut_lmad, workspace.island_scratch, stream);
 
     if (band.beam_kernel != nullptr)
     {
