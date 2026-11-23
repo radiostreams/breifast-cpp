@@ -13,15 +13,15 @@ namespace breifast::gpu
 
 namespace
 {
-__device__ inline long min_of(long i, long radius)
+__device__ inline int min_of(int i, int radius)
 {
-  const long bound = i - radius;
+  const int bound = i - radius;
   return bound > 0 ? bound : 0;
 }
 
-__device__ inline long max_of(long i, long window_size, long radius, long n)
+__device__ inline int max_of(int i, int window_size, int radius, int n)
 {
-  const long bound = i + window_size - radius;
+  const int bound = i + window_size - radius;
   return bound < n ? bound : n;
 }
 
@@ -261,51 +261,65 @@ unsigned int carry_blocks(const long region_rows, const long region_cols)
   return static_cast<unsigned int>((region_cols + 31) / 32 + (region_rows + 31) / 32 + 1);
 }
 
-/// Step 3 of a part of the RMS map: each output's RMS from its box sum, 4 values of the part's prefix (part_prefix plus
-/// above, left and corner). One thread per output of the part.
-__global__ void box_rms(const double *part_prefix, const double *above, const double *left, const double *corner,
-                        long region_y0, long region_x0, long region_rows, long region_cols, // the part's region
-                        long part_y0, long part_x0, long part_rows, long part_cols,         // its outputs
-                        long n_rows, long n_cols, long box_size,                            // the image
-                        float *rms)                                                         // n_rows x n_cols
+/// Grid of box_rms for a part: one block row per output row, enough block_size blocks to cover its columns.
+dim3 box_rms_grid(const long part_rows, const long part_cols)
 {
-  const auto index = static_cast<long>(global_index());
-  if (index >= part_rows * part_cols)
+  return {static_cast<unsigned int>((part_cols + block_size - 1) / block_size), static_cast<unsigned int>(part_rows)};
+}
+
+/// Step 3 of a part of the RMS map: each output's RMS from its box sum, 4 values of the part's prefix (part_prefix plus
+/// above, left and corner). One thread per output: block row blockIdx.y takes output row blockIdx.y of the part, its
+/// threads the columns. Launch with box_rms_grid(part_rows, part_cols) blocks of block_size. Indices are 32-bit: a
+/// region is at most (rms_part_size + 1024)^2 values; only the output offset is 64-bit.
+__global__ void box_rms(const double *part_prefix, const double *above, const double *left, const double *corner,
+                        int region_y0, int region_x0, int region_rows, int region_cols, // the part's region
+                        int part_y0, int part_x0, int part_cols,                         // its outputs
+                        int n_rows, int n_cols, int box_size,                            // the image
+                        float *rms)                                                      // n_rows x n_cols
+{
+  const auto part_col = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+  if (part_col >= part_cols)
   {
     return;
   }
-  const long y = part_y0 + index / part_cols;
-  const long x = part_x0 + index % part_cols;
+  const int y = part_y0 + static_cast<int>(blockIdx.y);
+  const int x = part_x0 + part_col;
 
-  const long radius = box_size / 2;
-  const long window_size = box_size > 0 ? box_size : 1;
-  const long row_min = min_of(y, radius);
-  const long row_max = max_of(y, window_size, radius, n_rows) - 1;
-  const long col_min = min_of(x, radius);
-  const long col_max = max_of(x, window_size, radius, n_cols) - 1;
+  const int radius = box_size / 2;
+  const int window_size = box_size > 0 ? box_size : 1;
+  const int row_min = min_of(y, radius);
+  const int row_max = max_of(y, window_size, radius, n_rows) - 1;
+  const int col_min = min_of(x, radius);
+  const int col_max = max_of(x, window_size, radius, n_cols) - 1;
 
-  // The prefix of the whole part at a position of the region, 0 above or left of it.
-  const long tiles_x = (region_cols + 31) / 32;
-  const auto prefix_at = [&](const long region_y, const long region_x)
+  // The prefix of the whole part at a position of the region, 0 above or left of it. Unsigned past the check, so the
+  // divisions by 32 are shifts.
+  const auto rows = static_cast<unsigned int>(region_rows);
+  const auto cols = static_cast<unsigned int>(region_cols);
+  const unsigned int tiles_x = (cols + 31) / 32;
+  const auto prefix_at = [&](const int region_y, const int region_x)
   {
     if (region_y < 0 || region_x < 0)
     {
       return 0.;
     }
-    return part_prefix[region_y * region_cols + region_x] + above[(region_y / 32) * region_cols + region_x] +
-           left[(region_x / 32) * region_rows + region_y] + corner[(region_y / 32) * tiles_x + region_x / 32];
+    const auto ry = static_cast<unsigned int>(region_y);
+    const auto rx = static_cast<unsigned int>(region_x);
+    return part_prefix[ry * cols + rx] + above[(ry / 32) * cols + rx] + left[(rx / 32) * rows + ry] +
+           corner[(ry / 32) * tiles_x + rx / 32];
   };
 
   // The box's last row and column, and the row and column just before it, in region coordinates.
-  const long last_row = row_max - region_y0;
-  const long row_before = row_min - 1 - region_y0;
-  const long last_col = col_max - region_x0;
-  const long col_before = col_min - 1 - region_x0;
+  const int last_row = row_max - region_y0;
+  const int row_before = row_min - 1 - region_y0;
+  const int last_col = col_max - region_x0;
+  const int col_before = col_min - 1 - region_x0;
   const double box_sum = prefix_at(last_row, last_col) - prefix_at(row_before, last_col) -
                          prefix_at(last_row, col_before) + prefix_at(row_before, col_before);
 
-  const auto count = static_cast<double>((row_max - row_min + 1) * (col_max - col_min + 1));
-  rms[y * n_cols + x] = static_cast<float>(sqrt(box_sum / count));
+  const int count = (row_max - row_min + 1) * (col_max - col_min + 1); // at most 1025^2: exact in float
+  rms[static_cast<size_t>(y) * static_cast<size_t>(n_cols) + static_cast<size_t>(x)] =
+      sqrtf(static_cast<float>(box_sum) / static_cast<float>(count));
 }
 
 // The base noise is max(rms[p], *base_noise) with an RMS map, else *base_noise. Stores each pixel's noise as the
@@ -415,9 +429,12 @@ void gpu_rms_noise_map(const float *plane, size_t n_y, size_t n_x, long boxsize,
       CHECK_GPU(cudaGetLastError());
       launch(part_carries, carry_blocks(region_rows, region_cols), block_size, stream, part_prefix, last_cols,
              region_rows, region_cols, above, left, corner);
-      launch_per_element(box_rms, static_cast<std::size_t>(part_rows * part_cols), stream, part_prefix, above, left,
-                         corner, region_y0, region_x0, region_rows, region_cols, part_y0, part_x0, part_rows,
-                         part_cols, rows, cols, boxsize, out_rms);
+      box_rms<<<box_rms_grid(part_rows, part_cols), block_size, 0, stream>>>(
+          part_prefix, above, left, corner, static_cast<int>(region_y0), static_cast<int>(region_x0),
+          static_cast<int>(region_rows), static_cast<int>(region_cols), static_cast<int>(part_y0),
+          static_cast<int>(part_x0), static_cast<int>(part_cols), static_cast<int>(rows), static_cast<int>(cols),
+          static_cast<int>(boxsize), out_rms);
+      CHECK_GPU(cudaGetLastError());
     }
   }
   radix_median(RadixValues{out_rms}, out_rms, n_y * n_x, false, 1.F, out_median, median_scratch, stream);
