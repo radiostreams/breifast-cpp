@@ -35,7 +35,9 @@ __global__ void snr_and_filters(const float *plane, const float *noise_map, cons
   const float noise_rejection_threshold = median_noise[0] * params.reject_noise_threshold;
 
   const auto n_bins = static_cast<size_t>(2 * params.max_sigma_bin);
-  extern __shared__ unsigned long long shared_histograms[];
+  // 32-bit: native shared atomics (64-bit ones are compare-and-swap loops); widened when flushed. A block's count per
+  // bin is at most its share of the pixels.
+  extern __shared__ unsigned int shared_histograms[];
   auto *const shared_histogram0 = shared_histograms;
   auto *const shared_histogram1 = shared_histograms + n_bins;
   auto *const shared_histogram2 = shared_histograms + 2 * n_bins;
@@ -65,15 +67,15 @@ __global__ void snr_and_filters(const float *plane, const float *noise_map, cons
       const auto bin = static_cast<size_t>(bin_index);
       if (mask0 && params.histogram_detail > 1)
       {
-        atomicAdd(&shared_histogram0[bin], 1ULL);
+        atomicAdd(&shared_histogram0[bin], 1U);
       }
       if (mask1 && params.histogram_detail > 1)
       {
-        atomicAdd(&shared_histogram1[bin], 1ULL);
+        atomicAdd(&shared_histogram1[bin], 1U);
       }
       if (mask2 && params.histogram_detail > 0)
       {
-        atomicAdd(&shared_histogram2[bin], 1ULL);
+        atomicAdd(&shared_histogram2[bin], 1U);
       }
     }
 
@@ -161,15 +163,15 @@ __global__ void snr_and_filters(const float *plane, const float *noise_map, cons
   {
     if (params.histogram_detail > 1 && shared_histogram0[i_bin] != 0)
     {
-      atomicAdd(histogram0 + i_bin, shared_histogram0[i_bin]);
+      atomicAdd(histogram0 + i_bin, static_cast<unsigned long long>(shared_histogram0[i_bin]));
     }
     if (params.histogram_detail > 1 && shared_histogram1[i_bin] != 0)
     {
-      atomicAdd(histogram1 + i_bin, shared_histogram1[i_bin]);
+      atomicAdd(histogram1 + i_bin, static_cast<unsigned long long>(shared_histogram1[i_bin]));
     }
     if (params.histogram_detail > 0 && shared_histogram2[i_bin] != 0)
     {
-      atomicAdd(histogram2 + i_bin, shared_histogram2[i_bin]);
+      atomicAdd(histogram2 + i_bin, static_cast<unsigned long long>(shared_histogram2[i_bin]));
     }
   }
 
@@ -208,8 +210,8 @@ void gpu_snr_and_filters(const float *plane, const float *noise_map, const float
     CHECK_GPU(cudaMemsetAsync(histogram2, 0, sizeof(unsigned long long) * 2 * params.max_sigma_bin, stream));
   }
   launch(min_max_init, 1, 1, stream, out_min_sigma, out_max_sigma);
-  // Dynamic shared memory: the block's three histograms, 2 * max_sigma_bin bins each.
-  const auto shared_bytes = 3 * 2 * static_cast<std::size_t>(params.max_sigma_bin) * sizeof(unsigned long long);
+  // Dynamic shared memory: the block's three histograms, 2 * max_sigma_bin 32-bit bins each.
+  const auto shared_bytes = 3 * 2 * static_cast<std::size_t>(params.max_sigma_bin) * sizeof(unsigned int);
   const auto grid =
       static_cast<unsigned int>(std::min<std::size_t>((n_pixels + block_size - 1) / block_size, snr_max_blocks));
   snr_and_filters<<<grid, block_size, shared_bytes, stream>>>(
