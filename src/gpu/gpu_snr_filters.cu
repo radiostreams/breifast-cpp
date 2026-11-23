@@ -21,7 +21,8 @@ __global__ void min_max_init(float *out_min_sigma, float *out_max_sigma)
 /// histograms, two block reductions, two global compare-and-swaps), so the threads loop over the pixels instead.
 constexpr unsigned int snr_max_blocks = 1024;
 
-__global__ void snr_and_filters(const float *plane, const float *noise_map, const float *snr_cutoff,
+// At least 4 blocks per SM (at most 64 registers): latency bound, it needs the warps to keep its loads in flight.
+__global__ void __launch_bounds__(block_size, 4) snr_and_filters(const float *plane, const float *noise_map, const float *snr_cutoff,
                                 const float *flux_cutoff, const float *median_noise, const size_t n_pixels,
                                 const common::SnrFilterParams params, float *out_snr, const bool *const accept_mask,
                                 bool *image_mask, unsigned long long *histogram0, unsigned long long *histogram1,
@@ -34,14 +35,17 @@ __global__ void snr_and_filters(const float *plane, const float *noise_map, cons
   const bool noise_rejection_disabled = params.reject_noise_threshold == 0.F;
   const float noise_rejection_threshold = median_noise[0] * params.reject_noise_threshold;
 
-  const auto n_bins = static_cast<size_t>(2 * params.max_sigma_bin);
+  const auto n_bins = static_cast<unsigned int>(2 * params.max_sigma_bin);
+  const auto sigma_offset = static_cast<float>(params.max_sigma_bin);
+  const bool fill_histograms01 = params.histogram_detail > 1;
+  const bool fill_histogram2 = params.histogram_detail > 0;
   // 32-bit: native shared atomics (64-bit ones are compare-and-swap loops); widened when flushed. A block's count per
   // bin is at most its share of the pixels.
   extern __shared__ unsigned int shared_histograms[];
   auto *const shared_histogram0 = shared_histograms;
   auto *const shared_histogram1 = shared_histograms + n_bins;
   auto *const shared_histogram2 = shared_histograms + 2 * n_bins;
-  for (size_t i_bin = threadIdx.x; i_bin < 3 * n_bins; i_bin += blockDim.x)
+  for (unsigned int i_bin = threadIdx.x; i_bin < 3 * n_bins; i_bin += blockDim.x)
   {
     shared_histograms[i_bin] = 0;
   }
@@ -60,20 +64,20 @@ __global__ void snr_and_filters(const float *plane, const float *noise_map, cons
     const bool mask2 = mask1 && (!flux_cutoff_enabled || fabsf(plane_val) >= flux_threshold);
     const bool mask3 = mask2 && (noise_rejection_disabled || noise <= noise_rejection_threshold);
 
-    float bin_index = floorf(snr + params.max_sigma_bin);
-    bin_index -= (bin_index == 2 * params.max_sigma_bin ? 1.F : 0.F);
+    float bin_index = floorf(snr + sigma_offset);
+    bin_index -= (bin_index == 2.F * sigma_offset ? 1.F : 0.F);
     if (0 <= bin_index && bin_index < n_bins)
     {
-      const auto bin = static_cast<size_t>(bin_index);
-      if (mask0 && params.histogram_detail > 1)
+      const auto bin = static_cast<unsigned int>(bin_index);
+      if (mask0 && fill_histograms01)
       {
         atomicAdd(&shared_histogram0[bin], 1U);
       }
-      if (mask1 && params.histogram_detail > 1)
+      if (mask1 && fill_histograms01)
       {
         atomicAdd(&shared_histogram1[bin], 1U);
       }
-      if (mask2 && params.histogram_detail > 0)
+      if (mask2 && fill_histogram2)
       {
         atomicAdd(&shared_histogram2[bin], 1U);
       }
@@ -87,7 +91,7 @@ __global__ void snr_and_filters(const float *plane, const float *noise_map, cons
     return (mask3 ? fabsf(snr) : 0.F) >= params.threshold;
   };
 
-  const auto band_mean = [&](const float *cutoff, const size_t i_pixel)
+  const auto band_mean = [&](const float *cutoff, const unsigned int i_pixel)
   {
     float sum = 0.F;
     for (auto i_channel = params.band_start; i_channel < params.band_stop; ++i_channel)
@@ -97,10 +101,13 @@ __global__ void snr_and_filters(const float *plane, const float *noise_map, cons
     return sum * params.inv_band_size;
   };
 
-  const size_t stride = static_cast<size_t>(gridDim.x) * blockDim.x;
+  // 32-bit pixel indices: the labels already are (gpu_snr_and_filters asserts the size).
+  const auto n32 = static_cast<unsigned int>(n_pixels);
+  const unsigned int first = blockIdx.x * blockDim.x + threadIdx.x;
+  const unsigned int stride = gridDim.x * blockDim.x;
 
-  const size_t n4 = n_pixels % 4 == 0 ? n_pixels / 4 : 0;
-  for (size_t i4 = global_index(); i4 < n4; i4 += stride)
+  const unsigned int n4 = n32 % 4 == 0 ? n32 / 4 : 0;
+  for (unsigned int i4 = first; i4 < n4; i4 += stride)
   {
     const float4 value4 = reinterpret_cast<const float4 *>(plane)[i4];
     const float4 noise4 = reinterpret_cast<const float4 *>(noise_map)[i4];
@@ -109,18 +116,22 @@ __global__ void snr_and_filters(const float *plane, const float *noise_map, cons
     float4 snr_cutoff_sum = {0.F, 0.F, 0.F, 0.F};
     float4 flx_cutoff_sum = {0.F, 0.F, 0.F, 0.F};
 
-    for (auto i_channel = params.band_start; snr_cutoff_enabled && i_channel < params.band_stop; ++i_channel)
+    const float4 *snr_cutoff_at = reinterpret_cast<const float4 *>(snr_cutoff + params.band_start * n_pixels) + i4;
+    for (auto i_channel = params.band_start; snr_cutoff_enabled && i_channel < params.band_stop;
+         ++i_channel, snr_cutoff_at += n_pixels / 4)
     {
-      const float4 snr_cutoff_value = reinterpret_cast<const float4 *>(snr_cutoff + i_channel * n_pixels)[i4];
+      const float4 snr_cutoff_value = *snr_cutoff_at;
       snr_cutoff_sum.x += snr_cutoff_value.x;
       snr_cutoff_sum.y += snr_cutoff_value.y;
       snr_cutoff_sum.z += snr_cutoff_value.z;
       snr_cutoff_sum.w += snr_cutoff_value.w;
     }
 
-    for (auto i_channel = params.band_start; flux_cutoff_enabled && i_channel < params.band_stop; ++i_channel)
+    const float4 *flux_cutoff_at = reinterpret_cast<const float4 *>(flux_cutoff + params.band_start * n_pixels) + i4;
+    for (auto i_channel = params.band_start; flux_cutoff_enabled && i_channel < params.band_stop;
+         ++i_channel, flux_cutoff_at += n_pixels / 4)
     {
-      const float4 flx_cutoff_value = reinterpret_cast<const float4 *>(flux_cutoff + i_channel * n_pixels)[i4];
+      const float4 flx_cutoff_value = *flux_cutoff_at;
       flx_cutoff_sum.x += flx_cutoff_value.x;
       flx_cutoff_sum.y += flx_cutoff_value.y;
       flx_cutoff_sum.z += flx_cutoff_value.z;
@@ -138,7 +149,7 @@ __global__ void snr_and_filters(const float *plane, const float *noise_map, cons
     out4.w = process(value4.w, noise4.w, mask4.w != 0, snr_cutoff_sum.w * params.inv_band_size,
                      flx_cutoff_sum.w * params.inv_band_size, snr4.w);
 
-    const auto i = static_cast<unsigned int>(4 * i4);
+    const unsigned int i = 4 * i4;
     const uint4 labels4 = {out4.x ? i : background_label, out4.y ? i + 1 : background_label,
                            out4.z ? i + 2 : background_label, out4.w ? i + 3 : background_label};
 
@@ -147,19 +158,19 @@ __global__ void snr_and_filters(const float *plane, const float *noise_map, cons
     reinterpret_cast<uint4 *>(labels)[i4] = labels4;
   }
 
-  for (size_t i_pixel = 4 * n4 + global_index(); i_pixel < n_pixels; i_pixel += stride)
+  for (unsigned int i_pixel = 4 * n4 + first; i_pixel < n32; i_pixel += stride)
   {
     float snr;
     const auto mask = process(plane[i_pixel], noise_map[i_pixel], accept_mask[i_pixel],
                               snr_cutoff_enabled ? band_mean(snr_cutoff, i_pixel) : 0.0f,
                               flux_cutoff_enabled ? band_mean(flux_cutoff, i_pixel) : 0.0f, snr);
     image_mask[i_pixel] = mask;
-    labels[i_pixel] = mask ? static_cast<unsigned int>(i_pixel) : background_label;
+    labels[i_pixel] = mask ? i_pixel : background_label;
     out_snr[i_pixel] = snr;
   }
 
   __syncthreads();
-  for (size_t i_bin = threadIdx.x; i_bin < n_bins; i_bin += blockDim.x)
+  for (unsigned int i_bin = threadIdx.x; i_bin < n_bins; i_bin += blockDim.x)
   {
     if (params.histogram_detail > 1 && shared_histogram0[i_bin] != 0)
     {
@@ -192,6 +203,8 @@ void gpu_snr_and_filters(const float *plane, const float *noise_map, const float
                          float *out_min_sigma, float *out_max_sigma, unsigned int *labels, cudaStream_t stream)
 {
   assert(n_pixels > 0);
+  // 32-bit pixel indices in the kernel, with room for the grid stride past the end.
+  assert(n_pixels < (std::size_t{1} << 31));
   assert(params.max_sigma_bin > 0);
   assert(median_noise != nullptr);
   assert(params.histogram_detail <= 1 || (histogram0 != nullptr && histogram1 != nullptr));
