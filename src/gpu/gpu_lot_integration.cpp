@@ -1,9 +1,11 @@
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
+#include <cstdlib>
 #include <functional>
 #include <mutex>
 #include <span>
+#include <string>
 #include <vector>
 
 #include <oneapi/tbb/task_group.h>
@@ -39,7 +41,10 @@ std::vector<ProcessPlaneResult> run_batch_core_gpu(std::vector<PlaneBatchItem> &
   shared.assign(groups, config);
 
   // At most slot_count planes are on the GPU at once. TODO: choose the count from the device memory a slot needs.
-  const std::size_t slot_count = std::min<std::size_t>(16, items.size());
+  // BREIFAST_GPU_SLOTS overrides the 16, for experiments.
+  const char *const slots_env = std::getenv("BREIFAST_GPU_SLOTS");
+  const std::size_t max_slots = slots_env != nullptr ? std::stoul(slots_env) : 16;
+  const std::size_t slot_count = std::min<std::size_t>(max_slots, items.size());
   if (slots.size() < slot_count)
   {
     slots.resize(slot_count);
