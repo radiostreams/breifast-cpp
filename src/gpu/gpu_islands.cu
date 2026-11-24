@@ -1,7 +1,9 @@
+#include <algorithm>
 #include <cassert>
 #include <cfloat>
 #include <climits>
 #include <cstddef>
+#include <cstdint>
 #include <iterator>
 
 #include <cub/device/device_scan.cuh>
@@ -76,41 +78,70 @@ __device__ void join(unsigned int *const labels, unsigned int i, unsigned int j)
   }
 }
 
-/// Union-find step of gpu_label_islands: one thread per pixel of a 2D grid; each masked pixel joins its left and upper
-/// masked neighbours (the right and lower links are theirs). Tests the mask, a quarter of the labels' bytes: only the
-/// masked pixels read their labels.
+/// Pixels per step of the union-find kernels: one 16-byte load of the mask, skipped whole when all background.
+constexpr unsigned int mask_group = 16;
+
+/// Upper bound on the grid of the union-find kernels: the threads stride over the mask, so that the blocks' cost does
+/// not grow with the plane, whose pixels are mostly background.
+constexpr unsigned int union_find_max_blocks = 1024;
+
+/// Calls `visit(i)` for every masked pixel i of [0, n), striding over the mask 16 bytes at a time. `mask` must be
+/// 16-byte aligned.
+template <typename Visit>
+__device__ void for_each_masked(const bool *const mask, const unsigned int n, const Visit &visit)
+{
+  const unsigned int first = blockIdx.x * blockDim.x + threadIdx.x;
+  const unsigned int stride = gridDim.x * blockDim.x;
+  const unsigned int groups = n / mask_group;
+  for (unsigned int group = first; group < groups; group += stride)
+  {
+    const uint4 bytes = reinterpret_cast<const uint4 *>(mask)[group];
+    if ((bytes.x | bytes.y | bytes.z | bytes.w) == 0U)
+    {
+      continue;
+    }
+    const unsigned int words[4] = {bytes.x, bytes.y, bytes.z, bytes.w};
+#pragma unroll
+    for (unsigned int k = 0; k < mask_group; ++k)
+    {
+      if (((words[k / 4] >> (8 * (k % 4))) & 0xFFU) != 0U)
+      {
+        visit(group * mask_group + k);
+      }
+    }
+  }
+  for (unsigned int i = groups * mask_group + first; i < n; i += stride) // the last n % 16 pixels
+  {
+    if (mask[i])
+    {
+      visit(i);
+    }
+  }
+}
+
+/// Union-find step of gpu_label_islands: each masked pixel joins its left and upper masked neighbours (the right and
+/// lower links are theirs). Only the masked pixels read labels.
 __global__ void merge_labels_kernel(const bool *const mask, const unsigned int n_y, const unsigned int n_x,
                                     unsigned int *const labels)
 {
-  const auto i_x = global_index_x();
-  const auto i_y = global_index_y();
-  if (i_x >= n_x || i_y >= n_y)
-  {
-    return;
-  }
-  const unsigned int i = i_y * n_x + i_x;
-  if (!mask[i])
-  {
-    return;
-  }
-  if (i_x > 0 && mask[i - 1])
-  {
-    join(labels, i, i - 1);
-  }
-  if (i_y > 0 && mask[i - n_x])
-  {
-    join(labels, i, i - n_x);
-  }
+  for_each_masked(mask, n_y * n_x,
+                  [&](const unsigned int i)
+                  {
+                    if (i % n_x > 0 && mask[i - 1])
+                    {
+                      join(labels, i, i - 1);
+                    }
+                    if (i >= n_x && mask[i - n_x])
+                    {
+                      join(labels, i, i - n_x);
+                    }
+                  });
 }
 
 /// Last step of the union-find: every masked pixel's label becomes its root, its component's smallest index.
 __global__ void flatten_labels_kernel(const bool *const mask, const unsigned int n, unsigned int *const labels)
 {
-  const auto i = static_cast<unsigned int>(global_index());
-  if (i < n && mask[i])
-  {
-    labels[i] = find_root(labels, i);
-  }
+  for_each_masked(mask, n, [&](const unsigned int i) { labels[i] = find_root(labels, i); });
 }
 
 __global__ void scatter_labels_kernel(const bool *const mask, const size_t n, unsigned int *const labels,
@@ -326,13 +357,13 @@ void gpu_label_islands(const bool *const mask, const size_t n_y, const size_t n_
   const size_t n = n_y * n_x;
   assert(scratch.root_ranks.size() >= n);
   // Union-find: join the neighbouring masked pixels' trees, then point every masked pixel at its root.
-  const dim3 merge_block(32, block_size / 32);
-  const dim3 merge_grid(static_cast<unsigned int>((n_x + merge_block.x - 1) / merge_block.x),
-                        static_cast<unsigned int>((n_y + merge_block.y - 1) / merge_block.y));
-  merge_labels_kernel<<<merge_grid, merge_block, 0, stream>>>(mask, static_cast<unsigned int>(n_y),
-                                                              static_cast<unsigned int>(n_x), labels);
-  CHECK_GPU(cudaGetLastError());
-  launch_per_element(flatten_labels_kernel, n, stream, mask, static_cast<unsigned int>(n), labels);
+  assert(reinterpret_cast<std::uintptr_t>(mask) % alignof(uint4) == 0); // whole buffers: 256-byte aligned
+  const std::size_t groups = (n + mask_group - 1) / mask_group;
+  const auto union_find_grid =
+      static_cast<unsigned int>(std::min<std::size_t>((groups + block_size - 1) / block_size, union_find_max_blocks));
+  launch(merge_labels_kernel, union_find_grid, block_size, stream, mask, static_cast<unsigned int>(n_y),
+         static_cast<unsigned int>(n_x), labels);
+  launch(flatten_labels_kernel, union_find_grid, block_size, stream, mask, static_cast<unsigned int>(n), labels);
 
   // Rank each component's root among the roots: an inclusive scan of the root flags that keeps the count at the roots
   // only, and the total in out_count.

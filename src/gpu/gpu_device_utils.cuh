@@ -28,12 +28,6 @@ __device__ inline unsigned int global_index_x()
   return blockIdx.x * blockDim.x + threadIdx.x;
 }
 
-/// Row of the calling thread in a two-dimensional grid. 32-bit, like global_index_x.
-__device__ inline unsigned int global_index_y()
-{
-  return blockIdx.y * blockDim.y + threadIdx.y;
-}
-
 /// fminf and fmaxf as function objects, for atomic_update and block_reduce. A NaN operand yields the other one.
 struct FloatMin
 {
