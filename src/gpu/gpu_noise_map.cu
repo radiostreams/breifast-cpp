@@ -36,7 +36,8 @@ __global__ void tile_prefix(const float *plane, long n_cols,    // the image, ro
                             long region_y0, long region_x0,     // the part's region, in image coordinates
                             long region_rows, long region_cols, // already clipped to the image
                             double *part_prefix,                // region_rows x region_cols, row-major
-                            double *last_cols)                  // tiles_x x region_rows: each tile's last column
+                            double *last_cols,                  // tiles_x x region_rows: each tile's last column
+                            double *tile_totals)                // tiles_y x tiles_x: each tile's total
 {
   __shared__ double tile[32][33]; // padding to avoid bank sharing issues
 
@@ -101,6 +102,11 @@ __global__ void tile_prefix(const float *plane, long n_cols,    // the image, ro
   if (warp == 0 && tile_y0 + lane < region_rows)
   {
     last_cols[blockIdx.x * region_rows + tile_y0 + lane] = tile[lane][31];
+  }
+  // And its total, packed with the other tiles' so that the corner block of part_carries reads them coalesced.
+  if (warp == 0 && lane == 0)
+  {
+    tile_totals[blockIdx.y * gridDim.x + blockIdx.x] = tile[31][31];
   }
 }
 
@@ -181,21 +187,33 @@ __device__ void warp_exclusive_sums(const double (&values)[2], double (&sums)[2]
 }
 
 /// corner: the 2D exclusive prefix of the tile totals, in shared memory: down the tile rows, then along the tile columns.
-/// A tile's total is its last column at its last row. Each warp takes 8 columns, then 8 rows, 2 values per lane.
-__device__ void carry_corners(const double *last_cols, const long region_rows, const long tiles_y, const long tiles_x,
-                              double *corner)
+/// The totals come packed from tile_prefix: gathered from the tiles' last columns instead, 4096 scattered loads from
+/// one block, they were the critical path of part_carries. Each warp takes 8 columns, then 8 rows, 2 values per lane.
+__device__ void carry_corners(const double *tile_totals, const long tiles_y, const long tiles_x, double *corner)
 {
   __shared__ double totals[max_carry_tiles][max_carry_tiles + 1]; // + 1: the column reads hit different banks
   const long lane = threadIdx.x % 32;
   const long warp = threadIdx.x / 32;
 
-  for (long index = threadIdx.x; index < max_carry_tiles * max_carry_tiles; index += block_size)
+  // A thread's loads all in flight before its stores, rather than each store waiting on its load.
+  constexpr long loads_per_thread = max_carry_tiles * max_carry_tiles / block_size;
+  static_assert(max_carry_tiles * max_carry_tiles % block_size == 0);
+  double loaded[loads_per_thread];
+#pragma unroll
+  for (long k = 0; k < loads_per_thread; ++k)
   {
+    const long index = threadIdx.x + k * block_size;
     const long tile_row = index / max_carry_tiles;
     const long tile_col = index % max_carry_tiles;
     const bool counted = tile_row < tiles_y - 1 && tile_col < tiles_x - 1;
-    const double loaded = last_cols[(counted ? tile_col * region_rows + 32 * tile_row + 31 : 0)];
-    totals[tile_row][tile_col] = counted ? loaded : 0.;
+    const double value = tile_totals[(counted ? tile_row * tiles_x + tile_col : 0)];
+    loaded[k] = counted ? value : 0.;
+  }
+#pragma unroll
+  for (long k = 0; k < loads_per_thread; ++k)
+  {
+    const long index = threadIdx.x + k * block_size;
+    totals[index / max_carry_tiles][index % max_carry_tiles] = loaded[k];
   }
   __syncthreads();
 
@@ -229,7 +247,8 @@ __device__ void carry_corners(const double *last_cols, const long region_rows, c
 /// Step 2 of a part: above, left and corner in one launch. Blocks 0 .. above_blocks - 1 take 32 columns each (above),
 /// the next left_blocks 32 rows each (left), the last one the corners. The role is the same for a whole block. Launch
 /// with carry_blocks() blocks of block_size.
-__global__ void part_carries(const double *part_prefix, const double *last_cols, long region_rows, long region_cols,
+__global__ void part_carries(const double *part_prefix, const double *last_cols, const double *tile_totals,
+                             long region_rows, long region_cols,
                              double *above,  // tiles_y x region_cols
                              double *left,   // tiles_x x region_rows
                              double *corner) // tiles_y x tiles_x
@@ -251,7 +270,7 @@ __global__ void part_carries(const double *part_prefix, const double *last_cols,
   }
   else
   {
-    carry_corners(last_cols, region_rows, tiles_y, tiles_x, corner);
+    carry_corners(tile_totals, tiles_y, tiles_x, corner);
   }
 }
 
@@ -380,8 +399,8 @@ struct RmsScratchLayout
   std::size_t prefix_size() const { return static_cast<std::size_t>(max_rows * max_cols); }
   std::size_t above_size() const { return static_cast<std::size_t>(max_tiles_y * max_cols); }
   std::size_t left_size() const { return static_cast<std::size_t>(max_tiles_x * max_rows); } // also last_cols
-  std::size_t corner_size() const { return static_cast<std::size_t>(max_tiles_y * max_tiles_x); }
-  std::size_t total() const { return prefix_size() + above_size() + 2 * left_size() + corner_size(); }
+  std::size_t corner_size() const { return static_cast<std::size_t>(max_tiles_y * max_tiles_x); } // also tile_totals
+  std::size_t total() const { return prefix_size() + above_size() + 2 * left_size() + 2 * corner_size(); }
 };
 } // namespace
 
@@ -402,6 +421,7 @@ void gpu_rms_noise_map(const float *plane, size_t n_y, size_t n_x, long boxsize,
   double *left = above + layout.above_size();
   double *corner = left + layout.left_size();
   double *last_cols = corner + layout.corner_size();
+  double *tile_totals = last_cols + layout.left_size();
 
   const auto rows = static_cast<long>(n_y);
   const auto cols = static_cast<long>(n_x);
@@ -425,10 +445,10 @@ void gpu_rms_noise_map(const float *plane, size_t n_y, size_t n_x, long boxsize,
 
       const dim3 tile_grid(static_cast<unsigned int>(tiles_x), static_cast<unsigned int>(tiles_y));
       tile_prefix<<<tile_grid, dim3(32, tile_warps), 0, stream>>>(plane, cols, region_y0, region_x0, region_rows,
-                                                                   region_cols, part_prefix, last_cols);
+                                                                   region_cols, part_prefix, last_cols, tile_totals);
       CHECK_GPU(cudaGetLastError());
       launch(part_carries, carry_blocks(region_rows, region_cols), block_size, stream, part_prefix, last_cols,
-             region_rows, region_cols, above, left, corner);
+             tile_totals, region_rows, region_cols, above, left, corner);
       box_rms<<<box_rms_grid(part_rows, part_cols), block_size, 0, stream>>>(
           part_prefix, above, left, corner, static_cast<int>(region_y0), static_cast<int>(region_x0),
           static_cast<int>(region_rows), static_cast<int>(region_cols), static_cast<int>(part_y0),
