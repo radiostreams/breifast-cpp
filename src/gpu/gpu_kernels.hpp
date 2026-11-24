@@ -9,8 +9,7 @@
 // Host-side interface of the GPU kernels: the launch wrappers and the scratch they reuse.
 namespace breifast::gpu
 {
-/// Initial label of a pixel outside the mask, before gpu_label_islands converges; a pixel inside starts at its flat
-/// index.
+/// Initial label of a pixel outside the mask, before gpu_label_islands; a pixel inside starts at its flat index.
 constexpr unsigned int background_label = ~0U;
 
 /// Device scratch of gpu_median and gpu_median_abs: the digit histogram, then the radix-select state (count below the
@@ -21,15 +20,14 @@ struct MedianScratch
   DeviceVector<std::uint32_t> words{histogram_bins + 5};
 };
 
-/// Device scratch of gpu_label_islands: the per-pixel root ranks, the convergence flag, and the temporary storage of
-/// the rank scan (cub::DeviceScan).
+/// Device scratch of gpu_label_islands: the per-pixel root ranks and the temporary storage of the rank scan
+/// (cub::DeviceScan).
 struct LabelScratch
 {
   /// Grows every array for a plane of `n_pixels`; the contents are unspecified after growing.
   void ensure(std::size_t n_pixels); // in gpu_islands.cu, where CUB is available
 
   DeviceVector<unsigned int> root_ranks;
-  DeviceVector<unsigned int> changed{1};
   DeviceVector<std::byte> scan_storage;
 };
 
@@ -312,11 +310,10 @@ void gpu_gather_at_peaks(const float *plane, const float *noise_map, const float
 /**
  * @brief 4-connected component labels of `mask`, numbered `1..count` in raster order of each island's first pixel.
  *
- * A dense min-label propagation: every true pixel starts at its flat index, then repeatedly takes the smallest of its
- * flat-index label and its four already-true neighbours until a fixed point, so each pixel settles on its component's
- * smallest index. That index is then ranked among the components. `0` marks background. Device pointers; the work is
- * enqueued on `stream` and converges on the device with a cooperative grid sync, so this call does not synchronise
- * `stream`. Requires cooperative-launch support. `n_y * n_x` must be positive.
+ * A union-find: each true pixel joins its left and upper true neighbours by hooking the larger of their trees' roots
+ * under the smaller, then every true pixel takes its root, its component's smallest flat index. That index is then
+ * ranked among the components. `0` marks background. Device pointers; the work is enqueued on `stream`, so this call
+ * does not synchronise it. `n_y * n_x` must be positive.
  * @param mask `[n_y * n_x]` bools, row major.
  * @param labels `[n_y * n_x]`: on entry the initial labels of `mask` (from gpu_snr_and_filters or gpu_init_labels), on
  *        exit the island labels, `0` outside every island.

@@ -3,9 +3,6 @@
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
-#include <mutex>
-#include <stdexcept>
-#include <unordered_map>
 #include <utility>
 
 #include <cub/block/block_reduce.cuh>
@@ -23,6 +20,18 @@ inline constexpr unsigned int block_size = 256;
 __device__ inline std::size_t global_index()
 {
   return static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+}
+
+/// Column of the calling thread in a two-dimensional grid. 32-bit: one side of a 2D grid stays far below 2^32 threads.
+__device__ inline unsigned int global_index_x()
+{
+  return blockIdx.x * blockDim.x + threadIdx.x;
+}
+
+/// Row of the calling thread in a two-dimensional grid. 32-bit, like global_index_x.
+__device__ inline unsigned int global_index_y()
+{
+  return blockIdx.y * blockDim.y + threadIdx.y;
 }
 
 /// fminf and fmaxf as function objects, for atomic_update and block_reduce. A NaN operand yields the other one.
@@ -94,62 +103,6 @@ void launch_per_island(void (*kernel)(Params...), unsigned int n_islands, cudaSt
 {
   assert(n_islands > 0);
   launch(kernel, n_islands, block_size, stream, std::forward<Args>(args)...);
-}
-
-namespace detail
-{
-/// Blocks of block_size threads of `kernel` that can be resident on the current device at once: the most a cooperative
-/// launch may use. Computed on first use per kernel, then cached; assumes one device per process.
-inline unsigned int max_cooperative_blocks(const void *const kernel)
-{
-  static std::mutex mutex;
-  static std::unordered_map<const void *, unsigned int> cache;
-  const std::scoped_lock lock{mutex};
-  if (const auto found = cache.find(kernel); found != cache.end())
-  {
-    return found->second;
-  }
-
-  int device = 0;
-  CHECK_GPU(cudaGetDevice(&device));
-  int cooperative_launch = 0;
-  CHECK_GPU(cudaDeviceGetAttribute(&cooperative_launch, cudaDevAttrCooperativeLaunch, device));
-  if (cooperative_launch == 0)
-  {
-    throw std::runtime_error("launch_cooperative: device does not support cooperative launch");
-  }
-  int multiprocessor_count = 0;
-  CHECK_GPU(cudaDeviceGetAttribute(&multiprocessor_count, cudaDevAttrMultiProcessorCount, device));
-  int blocks_per_multiprocessor = 0;
-  CHECK_GPU(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&blocks_per_multiprocessor, kernel,
-                                                          static_cast<int>(block_size), 0));
-  const auto blocks = static_cast<unsigned int>(blocks_per_multiprocessor * multiprocessor_count);
-  if (blocks == 0)
-  {
-    throw std::runtime_error("launch_cooperative: no resident blocks available");
-  }
-  return cache.emplace(kernel, blocks).first->second;
-}
-} // namespace detail
-
-/// Launches `kernel` cooperatively on `stream`, so that it may call grid.sync(). One thread per element of [0, n), but
-/// at most as many blocks as can be resident at once: the kernel must cover [0, n) with a grid-stride loop.
-template <typename... Params, typename... Args>
-void launch_cooperative(void (*kernel)(Params...), const std::size_t n, cudaStream_t stream, Args &&...args)
-{
-  assert(n > 0);
-  const std::size_t blocks = std::min<std::size_t>(
-      (n + block_size - 1) / block_size, detail::max_cooperative_blocks(reinterpret_cast<const void *>(kernel)));
-  cudaLaunchAttribute cooperative{};
-  cooperative.id = cudaLaunchAttributeCooperative;
-  cooperative.val.cooperative = 1;
-  cudaLaunchConfig_t config{};
-  config.gridDim = dim3(static_cast<unsigned int>(blocks));
-  config.blockDim = dim3(block_size);
-  config.stream = stream;
-  config.attrs = &cooperative;
-  config.numAttrs = 1;
-  CHECK_GPU(cudaLaunchKernelEx(&config, kernel, std::forward<Args>(args)...));
 }
 
 /// One island's stamp, read in place from the plane as StampWindows describes it: cell i of the (2 * radius + 1)^2

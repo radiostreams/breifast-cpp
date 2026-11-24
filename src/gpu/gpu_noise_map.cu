@@ -277,7 +277,7 @@ __global__ void box_rms(const double *part_prefix, const double *above, const do
                         int n_rows, int n_cols, int box_size,                            // the image
                         float *rms)                                                      // n_rows x n_cols
 {
-  const auto part_col = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+  const auto part_col = static_cast<int>(global_index_x());
   if (part_col >= part_cols)
   {
     return;

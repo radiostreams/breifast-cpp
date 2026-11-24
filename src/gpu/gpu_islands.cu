@@ -4,7 +4,6 @@
 #include <cstddef>
 #include <iterator>
 
-#include <cooperative_groups.h>
 #include <cub/device/device_scan.cuh>
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/iterator/transform_iterator.h>
@@ -13,8 +12,6 @@
 #include "gpu_kernels.hpp"
 
 #include "gpu_device_utils.cuh"
-
-namespace cg = cooperative_groups;
 
 namespace breifast::gpu
 {
@@ -30,65 +27,87 @@ __global__ void init_labels_kernel(const bool *const mask, const size_t n, unsig
   }
 }
 
-__global__ void converge_labels_kernel(const bool *const mask, const size_t n_y, const size_t n_x,
-                                       unsigned int *const labels, unsigned int *const changed)
-{
-  const cg::grid_group grid = cg::this_grid();
-  const size_t n = n_y * n_x;
+// The labels form a forest during labelling: a masked pixel's label is the flat index of its parent, a smaller index
+// or its own, and a root is a pixel that is its own parent. Every write keeps a parent below its child, so following
+// the parents always ends.
 
+/// Root of the tree of masked pixel `pixel`: follows the parents until a pixel whose label is its own index. Reads
+/// from L2: other blocks rewrite parents meanwhile, and a stale L1 copy would only lengthen the walk.
+__device__ unsigned int find_root(const unsigned int *const labels, unsigned int pixel)
+{
+  unsigned int parent = __ldcg(&labels[pixel]);
+  while (parent != pixel)
+  {
+    pixel = parent;
+    parent = __ldcg(&labels[pixel]);
+  }
+  return pixel;
+}
+
+/// Puts masked pixels `i` and `j` in the same tree: hooks the larger of their roots under the smaller, so that each
+/// component's root ends as its smallest index whatever the order of the joins. If another thread re-hooked that root
+/// between the walks and the atomic, `old` is where it had put it, and the loop joins that tree too.
+__device__ void join(unsigned int *const labels, unsigned int i, unsigned int j)
+{
   while (true)
   {
-    if (blockIdx.x == 0 && threadIdx.x == 0)
+    auto root_i = find_root(labels, i);
+    auto root_j = find_root(labels, j);
+    if (root_i == root_j)
     {
-      *changed = 0U;
+      return;
     }
-    grid.sync();
 
-    for (size_t index = global_index(); index < n; index += static_cast<size_t>(blockDim.x) * gridDim.x)
+    if (root_i > root_j)
     {
-      if (!mask[index])
-      {
-        continue;
-      }
-
-      const size_t i_y = index / n_x;
-      const size_t i_x = index % n_x;
-
-      unsigned int best = labels[index];
-      if (i_x > 0 && labels[index - 1] < best)
-      {
-        best = labels[index - 1];
-      }
-      if (i_x + 1 < n_x && labels[index + 1] < best)
-      {
-        best = labels[index + 1];
-      }
-      if (i_y > 0 && labels[index - n_x] < best)
-      {
-        best = labels[index - n_x];
-      }
-      if (i_y + 1 < n_y && labels[index + n_x] < best)
-      {
-        best = labels[index + n_x];
-      }
-
-      if (best < labels[index])
-      {
-        labels[index] = best;
-        atomicOr(changed, 1U);
-      }
+      root_i = root_i ^ root_j;
+      root_j = root_i ^ root_j;
+      root_i = root_i ^ root_j;
     }
-    grid.sync();
 
-    // Every block must read `changed` before the next iteration resets it: a block that
-    // read the reset value would leave the loop while the others call grid.sync() again.
-    const unsigned int changed_now = *changed;
-    grid.sync();
-
-    if (changed_now == 0U)
+    const auto old = atomicMin(&labels[root_j], root_i);
+    if (old == root_j)
     {
-      break;
+      return;
     }
+
+    i = root_i;
+    j = old;
+  }
+}
+
+/// Union-find step of gpu_label_islands: one thread per pixel of a 2D grid; each masked pixel joins its left and upper
+/// masked neighbours (the right and lower links are theirs). Background pixels hold background_label throughout.
+__global__ void merge_labels_kernel(const unsigned int n_y, const unsigned int n_x, unsigned int *const labels)
+{
+  const auto i_x = global_index_x();
+  const auto i_y = global_index_y();
+  if (i_x >= n_x || i_y >= n_y)
+  {
+    return;
+  }
+  const unsigned int i = i_y * n_x + i_x;
+  if (labels[i] == background_label)
+  {
+    return;
+  }
+  if (i_x > 0 && labels[i - 1] != background_label)
+  {
+    join(labels, i, i - 1);
+  }
+  if (i_y > 0 && labels[i - n_x] != background_label)
+  {
+    join(labels, i, i - n_x);
+  }
+}
+
+/// Last step of the union-find: every masked pixel's label becomes its root, its component's smallest index.
+__global__ void flatten_labels_kernel(const unsigned int n, unsigned int *const labels)
+{
+  const auto i = static_cast<unsigned int>(global_index());
+  if (i < n && labels[i] != background_label)
+  {
+    labels[i] = find_root(labels, i);
   }
 }
 
@@ -304,7 +323,14 @@ void gpu_label_islands(const bool *const mask, const size_t n_y, const size_t n_
 
   const size_t n = n_y * n_x;
   assert(scratch.root_ranks.size() >= n);
-  launch_cooperative(converge_labels_kernel, n, stream, mask, n_y, n_x, labels, scratch.changed.data());
+  // Union-find: join the neighbouring masked pixels' trees, then point every masked pixel at its root.
+  const dim3 merge_block(32, block_size / 32);
+  const dim3 merge_grid(static_cast<unsigned int>((n_x + merge_block.x - 1) / merge_block.x),
+                        static_cast<unsigned int>((n_y + merge_block.y - 1) / merge_block.y));
+  merge_labels_kernel<<<merge_grid, merge_block, 0, stream>>>(static_cast<unsigned int>(n_y),
+                                                              static_cast<unsigned int>(n_x), labels);
+  CHECK_GPU(cudaGetLastError());
+  launch_per_element(flatten_labels_kernel, n, stream, static_cast<unsigned int>(n), labels);
 
   // Rank each component's root among the roots: an inclusive scan of the root flags that keeps the count at the roots
   // only, and the total in out_count.
