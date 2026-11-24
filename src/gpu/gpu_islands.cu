@@ -77,8 +77,10 @@ __device__ void join(unsigned int *const labels, unsigned int i, unsigned int j)
 }
 
 /// Union-find step of gpu_label_islands: one thread per pixel of a 2D grid; each masked pixel joins its left and upper
-/// masked neighbours (the right and lower links are theirs). Background pixels hold background_label throughout.
-__global__ void merge_labels_kernel(const unsigned int n_y, const unsigned int n_x, unsigned int *const labels)
+/// masked neighbours (the right and lower links are theirs). Tests the mask, a quarter of the labels' bytes: only the
+/// masked pixels read their labels.
+__global__ void merge_labels_kernel(const bool *const mask, const unsigned int n_y, const unsigned int n_x,
+                                    unsigned int *const labels)
 {
   const auto i_x = global_index_x();
   const auto i_y = global_index_y();
@@ -87,25 +89,25 @@ __global__ void merge_labels_kernel(const unsigned int n_y, const unsigned int n
     return;
   }
   const unsigned int i = i_y * n_x + i_x;
-  if (labels[i] == background_label)
+  if (!mask[i])
   {
     return;
   }
-  if (i_x > 0 && labels[i - 1] != background_label)
+  if (i_x > 0 && mask[i - 1])
   {
     join(labels, i, i - 1);
   }
-  if (i_y > 0 && labels[i - n_x] != background_label)
+  if (i_y > 0 && mask[i - n_x])
   {
     join(labels, i, i - n_x);
   }
 }
 
 /// Last step of the union-find: every masked pixel's label becomes its root, its component's smallest index.
-__global__ void flatten_labels_kernel(const unsigned int n, unsigned int *const labels)
+__global__ void flatten_labels_kernel(const bool *const mask, const unsigned int n, unsigned int *const labels)
 {
   const auto i = static_cast<unsigned int>(global_index());
-  if (i < n && labels[i] != background_label)
+  if (i < n && mask[i])
   {
     labels[i] = find_root(labels, i);
   }
@@ -327,10 +329,10 @@ void gpu_label_islands(const bool *const mask, const size_t n_y, const size_t n_
   const dim3 merge_block(32, block_size / 32);
   const dim3 merge_grid(static_cast<unsigned int>((n_x + merge_block.x - 1) / merge_block.x),
                         static_cast<unsigned int>((n_y + merge_block.y - 1) / merge_block.y));
-  merge_labels_kernel<<<merge_grid, merge_block, 0, stream>>>(static_cast<unsigned int>(n_y),
+  merge_labels_kernel<<<merge_grid, merge_block, 0, stream>>>(mask, static_cast<unsigned int>(n_y),
                                                               static_cast<unsigned int>(n_x), labels);
   CHECK_GPU(cudaGetLastError());
-  launch_per_element(flatten_labels_kernel, n, stream, static_cast<unsigned int>(n), labels);
+  launch_per_element(flatten_labels_kernel, n, stream, mask, static_cast<unsigned int>(n), labels);
 
   // Rank each component's root among the roots: an inclusive scan of the root flags that keeps the count at the roots
   // only, and the total in out_count.
