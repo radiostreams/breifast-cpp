@@ -128,6 +128,7 @@ void gpu_process_band(const GpuPlaneInput &plane, const GpuBand &band, GpuBandWo
 
   {
     const NvtxRange range{"island stats"};
+    gpu_number_islands(workspace.mask, n_pixels, workspace.labels, workspace.label_scratch, stream);
     gpu_label_stats(workspace.labels, workspace.snr, workspace.noise_map, n_pixels, plane.n_x, n_islands,
                     result.islands.peak_value, result.islands.peak_local_noise, result.islands.peak_y,
                     result.islands.peak_x, result.islands.island_size, workspace.island_scratch, stream);

@@ -20,6 +20,7 @@ namespace label_islands_tests
 using breifast::gpu::DeviceVector;
 using breifast::gpu::gpu_init_labels;
 using breifast::gpu::gpu_label_islands;
+using breifast::gpu::gpu_number_islands;
 using breifast::gpu::LabelScratch;
 using breifast::gpu::Stream;
 using breifast::gpu::test::download;
@@ -43,6 +44,7 @@ std::vector<unsigned int> run_label(const std::vector<unsigned char> &mask, size
   const Stream stream;
   gpu_init_labels(device_mask, n, device_labels, stream);
   gpu_label_islands(device_mask, n_y, n_x, device_labels, device_count, scratch, stream);
+  gpu_number_islands(device_mask, n, device_labels, scratch, stream);
   const auto host_labels = download(device_labels, stream);
   const unsigned int count = download_scalar(device_count.data(), stream);
 

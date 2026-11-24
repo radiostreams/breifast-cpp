@@ -308,20 +308,32 @@ void gpu_gather_at_peaks(const float *plane, const float *noise_map, const float
                          cudaStream_t stream = nullptr);
 
 /**
- * @brief 4-connected component labels of `mask`, numbered `1..count` in raster order of each island's first pixel.
+ * @brief 4-connected components of `mask`: each island's root and rank, and the number of islands.
  *
  * A union-find: each true pixel joins its left and upper true neighbours by hooking the larger of their trees' roots
- * under the smaller, then every true pixel takes its root, its component's smallest flat index. That index is then
- * ranked among the components. `0` marks background. Device pointers; the work is enqueued on `stream`, so this call
- * does not synchronise it. `n_y * n_x` must be positive.
+ * under the smaller, then every true pixel takes its root, its component's smallest flat index. The roots are then
+ * ranked in raster order, `1..count`, into `scratch`. gpu_number_islands turns the roots into those ranks; it is a
+ * separate call so that a plane without islands skips it. Device pointers; the work is enqueued on `stream`, so this
+ * call does not synchronise it. `n_y * n_x` must be positive.
  * @param mask `[n_y * n_x]` bools, row major.
  * @param labels `[n_y * n_x]`: on entry the initial labels of `mask` (from gpu_snr_and_filters or gpu_init_labels), on
- *        exit the island labels, `0` outside every island.
+ *        exit each true pixel's island root, background_label elsewhere.
  * @param out_count One `unsigned int`, the number of islands.
- * @param scratch Grown to at least `n_y * n_x` pixels.
+ * @param scratch Grown to at least `n_y * n_x` pixels; on exit holds the rank of each root.
  */
 void gpu_label_islands(const bool *mask, size_t n_y, size_t n_x, unsigned int *labels, unsigned int *out_count,
                        LabelScratch &scratch, cudaStream_t stream = nullptr);
+
+/**
+ * @brief Island labels from gpu_label_islands' roots: each true pixel of `mask` gets its island's rank, `1..count` in
+ * raster order of each island's first pixel, and every other pixel `0`. Device pointers; enqueued on `stream`.
+ * @param mask `[n]` bools, the mask gpu_label_islands labelled.
+ * @param n Pixels, positive.
+ * @param labels `[n]`: on entry the roots gpu_label_islands left, on exit the island labels.
+ * @param scratch The scratch gpu_label_islands filled.
+ */
+void gpu_number_islands(const bool *mask, size_t n, unsigned int *labels, const LabelScratch &scratch,
+                        cudaStream_t stream = nullptr);
 
 /// Initial labels of gpu_label_islands for `mask`: the flat index where `mask` is set, background_label elsewhere.
 void gpu_init_labels(const bool *mask, size_t n, unsigned int *labels, cudaStream_t stream = nullptr);

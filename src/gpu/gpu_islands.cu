@@ -373,7 +373,14 @@ void gpu_label_islands(const bool *const mask, const size_t n_y, const size_t n_
   std::size_t scan_bytes = scratch.scan_storage.size();
   CHECK_GPU(cub::DeviceScan::InclusiveSum(scratch.scan_storage.data(), scan_bytes, root_flags, root_ranks_output,
                                           static_cast<int>(n), stream));
-  launch_per_element(scatter_labels_kernel, n, stream, mask, n, labels, ranks);
+}
+
+void gpu_number_islands(const bool *const mask, const size_t n, unsigned int *const labels, const LabelScratch &scratch,
+                        cudaStream_t stream)
+{
+  assert(n > 0);
+  assert(scratch.root_ranks.size() >= n);
+  launch_per_element(scatter_labels_kernel, n, stream, mask, n, labels, scratch.root_ranks.data());
 }
 
 void gpu_init_labels(const bool *const mask, const size_t n, unsigned int *const labels, cudaStream_t stream)
