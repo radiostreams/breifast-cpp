@@ -1,9 +1,13 @@
 #include <cassert>
 #include <cfloat>
 #include <climits>
+#include <cstddef>
+#include <iterator>
 
 #include <cooperative_groups.h>
 #include <cub/device/device_scan.cuh>
+#include <thrust/iterator/counting_iterator.h>
+#include <thrust/iterator/transform_iterator.h>
 
 #include "gpu_band.hpp"
 #include "gpu_kernels.hpp"
@@ -88,22 +92,9 @@ __global__ void converge_labels_kernel(const bool *const mask, const size_t n_y,
   }
 }
 
-__global__ void mark_roots_kernel(const size_t n, const unsigned int *const labels, unsigned int *const root_ranks)
-{
-  const size_t index = global_index();
-  if (index < n)
-  {
-    root_ranks[index] = labels[index] == static_cast<unsigned int>(index) ? 1U : 0U;
-  }
-}
-
 __global__ void scatter_labels_kernel(const bool *const mask, const size_t n, unsigned int *const labels,
-                                      const unsigned int *const root_ranks, unsigned int *const out_count)
+                                      const unsigned int *const root_ranks)
 {
-  if (blockIdx.x == 0 && threadIdx.x == 0)
-  {
-    *out_count = root_ranks[n - 1];
-  }
   const size_t i = global_index();
   if (i < n)
   {
@@ -236,6 +227,62 @@ __global__ void label_stats_finalize_kernel(const unsigned int n_labels, const s
   peak_y[label] = static_cast<long>(index / n_x);
   peak_x[label] = static_cast<long>(index % n_x);
 }
+
+/// Input of the root scan: 1 where pixel i is the root of its component (its label is its own index), else 0.
+struct IsRoot
+{
+  const unsigned int *labels;
+  __host__ __device__ unsigned int operator()(const unsigned int i) const
+  {
+    return labels[i] == i ? 1U : 0U;
+  }
+};
+
+/// Output of the root scan: keeps the inclusive count only at roots, as the component's rank (1-based), and the total
+/// at the last pixel. Its own reference type: `out[i] = rank` writes through operator=.
+struct RootRankOutput
+{
+  using value_type = unsigned int;
+  using difference_type = std::ptrdiff_t;
+  using pointer = void;
+  using reference = RootRankOutput;
+  using iterator_category = std::random_access_iterator_tag;
+
+  const unsigned int *labels;
+  unsigned int *ranks;
+  unsigned int *out_count;
+  unsigned int last; // n - 1
+  unsigned int i = 0;
+
+  __host__ __device__ RootRankOutput operator+(const difference_type k) const
+  {
+    RootRankOutput moved = *this;
+    moved.i += static_cast<unsigned int>(k);
+    return moved;
+  }
+  __host__ __device__ RootRankOutput operator[](const difference_type k) const
+  {
+    return *this + k;
+  }
+  __host__ __device__ RootRankOutput operator*() const
+  {
+    return *this;
+  }
+
+  __device__ const RootRankOutput &operator=(const unsigned int rank) const
+  {
+    if (labels[i] == i)
+    {
+      ranks[i] = rank;
+    }
+    if (i == last)
+    {
+      *out_count = rank;
+    }
+    return *this;
+  }
+};
+
 } // namespace
 
 void LabelScratch::ensure(const std::size_t n_pixels)
@@ -243,7 +290,9 @@ void LabelScratch::ensure(const std::size_t n_pixels)
   assert(n_pixels <= static_cast<std::size_t>(INT_MAX));
   root_ranks.ensure(n_pixels);
   std::size_t bytes = 0;
-  CHECK_GPU(cub::DeviceScan::InclusiveSum(nullptr, bytes, root_ranks.data(), root_ranks.data(),
+  // Sized with gpu_label_islands' iterator types; nothing is dereferenced.
+  const auto flags = thrust::make_transform_iterator(thrust::make_counting_iterator(0U), IsRoot{nullptr});
+  CHECK_GPU(cub::DeviceScan::InclusiveSum(nullptr, bytes, flags, RootRankOutput{nullptr, nullptr, nullptr, 0U},
                                           static_cast<int>(n_pixels)));
   scan_storage.ensure(bytes);
 }
@@ -257,13 +306,15 @@ void gpu_label_islands(const bool *const mask, const size_t n_y, const size_t n_
   assert(scratch.root_ranks.size() >= n);
   launch_cooperative(converge_labels_kernel, n, stream, mask, n_y, n_x, labels, scratch.changed.data());
 
-  // Rank each component's root among the roots: an inclusive scan, in place.
+  // Rank each component's root among the roots: an inclusive scan of the root flags that keeps the count at the roots
+  // only, and the total in out_count.
   unsigned int *const ranks = scratch.root_ranks.data();
-  launch_per_element(mark_roots_kernel, n, stream, n, labels, ranks);
+  const auto root_flags = thrust::make_transform_iterator(thrust::make_counting_iterator(0U), IsRoot{labels});
+  const auto root_ranks_output = RootRankOutput{labels, ranks, out_count, static_cast<unsigned int>(n - 1)};
   std::size_t scan_bytes = scratch.scan_storage.size();
-  CHECK_GPU(cub::DeviceScan::InclusiveSum(scratch.scan_storage.data(), scan_bytes, ranks, ranks, static_cast<int>(n),
-                                          stream));
-  launch_per_element(scatter_labels_kernel, n, stream, mask, n, labels, ranks, out_count);
+  CHECK_GPU(cub::DeviceScan::InclusiveSum(scratch.scan_storage.data(), scan_bytes, root_flags, root_ranks_output,
+                                          static_cast<int>(n), stream));
+  launch_per_element(scatter_labels_kernel, n, stream, mask, n, labels, ranks);
 }
 
 void gpu_init_labels(const bool *const mask, const size_t n, unsigned int *const labels, cudaStream_t stream)
