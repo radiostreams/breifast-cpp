@@ -48,66 +48,82 @@ __global__ void tile_prefix(const float *plane, long n_cols,    // the image, ro
   const long tile_y0 = blockIdx.y * 32;
   const long col = tile_x0 + lane;
 
+  // The thread's loads all in flight at once: cells outside the region load a valid clamped address and count 0, without
+  // branching, rather than each load waiting behind its own bounds check.
+  constexpr unsigned int rows_per_warp = 32 / tile_warps;
+  float pixels[rows_per_warp];
+  bool inside[rows_per_warp];
 #pragma unroll
-  for (unsigned int local_row = warp; local_row < 32; local_row += tile_warps)
+  for (unsigned int k = 0; k < rows_per_warp; ++k)
   {
-    double value = 0.;
-    const long row = tile_y0 + local_row;
-    if (row < region_rows && col < region_cols)
+    const long row = tile_y0 + warp + k * tile_warps;
+    inside[k] = row < region_rows && col < region_cols;
+    pixels[k] = plane[(region_y0 + (inside[k] ? row : 0)) * n_cols + region_x0 + (inside[k] ? col : 0)];
+  }
+#pragma unroll
+  for (unsigned int k = 0; k < rows_per_warp; ++k)
+  {
+    tile[warp + k * tile_warps][lane] = inside[k] ? static_cast<double>(pixels[k]) * pixels[k] : 0.;
+  }
+  __syncthreads();
+
+  // Inclusive prefix of the tile's 32 lines along one direction: `cell(p)` is position p of line `lane`, and
+  // `finish(p, sum)` receives its prefix. Warp w adds up positions 4 w .. 4 w + 3 of every line sequentially, then each
+  // line's warp totals are summed in shared memory and added: no shuffles (warp scans in double cost two shuffles and
+  // two selects a step). The line reads hit 32 different banks per half-warp, rows thanks to the padding.
+  constexpr unsigned int positions_per_warp = 32 / tile_warps;
+  __shared__ double warp_totals[tile_warps][32];
+  const auto prefix_lines = [&](const auto &cell, const auto &finish)
+  {
+    double sums[positions_per_warp];
+    double running = 0.;
+#pragma unroll
+    for (unsigned int k = 0; k < positions_per_warp; ++k)
     {
-      const float pixel = plane[(region_y0 + row) * n_cols + region_x0 + col];
-      value = static_cast<double>(pixel) * pixel;
+      running += cell(warp * positions_per_warp + k);
+      sums[k] = running;
     }
-    tile[local_row][lane] = value;
-  }
-  __syncthreads();
-
-  using WarpScan = cub::WarpScan<double>;
-  __shared__ typename WarpScan::TempStorage scan_storage[tile_warps];
-
+    warp_totals[warp][lane] = running;
+    __syncthreads();
+    double before = 0.;
 #pragma unroll
-  for (unsigned int local_row = warp; local_row < 32; local_row += tile_warps)
-  {
-    double sum;
-    const auto value = tile[local_row][lane];
-    WarpScan(scan_storage[warp]).InclusiveSum(value, sum);
-    __syncwarp();
-    tile[local_row][lane] = sum;
-  }
-
-  __syncthreads();
-
-#pragma unroll
-  for (unsigned int local_col = warp; local_col < 32; local_col += tile_warps)
-  {
-    double sum;
-    const auto value = tile[lane][local_col];
-    WarpScan(scan_storage[warp]).InclusiveSum(value, sum);
-    __syncwarp();
-    tile[lane][local_col] = sum;
-  }
-
-  __syncthreads();
-
-#pragma unroll
-  for (unsigned int local_row = warp; local_row < 32; local_row += tile_warps)
-  {
-    const long row = tile_y0 + local_row;
-    if (row < region_rows && col < region_cols)
+    for (unsigned int other = 0; other < tile_warps; ++other)
     {
-      part_prefix[row * region_cols + col] = tile[local_row][lane];
+      before += other < warp ? warp_totals[other][lane] : 0.;
     }
-  }
-  // The tile's last column again, along y, so that part_carries reads it coalesced.
-  if (warp == 0 && tile_y0 + lane < region_rows)
-  {
-    last_cols[blockIdx.x * region_rows + tile_y0 + lane] = tile[lane][31];
-  }
-  // And its total, packed with the other tiles' so that the corner block of part_carries reads them coalesced.
-  if (warp == 0 && lane == 0)
-  {
-    tile_totals[blockIdx.y * gridDim.x + blockIdx.x] = tile[31][31];
-  }
+#pragma unroll
+    for (unsigned int k = 0; k < positions_per_warp; ++k)
+    {
+      finish(warp * positions_per_warp + k, sums[k] + before);
+    }
+    __syncthreads(); // the lines are whole, and warp_totals free again
+  };
+
+  // Along x, line = row: back into the tile.
+  prefix_lines([&](const unsigned int column) { return tile[lane][column]; },
+               [&](const unsigned int column, const double sum) { tile[lane][column] = sum; });
+
+  // Along y, line = column: each thread ends with 4 rows of its column, and a warp's lanes are consecutive columns, so
+  // the results go straight out, coalesced, rather than through the tile again. Lane 31 holds the tile's last column,
+  // which part_carries reads again along y, and at row 31 the tile's total, packed with the other tiles' so that the
+  // corner block of part_carries reads them coalesced.
+  prefix_lines([&](const unsigned int row) { return tile[row][lane]; },
+               [&](const unsigned int local_row, const double sum)
+               {
+                 const long row = tile_y0 + local_row;
+                 if (row < region_rows && col < region_cols)
+                 {
+                   part_prefix[row * region_cols + col] = sum;
+                 }
+                 if (lane == 31 && row < region_rows)
+                 {
+                   last_cols[blockIdx.x * region_rows + row] = sum;
+                 }
+                 if (lane == 31 && local_row == 31)
+                 {
+                   tile_totals[blockIdx.y * gridDim.x + blockIdx.x] = sum;
+                 }
+               });
 }
 
 /// What each 32 x 32 tile of the part adds to its values to turn them into the prefix of the whole part. For a pixel
