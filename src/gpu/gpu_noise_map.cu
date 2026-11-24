@@ -369,6 +369,9 @@ struct CombineNoise
   float dde_scale;
   float *out_noise_map;
 
+  /// 5 blocks per SM for its radix pass, what its 43 registers allow: memory bound already, it gains nothing from fewer.
+  static constexpr unsigned int min_blocks_per_sm = 5;
+
   __device__ float noise(const float rms_value, const float offset, const float dde) const
   {
     const float base = rms != nullptr ? fmaxf(rms_value, *base_noise) : *base_noise;

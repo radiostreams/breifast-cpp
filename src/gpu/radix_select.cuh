@@ -107,8 +107,23 @@ __device__ inline void finish_radix_pass(uint32_t *histogram, const size_t n, co
 // below, prefix, coverage, then lower_max and done (blocks finished with this pass). The last block to finish picks the
 // digit for the next pass and, after the last pass, writes the median; it clears the histogram and the counter behind
 // it.
+/// Blocks of radix_select_pass_kernel that must fit on an SM for `Source`: its `min_blocks_per_sm` when it declares one,
+/// else 8, what the 32 registers of the plain pass already allow. A source that computes the values can use many
+/// registers, and too few warps then leave its loads uncovered.
+template <typename Source> constexpr unsigned int radix_min_blocks()
+{
+  if constexpr (requires { Source::min_blocks_per_sm; })
+  {
+    return Source::min_blocks_per_sm;
+  }
+  else
+  {
+    return 8;
+  }
+}
+
 template <typename Source>
-__global__ void radix_select_pass_kernel(const Source source, size_t n, uint32_t *histogram, int shift, uint32_t mask,
+__global__ void __launch_bounds__(block_size, radix_min_blocks<Source>()) radix_select_pass_kernel(const Source source, size_t n, uint32_t *histogram, int shift, uint32_t mask,
                                          bool abs_mode, uint32_t *state, uint32_t *lower_max, uint32_t *done,
                                          float scale, float *out_median)
 {

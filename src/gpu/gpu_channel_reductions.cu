@@ -41,6 +41,10 @@ struct WeightedBand
   long band_stop;
   float inv_band_size;
 
+  /// At least 4 blocks per SM (64 registers) for its radix pass: left free, it took 98 and 2 blocks, too few warps to
+  /// cover its loads.
+  static constexpr unsigned int min_blocks_per_sm = 4;
+
   // Summed here rather than passed in, so that a captured CUDA graph replays for another plane's weights. Same
   // sequential order as the host std::accumulate, so the same float.
   __device__ float inv_weights_sum() const
